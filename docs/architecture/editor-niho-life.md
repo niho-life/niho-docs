@@ -102,7 +102,10 @@
 - 写真は niho-experience の `apps/web/public/sample/photos` と同じ仮素材（Unsplash License の写真と、NIHO kamakura の自前の写真。出典は同リポジトリの `CREDITS.md`）。製品の写真ではない。
 - 関連：niho-experience の記事 CMS Epic [#185](https://github.com/niho-life/niho-experience/issues/185) と、トップページの記事欄 [#232](https://github.com/niho-life/niho-experience/pull/232)。
 
+詳細設計は [editor-niho-life-design.md](editor-niho-life-design.md)。
+
 ## Epic
 
 - このリポジトリ：[#30 editor.niho.life：ページを書く工房に再編し、リポジトリを niho-editor にする](https://github.com/niho-life/niho-docs/issues/30)
 - niho-experience：[#251 記事の正本を editor.niho.life に移し、experience.niho.life は発信先になる](https://github.com/niho-life/niho-experience/issues/251)
+- niho-app：[#19477 editor.niho.life 向けの役割・接続・NIHO アプリのカード表示](https://github.com/niho-coliving/niho-app/issues/19477)
