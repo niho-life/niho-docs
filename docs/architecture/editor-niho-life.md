@@ -7,7 +7,7 @@
 ## 位置づけ
 
 - NIHO は、街の人が複数の役割（ライター、体験ホスト、リビングのオーナー、住民）を持ち、手をつなげるようにする土台。アカウントは NIHO アカウント一つで、どの画面にも同じアカウントで入る。
-- `editor.niho.life` は、いろいろな文書をどんどん作り出すための工房・書斎。近いのは Notion や note。日記・思考メモ・会議の録音・旅行者向けの記事・住民向けの手引きが、同じ場所に同じ操作で並ぶ。
+- `editor.niho.life`（製品名 NIHO editor）は、いろいろな文書をどんどん作り出すための工房・書斎。近いのは Notion や note。日記・思考メモ・会議の録音・旅行者向けの記事・住民向けの手引きが、同じ場所に同じ操作で並ぶ。
 - 書いたものを公開するかどうかは本人が決める。公開するとき、記事本体の正式な URL をどこに置くか（発信先）を毎回選ぶ。note と違い、書く場所と公開する場所を分ける。
 
 ## 原則
@@ -66,20 +66,25 @@
 
 | 今あるもの | これから |
 | --- | --- |
-| NIHO docs の Mac アプリと Web（録音、文字起こし、工程設計、AI と作る、Google ドキュメント書き出し、リンクで共有） | 機能は editor.niho.life に取り込む。工程設計は「手順」、成果物はサブページ、AI と作るはページの AI として残る。リポジトリは `niho-editor` に改名 |
+| NIHO docs の Mac アプリと Web（録音、文字起こし、工程設計、AI と作る、Google ドキュメント書き出し、リンクで共有） | 機能は editor.niho.life に取り込む。工程設計は「手順」、成果物はサブページ、AI と作るはページの AI として残る。リポジトリは `niho-editor` に改名。Mac アプリは同じ方針で作り直して存続（端末内の文字起こしと「この Mac だけ」の保存は Mac だけ） |
 | niho-experience の `/editor`（下書き、版、写真と許諾、公開前の検査、TipTap の本文） | editor.niho.life へ移す。experience は発信先に専念し、`/guides` の公開描画（SSR、JSON-LD、sitemap、hreflang）と記事⇄体験の相互リンク、体験の掲載状態の検証を残す |
 | 記事の正本は niho-experience（ADR 0002） | 記事の正本は editor。experience は公開 API から読む。ADR を更新する |
 | experience の記事連携（招待・承諾・取消） | NIHO アカウントの役割の層へ移す |
-| NIHO アプリ | 役割のハブ。「書く」から editor へ。公開した記事はカードで載る。editor 用の接続（`niho-experience-editor` クライアント）は editor.niho.life の接続として使う |
+| NIHO アプリ | 役割のハブ。アカウント設定の「書く」（体験への導線と並ぶ）から editor へ。公開した記事はカードで載る。editor 用の接続（`niho-experience-editor` クライアント）は editor.niho.life の接続として使う。`niho.life/article` は editor の公開 API を読む新しい面 |
 
-進め方は、experience の公開面を今の設計のまま進めつつ、読み取り元を自分の DB から editor の公開 API に差し替えられる形にしておき、editor ができたら `/editor` を移す。NIHO docs の機能は、Web の editor に一つずつ移してから Mac の扱いを決める。
+進め方は、experience の公開面を今の設計のまま進めつつ、読み取り元を自分の DB から editor の公開 API に差し替えられる形にしておき、editor ができたら `/editor` を移す。NIHO docs の機能は Web の editor に一つずつ移し、Mac アプリは同じ部品で同じ方針に作り直す。
+
+## 決めたこと（2026-10-30）
+
+- 製品名は **NIHO editor**。ドメインは `editor.niho.life`、リポジトリは `niho-editor`。
+- Mac アプリは残す。既存の NIHO docs の Mac アプリを、この方針（ページ中心・発信先・手順）に作り直して存続させる。Web と同じ `docs-core`／`docs-ui` を使う。
+- `niho.life/article` は、editor の公開 API を読む新しい面として作る。kamakura CMS（Kamakura-site のサイト CMS）は使わない。
+- 公開サイト（niho-experience）のフッターの「For writers」は残し、`editor.niho.life` へ飛ばす。
+- NIHO アプリの「書く」は、アカウント設定の中に置く。同じ場所にある体験（ホスト）への導線と並べる。
 
 ## 決めること
 
-- 製品名（画面の表記は「NIHO」と `editor.niho.life` だけにしてある）。
-- NIHO docs の Mac アプリを残すか、Web に寄せるか。
 - 日本語で書いて英語版を作る流れ（niho-experience #213）の扱い。
-- 公開サイトのフッターに書き手向けの入口を出すか。
 
 ## 用語
 
