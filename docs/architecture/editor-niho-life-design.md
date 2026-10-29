@@ -29,7 +29,7 @@
 | `/auth/login`、`/auth/callback` | NIHO アカウントの接続 |
 | `/s/{token}` | リンクで共有（読み取り専用、ログイン不要） |
 
-`editor.niho.life` は全ページ `noindex, nofollow`。公開 API は `api.editor.niho.life`（§8）。
+`editor.niho.life` は全ページ `noindex, nofollow`。公開 API は `api.editor.niho.life`（§9）。入口は、NIHO アプリのアカウント設定の「書く」（体験への導線と並ぶ）、niho-experience のホストの画面と公開サイトのフッター「For writers」、そしてブックマーク。製品名は NIHO editor。
 
 ## 3. ページのモデル
 
@@ -135,7 +135,7 @@ Block は段落、見出し（2・3）、箇条書き・番号付き、引用、
 | 発信先 | 条件 |
 | --- | --- |
 | NIHO Experience | 英語、カバー写真（掲載許諾あり）、リード、カテゴリ、本文に見出し 1 つ以上、未確認の印（CONFIRM）なし、関連する体験が掲載中 |
-| NIHO | カバー写真、リード、カテゴリ |
+| NIHO（`niho.life/article`。editor の公開 API を読む新しい面） | カバー写真、リード、カテゴリ |
 | 本人のサイト | なし |
 
 ### 8.2 公開したあと
@@ -188,7 +188,7 @@ Block は段落、見出し（2・3）、箇条書き・番号付き、引用、
 
 ## 13. リポジトリと配備
 
-- `niho-docs` を `niho-editor` に改名。`apps/editor-web`（editor.niho.life）を追加し、`packages/docs-ui`・`docs-core` の部品を使う。Mac アプリは当面そのまま。
+- `niho-docs` を `niho-editor` に改名。`apps/editor-web`（editor.niho.life）を追加し、`packages/docs-ui`・`docs-core` の部品を使う。Mac アプリ（`apps/docs`）は同じ部品でこの設計に作り直して存続させる。Web と Mac の違いは、端末内の文字起こしと「この Mac だけ」の保存が Mac にだけあること。
 - 公開境界は [publication-gates.md](../security/publication-gates.md) のまま：クライアントと契約は公開、API・DB・鍵・認可は非公開。
 - 認証は NIHO の `niho-experience-editor` クライアントを editor.niho.life の origin で使う（niho-app 側）。
 - CI は標準の GitHub-hosted runner。secret なし。
@@ -201,6 +201,6 @@ Block は段落、見出し（2・3）、箇条書き・番号付き、引用、
 | 2 | AI の提案、録音と文字起こし、手順 | 録音から記事の下書きまで |
 | 3 | 公開（NIHO Experience）、公開 API、プレビュー | experience の `/editor` を editor に置き換える |
 | 4 | 公開（NIHO）、本人のサイト、NIHO アプリのカード | 発信先を選べる |
-| 5 | NIHO docs の機能移行の仕上げ、Mac アプリの扱いを決める | |
+| 5 | NIHO docs の機能移行の仕上げ、Mac アプリをこの設計に作り直す | Mac でも同じページ・手順・公開 |
 
 段階 1 から本番に出せる（公開の機能が無くても、自分だけのページを書く道具として成立する）。
