@@ -1,17 +1,40 @@
 import type { EditorStore } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
-import { errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
-import { parseCreatePage, parsePagePatch } from "./page-input";
+import {
+  conflictResponse,
+  errorResponse,
+  isSameOriginRequest,
+  jsonResponse,
+  noContentResponse,
+  notFoundResponse,
+  readJsonBody,
+} from "./http";
+import { parseCreatePage, parsePageSave } from "./page-input";
 
-/** `/api/pages` が使うもの。route から渡す（テストでは差し替える）。 */
+/** API の route が使う store の操作。 */
+export type PagesStore = Pick<
+  EditorStore,
+  | "createPage"
+  | "listPages"
+  | "getPage"
+  | "savePage"
+  | "deletePage"
+  | "listVersions"
+  | "getVersion"
+  | "restoreVersion"
+  | "listTrash"
+  | "restoreFromTrash"
+>;
+
+/** `/api/pages`・`/api/trash` が使うもの。route から渡す（テストでは差し替える）。 */
 export type PagesApiDeps = {
   auth: () => AuthProvider;
-  store: () => Pick<EditorStore, "createPage" | "listPages" | "getPage" | "savePage"> | null;
+  store: () => PagesStore | null;
   env?: Readonly<Record<string, string | undefined>>;
 };
 
 /** 想定外の失敗は 500 の汎用エラー（内部の情報は応答に出さず、ログにも名前と code だけを書く）。 */
-async function guarded(route: string, handler: () => Promise<Response>): Promise<Response> {
+export async function guarded(route: string, handler: () => Promise<Response>): Promise<Response> {
   try {
     return await handler();
   } catch (error) {
@@ -22,7 +45,7 @@ async function guarded(route: string, handler: () => Promise<Response>): Promise
   }
 }
 
-async function sessionOf(request: Request, deps: PagesApiDeps) {
+export async function sessionOf(request: Request, deps: PagesApiDeps) {
   return deps.auth().getSession(request);
 }
 
@@ -65,7 +88,10 @@ export function getPage(request: Request, id: string, deps: PagesApiDeps): Promi
   });
 }
 
-/** PATCH /api/pages/{id} — 題名・本文・言語などの部分更新。 */
+/**
+ * PATCH /api/pages/{id} — 題名・本文・言語などの部分更新。`baseRevision`（必須）が今の revision と違えば
+ * 何も書かずに 409 と今のページ。自分のページでなければ（revision によらず）同じ 404。
+ */
 export function patchPage(request: Request, id: string, deps: PagesApiDeps): Promise<Response> {
   return guarded("PATCH /api/pages/[id]", async () => {
     const session = await sessionOf(request, deps);
@@ -76,9 +102,29 @@ export function patchPage(request: Request, id: string, deps: PagesApiDeps): Pro
     // 本文の検査は id の有無より先（どの id でも同じ順に判定し、存在を漏らさない）
     const body = await readJsonBody(request);
     if (!body.ok) return body.response;
-    const patch = parsePagePatch(body.value);
-    if (!patch.ok) return errorResponse("bad_request");
-    const page = await store.savePage(session.userId, id, patch.value);
-    return page ? jsonResponse(200, { page }) : notFoundResponse();
+    const input = parsePageSave(body.value);
+    if (!input.ok) return errorResponse("bad_request");
+    const { patch, baseRevision, overwrite } = input.value;
+    // 404 の判定（自分のページか）は store が revision の比較より先に行う
+    const result = await store.savePage(session.userId, id, patch, { baseRevision, overwrite });
+    if (!result) return notFoundResponse();
+    return result.status === "saved" ? jsonResponse(200, { page: result.page }) : conflictResponse(result.page);
+  });
+}
+
+/**
+ * DELETE /api/pages/{id} — ゴミ箱へ入れる（30 日後に完全に消える）。子孫のページも一緒に入る。
+ * 公開中のページ（子孫を含む）は 409 `published`（先に公開をやめる）。
+ */
+export function deletePage(request: Request, id: string, deps: PagesApiDeps): Promise<Response> {
+  return guarded("DELETE /api/pages/[id]", async () => {
+    const session = await sessionOf(request, deps);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const result = await store.deletePage(session.userId, id);
+    if (!result) return notFoundResponse();
+    return result === "deleted" ? noContentResponse() : errorResponse("published");
   });
 }

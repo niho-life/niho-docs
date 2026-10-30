@@ -21,7 +21,7 @@ export default async function PageView(props: { params: Promise<{ id: string }> 
       <nav>
         <Link href="/">ページの一覧</Link>
       </nav>
-      <PageEditor key={page.id} page={{ id: page.id, title: page.title, blocks: page.blocks }} />
+      <PageEditor key={page.id} page={{ id: page.id, title: page.title, blocks: page.blocks, revision: page.revision }} />
     </main>
   );
 }

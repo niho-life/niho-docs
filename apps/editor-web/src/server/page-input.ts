@@ -1,5 +1,5 @@
 import { isLanguage } from "@niho/docs-core";
-import { PAGE_KINDS, type Block, type CreatePageInput, type PageKind, type PagePatch } from "@niho/editor-store";
+import { PAGE_KINDS, isPositiveInteger, type Block, type CreatePageInput, type PageKind, type PagePatch } from "@niho/editor-store";
 import { validateBlocks } from "../ast/blocks";
 
 import { MAX_TITLE_CHARS } from "../lib/page-limits";
@@ -90,4 +90,32 @@ export function parsePagePatch(body: unknown): InputResult<PagePatch> {
   const parsed = parseFields(body);
   if (!parsed.ok || Object.keys(parsed.value).length === 0) return { ok: false };
   return parsed;
+}
+
+/** PATCH /api/pages/{id} の本文。`baseRevision` は必須（楽観ロック）。`overwrite` は「この内容で上書き」。 */
+export type PageSave = { patch: PagePatch; baseRevision: number; overwrite: boolean };
+
+/** 部分更新の欄に、`baseRevision`（正の整数・必須）と `overwrite`（真偽・任意）を足したもの。 */
+export function parsePageSave(body: unknown): InputResult<PageSave> {
+  if (!isPlainObject(body)) return { ok: false };
+  const { baseRevision, overwrite, ...fields } = body;
+  if (!isPositiveInteger(baseRevision)) return { ok: false };
+  if (overwrite !== undefined && typeof overwrite !== "boolean") return { ok: false };
+  const patch = parsePagePatch(fields);
+  if (!patch.ok) return { ok: false };
+  return { ok: true, value: { patch: patch.value, baseRevision, overwrite: overwrite === true } };
+}
+
+/** POST /api/pages/{id}/versions/{n}/restore の本文（`baseRevision` だけ）。 */
+export function parseRestoreBody(body: unknown): InputResult<{ baseRevision: number }> {
+  if (!isPlainObject(body)) return { ok: false };
+  if (!Object.keys(body).every((key) => key === "baseRevision")) return { ok: false };
+  return isPositiveInteger(body.baseRevision) ? { ok: true, value: { baseRevision: body.baseRevision } } : { ok: false };
+}
+
+/** URL の版の番号（`1` 以上の 10 進の整数だけ。`01`・`1.0`・`+1` は受けない）。正しくなければ null（ページの 404 と同じに扱う）。 */
+export function parseVersionNumber(value: string): number | null {
+  if (!/^[1-9][0-9]{0,9}$/.test(value)) return null;
+  const version = Number(value);
+  return isPositiveInteger(version) ? version : null;
 }

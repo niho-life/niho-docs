@@ -1,0 +1,65 @@
+{
+  "type": "doc",
+  "content": [
+    { "type": "heading", "attrs": { "level": 1 }, "content": [{ "type": "text", "text": "Getting there" }] },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Meet at the " },
+        { "type": "text", "text": "station", "marks": [{ "type": "bold" }] },
+        { "type": "text", "text": " at 7:00." },
+        { "type": "hardBreak" },
+        { "type": "text", "text": "See the " },
+        { "type": "text", "text": "harbor map", "marks": [{ "type": "link", "attrs": { "href": "https://maps.example.com/harbor", "target": "_blank" } }] },
+        { "type": "text", "text": " or the " },
+        { "type": "text", "text": "old map", "marks": [{ "type": "link", "attrs": { "href": "javascript:alert(1)" } }, { "type": "italic" }] },
+        { "type": "text", "text": "." }
+      ]
+    },
+    { "type": "paragraph" },
+    { "type": "paragraph", "content": [{ "type": "text", "text": "   " }] },
+    { "type": "heading", "attrs": { "level": 4 }, "content": [{ "type": "text", "text": "Route", "marks": [{ "type": "underline" }] }] },
+    {
+      "type": "bulletList",
+      "content": [
+        { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Walk to the pier" }] }] },
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Turn left" }] },
+            {
+              "type": "orderedList",
+              "attrs": { "start": 1 },
+              "content": [
+                { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "at the red gate" }] }] },
+                { "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "past the shrine", "marks": [{ "type": "italic" }] }] }] }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "image",
+      "attrs": { "assetId": "asset-figure-01", "alt": "Fishing boats in the harbor", "caption": "The harbor at 7:30" }
+    },
+    {
+      "type": "callout",
+      "content": [
+        { "type": "heading", "attrs": { "level": 2 }, "content": [{ "type": "text", "text": "Bring cash" }] },
+        { "type": "paragraph", "content": [{ "type": "text", "text": "The tea house takes cash only." }] },
+        { "type": "bulletList", "content": [{ "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Coins" }] }] }] }
+      ]
+    },
+    { "type": "recording", "attrs": { "assetId": "asset-audio-01" } },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Opening hours [CONFIRM: winter schedule] may change; " },
+        { "type": "confirm", "attrs": { "text": "price" } },
+        { "type": "text", "text": " too." }
+      ]
+    },
+    { "type": "image", "attrs": { "assetId": "asset-figure-01", "alt": "", "caption": null } }
+  ]
+}
