@@ -484,6 +484,9 @@ const P = [
   { id: "idea", t: "来年やりたいこと", kind: "note", lang: "ja", ph: "", pub: null, saved: "10月9日", body: `<ul><li>北鎌倉の朝の散歩を、月に一度、体験にする</li><li>ごみ出しの記事を英語にもする</li><li>朝市にもう一度出る</li></ul>` },
   { id: "rainy", t: "A Rainy Day in Kamakura", kind: "article", lang: "en", ph: "", pub: { to: "exp", range: "stopped", date: "2026-10-02" }, saved: "10月2日", lead: "Temples are better in the rain.", cat: "Travel", xs: [], extra: { app: false, news: false, xp: false }, body: `<p>Temples are better in the rain.</p>` },
 ];
+// Every page can be published later: give the publishing metadata a default.
+const normalize = (p) => { p.extra ||= { app: true, news: false, xp: false }; p.xs ||= []; p.lead ??= ""; return p; };
+P.forEach(normalize);
 const byId = (id) => P.find((p) => p.id === id);
 const isPub = (p) => p.pub && p.pub.range !== "stopped";
 const S = { cur: "j1030", info: false, more: false, filter: "all", sheet: null, newMenu: false, plus: false, aiOpen: false, proposal: null, range: "live", pick: null, pvTo: null, pendingInvite: true, sbHide: false, conn: true };
@@ -559,7 +562,7 @@ function stepsStrip(p) {
 function runRecipe(root) {
   const mk = (id, t, kind, extra = {}) => ({ id, t, kind, parent: root.id, lang: "ja", ph: "", pub: null, saved: "たった今", st: "wait", body: "", xs: [], extra: { app: true, news: false, xp: false }, ...extra });
   const a = mk(root.id + "-fix", "文字起こし修正", "step", { st: "run" }), b = mk(root.id + "-plan", "記事方針", "step"), c = mk(root.id + "-body", "記事本文", "article");
-  P.splice(P.indexOf(root) + 1, 0, a, b, c); root.children = [a.id, b.id, c.id]; root.recipe = "記事制作";
+  P.splice(P.indexOf(root) + 1, 0, normalize(a), normalize(b), normalize(c)); root.children = [a.id, b.id, c.id]; root.recipe = "記事制作";
 }
 function proposal(p) {
   const ja = p.lang === "ja";
@@ -614,7 +617,7 @@ V.login = () => ({ url: "editor.niho.life", html: `<div class="split"><div class
   <div class="box"><h1>書く</h1><p>NIHO アカウントで続けます。</p><a class="btn ink lg" data-go="page:j1030">NIHOでログイン</a>
   <div class="links"><a>アカウントを作る</a><a>ヘルプ</a></div></div><footer><span>© NIHO</span><a>niho.life</a></footer></div></div>` });
 V.page = (id) => { const p = byId(id); return { url: `editor.niho.life/p/${p.id}`, html: page(p) }; };
-V.new = () => { let p = byId("new"); if (!p) { p = { id: "new", t: "", kind: "note", lang: "ja", ph: "", pub: null, saved: "たった今", body: "", xs: [], extra: { app: true, news: false, xp: false } }; P.unshift(p); } return { url: "editor.niho.life/p/new", html: page(p, true) }; };
+V.new = () => { let p = byId("new"); if (!p) { p = normalize({ id: "new", t: "", kind: "note", lang: "ja", ph: "", pub: null, saved: "たった今", body: "" }); P.unshift(p); } return { url: "editor.niho.life/p/new", html: page(p, true) }; };
 V.preview = (id) => {
   const p = byId(id), to = S.pvTo || (p.pub && p.pub.to) || (p.lang === "ja" ? "niho" : "exp");
   return { url: urlOf(p, to), html: `<div class="pvbar"><a class="btn sm" data-go="page:${p.id}">${ic("back")}ページ</a><span>${isPub(p) && !p.pub.updated && to === p.pub.to ? "公開中" : "公開するとこう見えます"}</span><span class="sp"></span><div class="seg">${Object.keys(DEST).map((k) => `<button class="${k === to ? "on" : ""}" data-pv="${k}">${DEST[k].host}</button>`).join("")}</div></div>${inDest(p, to)}` };
