@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { CreatePageInput, Page, PagePatch, PageSummary } from "@niho/editor-store";
+import { InvalidPageCursorError, type CreatePageInput, type Page, type PageChunk, type PageChunkOptions, type PagePatch, type PageSummary } from "@niho/editor-store";
+import { stubAuthProvider } from "../auth/stub";
 import type { AuthProvider } from "../auth/types";
 import { MAX_BODY_BYTES } from "./http";
 import { createPage, getPage, listPages, patchPage, type PagesApiDeps } from "./pages-api";
@@ -29,8 +30,19 @@ function memoryStore() {
       rows.set(page.id, { ...page, owner, deleted: false });
       return page;
     },
-    async listPages(owner: string): Promise<PageSummary[]> {
-      return [...rows.values()].filter((row) => row.owner === owner && !row.deleted).map(({ id, kind, title, lang, createdAt, updatedAt }) => ({ id, kind, title, lang, createdAt, updatedAt }));
+    /** cursor は前の区切りの最後の id（知らない id は読めない cursor）。 */
+    async listPageChunk(owner: string, options: PageChunkOptions = {}): Promise<PageChunk> {
+      const sorted = [...rows.values()]
+        .filter((row) => row.owner === owner && !row.deleted)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+      let start = 0;
+      if (options.cursor !== undefined && options.cursor !== null) {
+        start = sorted.findIndex((row) => row.id === options.cursor) + 1;
+        if (start === 0) throw new InvalidPageCursorError();
+      }
+      const limit = options.limit ?? 100;
+      const pages: PageSummary[] = sorted.slice(start, start + limit).map(({ id, kind, title, lang, parent, stepStatus, createdAt, updatedAt }) => ({ id, kind, title, lang, parent, stepStatus, createdAt, updatedAt }));
+      return { pages, next: start + limit < sorted.length ? (pages.at(-1)?.id ?? null) : null };
     },
     async getPage(owner: string, id: string): Promise<Page | null> {
       if (!UUID.test(id)) return null;
@@ -48,7 +60,7 @@ function memoryStore() {
 }
 
 function authAs(userId: string | null): AuthProvider {
-  return { mode: "stub", getSession: async () => (userId ? { userId, mode: "stub" } : null) };
+  return { ...stubAuthProvider, getSession: async () => (userId ? { userId, mode: "stub" } : null) };
 }
 
 function deps(userId: string | null, store: ReturnType<typeof memoryStore> | null): PagesApiDeps {
@@ -155,6 +167,46 @@ describe("/api/pages", () => {
       expect(response.status, JSON.stringify(body)).toBe(400);
       expect(await response.text()).toBe('{"error":"bad_request"}');
     }
+  });
+
+  it("pages through the list with limit and cursor, each page exactly once", async () => {
+    const store = memoryStore();
+    const created: string[] = [];
+    for (let index = 0; index < 5; index++) created.push((await store.createPage("user-a", { title: `p${index}` })).id);
+    await store.createPage("user-b", { title: "theirs" });
+
+    const first = (await (await listPages(request("GET", "/api/pages"), deps("user-a", store))).json()) as PageChunk;
+    expect(first.pages).toHaveLength(5);
+    expect(first.next).toBeNull();
+    expect(Object.keys(first.pages[0]!).sort()).toEqual(["createdAt", "id", "kind", "lang", "parent", "stepStatus", "title", "updatedAt"]);
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let calls = 0;
+    do {
+      const query: string = cursor === null ? "?limit=2" : `?limit=2&cursor=${encodeURIComponent(cursor)}`;
+      const response = await listPages(request("GET", `/api/pages${query}`), deps("user-a", store));
+      expect(response.status).toBe(200);
+      const chunk = (await response.json()) as PageChunk;
+      expect(chunk.pages.length).toBeLessThanOrEqual(2);
+      seen.push(...chunk.pages.map((page) => page.id));
+      cursor = chunk.next;
+      calls++;
+    } while (cursor !== null && calls < 10);
+    expect(calls).toBe(3);
+    expect(seen.sort()).toEqual([...created].sort());
+  });
+
+  it("answers 400 to an unreadable limit or cursor", async () => {
+    const store = memoryStore();
+    await store.createPage("user-a");
+    for (const query of ["limit=0", "limit=-1", "limit=1.5", "limit=abc", "limit=", "limit=01", "limit=501", "limit=10000", "cursor=", `cursor=${"x".repeat(129)}`, "cursor=not-a-cursor"]) {
+      const response = await listPages(request("GET", `/api/pages?${query}`), deps("user-a", store));
+      expect(response.status, query).toBe(400);
+      expect(await response.text()).toBe('{"error":"bad_request"}');
+    }
+    expect((await listPages(request("GET", "/api/pages?limit=500"), deps("user-a", store))).status).toBe(200);
+    expect((await listPages(request("GET", "/api/pages?limit=1"), deps("user-a", store))).status).toBe(200);
   });
 
   it("answers 503 without a database and 500 without internal details when the store fails", async () => {

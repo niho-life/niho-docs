@@ -1,5 +1,5 @@
 import { isLanguage } from "@niho/docs-core";
-import { PAGE_KINDS, type Block, type CreatePageInput, type PageKind, type PagePatch } from "@niho/editor-store";
+import { PAGE_KINDS, PAGE_LIST_LIMIT, type Block, type CreatePageInput, type PageChunkOptions, type PageKind, type PagePatch } from "@niho/editor-store";
 
 import { MAX_TITLE_CHARS } from "../lib/page-limits";
 
@@ -89,4 +89,20 @@ export function parsePagePatch(body: unknown): InputResult<PagePatch> {
   const parsed = parseFields(body);
   if (!parsed.ok || Object.keys(parsed.value).length === 0) return { ok: false };
   return parsed;
+}
+
+/** 一覧の query。limit は 1〜PAGE_LIST_LIMIT の整数、cursor は前の応答の next（形の検査は store。空は不可）。どちらも任意。 */
+export function parseListQuery(params: URLSearchParams): InputResult<PageChunkOptions> {
+  const result: PageChunkOptions = {};
+  const limit = params.get("limit");
+  if (limit !== null) {
+    if (!/^[1-9]\d{0,3}$/.test(limit) || Number(limit) > PAGE_LIST_LIMIT) return { ok: false };
+    result.limit = Number(limit);
+  }
+  const cursor = params.get("cursor");
+  if (cursor !== null) {
+    if (cursor.length === 0 || cursor.length > 128) return { ok: false };
+    result.cursor = cursor;
+  }
+  return { ok: true, value: result };
 }

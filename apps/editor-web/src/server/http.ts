@@ -86,6 +86,18 @@ export async function readJsonBody(request: Request, limit: number = MAX_BODY_BY
   }
 }
 
+/** 想定外の失敗は 500 の汎用エラー（内部の情報は応答に出さず、ログにも名前と code だけを書く）。 */
+export async function guarded(route: string, handler: () => Promise<Response>): Promise<Response> {
+  try {
+    return await handler();
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "unknown";
+    const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : undefined;
+    console.error("editor-web: request failed", { route, name, code });
+    return errorResponse("internal");
+  }
+}
+
 /** この要求が来た origin（`EDITOR_ORIGIN` があればそれ。無ければ Host と転送の header から）。 */
 export function expectedOrigin(request: Request, env: Readonly<Record<string, string | undefined>> = process.env): string | null {
   if (env.EDITOR_ORIGIN) {

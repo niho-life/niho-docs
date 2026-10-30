@@ -1,37 +1,18 @@
-import Link from "next/link";
-import { UNTITLED_DOC } from "@niho/docs-core";
-import { NewPageButton } from "@/components/NewPageButton";
-import { LoginRequired, StoreUnavailable } from "@/components/Notice";
+import { cookies } from "next/headers";
+import { HomeRedirect } from "@/components/FramePages";
+import { StoreUnavailable } from "@/components/Notice";
+import { LAST_PAGE_COOKIE } from "@/lib/last-page";
 import { getStore } from "@/server/db";
-import { currentSession } from "@/server/session";
+import { requireSession } from "@/server/session";
 
 export const dynamic = "force-dynamic";
 
-const updatedFormat = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", dateStyle: "medium", timeStyle: "short" });
-
-/** 自分のページの一覧（更新順）と「新しいページ」。サイドバー・絞り込みは #32。 */
+/** `/`。デスクトップでは最後に開いたページ（無い・消えた・別の人のものなら新しいページ）へ移る。狭い画面では一覧がこの画面。 */
 export default async function HomePage() {
-  const session = await currentSession();
-  if (!session) return <LoginRequired />;
+  const session = await requireSession("/");
   const store = getStore();
   if (!store) return <StoreUnavailable />;
-  const pages = await store.listPages(session.userId);
-  return (
-    <main>
-      <h1>ページ</h1>
-      <NewPageButton />
-      {pages.length === 0 ? (
-        <p>まだページはありません。</p>
-      ) : (
-        <ul>
-          {pages.map((page) => (
-            <li key={page.id}>
-              <Link href={`/p/${page.id}`}>{page.title.trim() || UNTITLED_DOC}</Link>{" "}
-              <time dateTime={page.updatedAt}>{updatedFormat.format(new Date(page.updatedAt))}</time>
-            </li>
-          ))}
-        </ul>
-      )}
-    </main>
-  );
+  const last = (await cookies()).get(LAST_PAGE_COOKIE)?.value;
+  const page = last ? await store.getPage(session.userId, last) : null;
+  return <HomeRedirect lastPageId={page?.id ?? null} />;
 }

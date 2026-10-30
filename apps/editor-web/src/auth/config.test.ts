@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { AuthConfigError, resolveAuthMode } from "./config";
 import { getAuthProvider } from "./index";
 import { STUB_USER_ID } from "./stub";
-import { beginNihoLogin, NihoLoginNotImplementedError } from "./niho";
 
 const request = { headers: new Headers() };
 
@@ -40,8 +39,12 @@ describe("auth providers", () => {
     const provider = getAuthProvider({ NODE_ENV: "development", EDITOR_AUTH_MODE: "stub" });
     expect(provider.mode).toBe("stub");
     const session = await provider.getSession(request);
-    expect(session).toEqual({ userId: STUB_USER_ID, mode: "stub" });
-    expect(Object.keys(session ?? {}).sort()).toEqual(["mode", "userId"]);
+    expect(session).toEqual({ userId: STUB_USER_ID, mode: "stub", profile: { name: "開発ユーザー" } });
+    expect(Object.keys(session ?? {}).sort()).toEqual(["mode", "profile", "userId"]);
+    const login = await provider.beginLogin({ request: new Request("http://editor.test/auth/login/start"), returnTo: "/p/new" });
+    expect(login.status).toBe(303);
+    expect(login.headers.get("location")).toBe("/p/new");
+    expect(login.headers.get("set-cookie")).toBeNull();
   });
 
   it("niho is fail-closed until the niho-app contract exists", async () => {
@@ -49,7 +52,13 @@ describe("auth providers", () => {
     expect(provider.mode).toBe("niho");
     const withCookie = { headers: new Headers({ cookie: "session=synthetic" }) };
     expect(await provider.getSession(withCookie)).toBeNull();
-    expect(() => beginNihoLogin()).toThrow(NihoLoginNotImplementedError);
+    const start = new Request("http://editor.test/auth/login/start");
+    const login = await provider.beginLogin({ request: start, returnTo: "/settings" });
+    expect(login.status).toBe(303);
+    expect(login.headers.get("location")).toBe("/auth/login?next=%2Fsettings&error=unavailable");
+    const callback = await provider.completeLogin(new Request("http://editor.test/auth/callback?code=synthetic&state=synthetic"));
+    expect(callback.headers.get("location")).toBe("/auth/login?error=unavailable");
+    expect(callback.headers.get("set-cookie")).toBeNull();
   });
 
   it("refuses to pick a provider in production unless the mode is niho", () => {

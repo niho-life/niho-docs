@@ -10,10 +10,11 @@ import { BlockEditor, PageTitle } from "niho-docs-ui/components/BlockEditor";
 import { ENABLED_INPUT_RULES, buildBlockEditorExtensions } from "niho-docs-ui/lib/block-editor/index";
 import { createAutosave, type Autosave, type SaveState } from "@/lib/autosave";
 import { MAX_TITLE_CHARS } from "@/lib/page-limits";
-import { savePageRequest, type PageBody } from "@/lib/pages-client";
+import { createPageRequest, savePageRequest, type PageBody } from "@/lib/pages-client";
 
 export type EditablePage = {
-  id: string;
+  /** null はまだ作っていない新しいページ（最初の保存で作る）。 */
+  id: string | null;
   title: string;
   blocks: unknown[];
 };
@@ -29,11 +30,20 @@ export function docFromBlocks(blocks: unknown[]): JSONContent {
   return { type: "doc", content: blocks.length > 0 ? (blocks as JSONContent[]) : [{ type: "paragraph" }] };
 }
 
+export type PageEditorEvents = {
+  /** 新しいページを最初の保存で作った（1 回だけ）。 */
+  onCreated?: (id: string) => void;
+  onTitleChange?: (title: string) => void;
+  /** 保存が終わった（作った・PATCH のどちらも）。 */
+  onSaved?: () => void;
+};
+
 /**
  * ページの題名と本文。本文は niho-docs-ui の BlockEditor（TipTap）。blocks は TipTap の doc の content（ブロックの配列）をそのまま保存する。
- * 入力の 1 秒後に PATCH で自動保存し、状態を文字で読み上げる。
+ * 入力の 1 秒後に PATCH で自動保存し、状態を文字で読み上げる。id が null のページは最初の保存で POST して作り、以後はその id へ PATCH する
+ * （id は ref に持ち、エディタは作り直さない。変換中は保存を待つので、作るのも変換の確定の後）。
  */
-export function PageEditor(props: { page: EditablePage }) {
+export function PageEditor(props: { page: EditablePage } & PageEditorEvents) {
   const { page } = props;
   const [title, setTitle] = useState(page.title);
   const [state, setState] = useState<SaveState>("saved");
@@ -44,10 +54,25 @@ export function PageEditor(props: { page: EditablePage }) {
 
   const autosaveRef = useRef<Autosave<PageBody> | null>(null);
   const editorRef = useRef<Editor | null>(null);
+  const idRef = useRef(page.id);
+  const eventsRef = useRef<PageEditorEvents>(props);
+
+  useEffect(() => {
+    eventsRef.current = props;
+  });
 
   useEffect(() => {
     const autosave = createAutosave<PageBody>({
-      save: (patch) => savePageRequest(page.id, patch),
+      save: async (patch) => {
+        if (idRef.current === null) {
+          const id = await createPageRequest(patch);
+          idRef.current = id;
+          eventsRef.current.onCreated?.(id);
+        } else {
+          await savePageRequest(idRef.current, patch);
+        }
+        eventsRef.current.onSaved?.();
+      },
       isComposing: () => composingRef.current || Boolean(editorRef.current?.view.composing),
       onState: setState,
     });
@@ -109,6 +134,7 @@ export function PageEditor(props: { page: EditablePage }) {
           const value = chars.length > MAX_TITLE_CHARS ? chars.slice(0, MAX_TITLE_CHARS).join("") : input;
           setTitleClamped(value !== input);
           setTitle(value);
+          props.onTitleChange?.(value);
           autosaveRef.current?.change({ title: value });
         }}
       />

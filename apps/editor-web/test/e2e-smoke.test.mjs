@@ -1,4 +1,5 @@
-// 起動した editor-web（`next dev`・EDITOR_AUTH_MODE=stub）に対して、ページを作る → 書く → 読み直すと残る、を確かめる。
+// 起動した editor-web（`next dev`・EDITOR_AUTH_MODE=stub）に対して、ページを作る → 書く → 読み直すと残る、一覧と枠、を確かめる。
+// そのあと EDITOR_AUTH_MODE=niho で起動し直し、未ログインの画面がログインへ戻り先つきで移ることを確かめる（同じ dir の `next dev` は同時に 1 つ）。
 // 前提: DATABASE_URL の DB に packages/editor-store の migration を適用済み（README）。合成の値だけを書き、終わりに消す。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -14,6 +15,7 @@ if (!databaseUrl) throw new Error("DATABASE_URL is required for the e2e smoke te
 const appDir = fileURLToPath(new URL("..", import.meta.url));
 const nextBin = fileURLToPath(new URL("../node_modules/next/dist/bin/next", import.meta.url));
 const OTHER_OWNER = "synthetic-other-owner";
+const STUB_OWNER = "stub-user";
 
 async function freePort() {
   const server = net.createServer();
@@ -23,11 +25,59 @@ async function freePort() {
   return port;
 }
 
-describe("editor-web e2e (stub, next dev)", () => {
-  let port;
-  let base;
-  let server;
+/** `next dev` を起動し、`/api/pages` が readyStatus を返すまで待つ。止めるときは stop()。 */
+async function startDev(mode, readyStatus) {
+  const port = await freePort();
+  const base = `http://127.0.0.1:${port}`;
+  const env = { ...process.env, EDITOR_AUTH_MODE: mode, NEXT_TELEMETRY_DISABLED: "1" };
+  delete env.NODE_ENV;
+  const server = spawn(process.execPath, [nextBin, "dev", "--webpack", "-p", String(port), "-H", "127.0.0.1"], {
+    cwd: appDir,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+  });
   let serverLog = "";
+  server.stdout.on("data", (chunk) => (serverLog += chunk));
+  server.stderr.on("data", (chunk) => (serverLog += chunk));
+  const stop = async () => {
+    if (!server.pid || server.exitCode !== null) return;
+    const exited = new Promise((resolve) => server.once("exit", resolve));
+    try {
+      process.kill(-server.pid, "SIGTERM");
+    } catch {
+      // 既に終了している
+    }
+    const timer = setTimeout(() => {
+      try {
+        process.kill(-server.pid, "SIGKILL");
+      } catch {
+        // 既に終了している
+      }
+    }, 10_000);
+    await exited;
+    clearTimeout(timer);
+  };
+  const deadline = Date.now() + 240_000;
+  for (;;) {
+    try {
+      const response = await fetch(`${base}/api/pages`);
+      if (response.status === readyStatus) break;
+    } catch {
+      // まだ起動中
+    }
+    if (Date.now() > deadline) {
+      await stop();
+      throw new Error(`next dev did not become ready:\n${serverLog.slice(-2000)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return { base, stop };
+}
+
+describe("editor-web e2e (stub, next dev)", () => {
+  let base;
+  let dev;
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 2 });
   const createdIds = [];
 
@@ -39,51 +89,14 @@ describe("editor-web e2e (stub, next dev)", () => {
     });
 
   before(async () => {
-    port = await freePort();
-    base = `http://127.0.0.1:${port}`;
-    const env = { ...process.env, EDITOR_AUTH_MODE: "stub", NEXT_TELEMETRY_DISABLED: "1" };
-    delete env.NODE_ENV;
-    server = spawn(process.execPath, [nextBin, "dev", "--webpack", "-p", String(port), "-H", "127.0.0.1"], {
-      cwd: appDir,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
-    });
-    server.stdout.on("data", (chunk) => (serverLog += chunk));
-    server.stderr.on("data", (chunk) => (serverLog += chunk));
-    const deadline = Date.now() + 240_000;
-    for (;;) {
-      try {
-        const response = await fetch(`${base}/api/pages`);
-        if (response.status === 200) break;
-      } catch {
-        // まだ起動中
-      }
-      if (Date.now() > deadline) throw new Error(`next dev did not become ready:\n${serverLog.slice(-2000)}`);
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
+    dev = await startDev("stub", 200);
+    base = dev.base;
   });
 
   after(async () => {
     if (createdIds.length > 0) await pool.query("DELETE FROM pages WHERE id = ANY($1::uuid[])", [createdIds]);
     await pool.end();
-    if (server?.pid) {
-      const exited = new Promise((resolve) => server.once("exit", resolve));
-      try {
-        process.kill(-server.pid, "SIGTERM");
-      } catch {
-        // 既に終了している
-      }
-      const timer = setTimeout(() => {
-        try {
-          process.kill(-server.pid, "SIGKILL");
-        } catch {
-          // 既に終了している
-        }
-      }, 10_000);
-      await exited;
-      clearTimeout(timer);
-    }
+    await dev?.stop();
   });
 
   it("creates a page, writes to it, and still has it after reloading", async () => {
@@ -112,7 +125,94 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.match(html, /合成の本文 e2e/);
     assert.match(html, /data-auth-mode="stub"/, "stub mode is shown on the page");
     const home = await (await fetch(`${base}/`)).text();
-    assert.match(home, new RegExp(`/p/${page.id}`));
+    assert.match(home, /aria-label="ページの一覧"/);
+    assert.match(home, /合成の題名 e2e/, "the saved page is in the list");
+  });
+
+  it("renders / as the shell with the page list", async () => {
+    const response = await fetch(`${base}/`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") ?? "", /^text\/html/);
+    const html = await response.text();
+    assert.match(html, /aria-label="ページの一覧"/);
+    assert.match(html, /aria-label="新しいページ"/);
+    assert.match(html, /開発ユーザー/, "the me row shows the stub profile");
+    for (const path of ["/p/new", "/p/new?from=recording", "/destinations", "/account", "/settings"]) {
+      const screen = await fetch(`${base}${path}`);
+      assert.equal(screen.status, 200, path);
+      assert.match(await screen.text(), /aria-label="ページの一覧"/, path);
+    }
+  });
+
+  it("sends a signed-in visitor of /auth/login back to a safe return path, and guards logout", async () => {
+    for (const [query, expected] of [
+      ["", "/"],
+      ["?next=%2Fsettings", "/settings"],
+      ["?next=%2F%2Fevil.example", "/"],
+      ["?next=https%3A%2F%2Fevil.example%2F", "/"],
+    ]) {
+      const response = await fetch(`${base}/auth/login${query}`, { redirect: "manual" });
+      assert.ok([303, 307].includes(response.status), `/auth/login${query} → ${response.status}`);
+      const location = new URL(response.headers.get("location") ?? "", base);
+      assert.equal(location.origin, base);
+      assert.equal(`${location.pathname}${location.search}`, expected);
+    }
+    const start = await fetch(`${base}/auth/login/start?next=%2Fp%2Fnew`, { redirect: "manual" });
+    assert.equal(start.status, 303);
+    assert.equal(start.headers.get("location"), "/p/new");
+    assert.equal(start.headers.get("cache-control"), "no-store");
+    assert.equal((await fetch(`${base}/auth/logout`, { method: "POST", headers: { origin: "https://evil.example" }, redirect: "manual" })).status, 403);
+    assert.equal((await fetch(`${base}/auth/logout`, { redirect: "manual" })).status, 405);
+    const out = await fetch(`${base}/auth/logout`, { method: "POST", headers: { origin: base }, redirect: "manual" });
+    assert.equal(out.status, 303);
+    assert.equal(out.headers.get("location"), "/auth/login");
+  });
+
+  it("renders only the first chunk of 500 pages on / within a second, and pages through the rest by cursor", async () => {
+    // 合成の 500 ページ（他のテストのページより新しい時刻。i が小さいほど新しい）
+    const inserted = await pool.query(
+      `INSERT INTO pages (owner, title, created_at, updated_at)
+       SELECT $1, 'synthetic list ' || lpad(i::text, 3, '0'), t, t
+         FROM generate_series(0, 499) AS i,
+              LATERAL (SELECT clock_timestamp() + interval '1 hour' - i * interval '1 second' AS t) AS at
+       RETURNING id`,
+      [STUB_OWNER],
+    );
+    const syntheticIds = inserted.rows.map((row) => row.id);
+    createdIds.push(...syntheticIds);
+
+    await (await fetch(`${base}/`)).text();
+    const started = performance.now();
+    const response = await fetch(`${base}/`);
+    const html = await response.text();
+    const elapsed = performance.now() - started;
+    assert.equal(response.status, 200);
+    assert.ok(elapsed < 1000, `GET / took ${Math.round(elapsed)} ms`);
+    assert.match(html, /synthetic list 000/);
+    assert.match(html, /synthetic list 099/);
+    assert.doesNotMatch(html, /synthetic list 100/, "only the first chunk is rendered");
+    assert.doesNotMatch(html, /synthetic list 149/, "the 150th page is not rendered");
+
+    const total = await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1 AND deleted_at IS NULL", [STUB_OWNER]);
+    const ids = [];
+    let cursor = null;
+    let requests = 0;
+    do {
+      const query = cursor === null ? "?limit=100" : `?limit=100&cursor=${encodeURIComponent(cursor)}`;
+      const chunk = await fetch(`${base}/api/pages${query}`);
+      assert.equal(chunk.status, 200);
+      const body = await chunk.json();
+      assert.ok(body.pages.length <= 100);
+      ids.push(...body.pages.map((page) => page.id));
+      cursor = body.next;
+      requests++;
+      assert.ok(requests <= 20, "the cursor must advance");
+    } while (cursor !== null);
+    assert.equal(new Set(ids).size, ids.length, "no page twice");
+    assert.equal(ids.length, total.rows[0].n, "every page once");
+    assert.deepEqual(ids.slice(0, 500), syntheticIds, "newest first");
+    assert.equal((await fetch(`${base}/api/pages?cursor=not-a-cursor`)).status, 400);
+    assert.equal((await fetch(`${base}/api/pages?limit=0`)).status, 400);
   });
 
   it("answers the same 404 for another owner's page, an unknown id, and a malformed id", async () => {
@@ -199,5 +299,47 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.match(homeHtml, /<meta name="robots" content="noindex, nofollow"\/>/);
     const robotsTxt = await responses["GET /robots.txt"].text();
     assert.doesNotMatch(robotsTxt, /disallow/i);
+  });
+});
+
+describe("editor-web e2e (niho until #19459, next dev)", () => {
+  let base;
+  let dev;
+
+  before(async () => {
+    dev = await startDev("niho", 401);
+    base = dev.base;
+  });
+
+  after(async () => {
+    await dev?.stop();
+  });
+
+  it("sends an unauthenticated visitor to /auth/login with the screen as next", async () => {
+    const id = randomUUID();
+    for (const [path, expected, headers] of [
+      [`/p/${id}`, `/auth/login?next=%2Fp%2F${id}`, {}],
+      ["/p/new?from=recording", "/auth/login?next=%2Fp%2Fnew%3Ffrom%3Drecording", {}],
+      ["/settings", "/auth/login?next=%2Fsettings", { "x-editor-path": "//evil.example" }],
+      ["/", "/auth/login", {}],
+      ["/p/not-a-uuid", "/auth/login", {}],
+    ]) {
+      const response = await fetch(`${base}${path}`, { redirect: "manual", headers });
+      assert.equal(response.status, 307, path);
+      assert.equal(response.headers.get("location"), expected, path);
+    }
+  });
+
+  it("comes back to the login screen with an error and keeps next while niho login is unavailable", async () => {
+    const start = await fetch(`${base}/auth/login/start?next=%2Fsettings`, { redirect: "manual" });
+    assert.equal(start.status, 303);
+    assert.equal(start.headers.get("location"), "/auth/login?next=%2Fsettings&error=unavailable");
+    const login = await fetch(`${base}/auth/login?next=%2Fsettings&error=unavailable`);
+    assert.equal(login.status, 200);
+    const html = await login.text();
+    assert.match(html, /NIHOでログイン/);
+    assert.match(html, /role="alert"[^>]*>ログインできませんでした。もう一度お試しください。/);
+    assert.match(html, /<meta name="robots" content="noindex, nofollow"\/>/);
+    assert.doesNotMatch(html, /data-auth-mode="stub"/);
   });
 });

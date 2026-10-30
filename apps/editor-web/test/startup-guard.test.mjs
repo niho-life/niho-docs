@@ -99,6 +99,7 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
       assert.equal(await response.text(), '{"error":"unauthorized"}');
       assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow");
       const home = await fetch(`http://127.0.0.1:${port}/`);
+      assert.equal(new URL(home.url).pathname, "/auth/login", "an unauthenticated visit ends on the login screen");
       assert.equal(home.headers.get("x-robots-tag"), "noindex, nofollow");
       const html = await home.text();
       assert.match(html, /<meta name="robots" content="noindex, nofollow"\/>/);
