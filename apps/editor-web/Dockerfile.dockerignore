@@ -1,0 +1,14 @@
+# apps/editor-web/Dockerfile 専用の除外（BuildKit は Dockerfile と同じ場所のこのファイルを、ルートの .dockerignore より優先して読む）。
+# image に入れるのは editor-web と、それが使う packages だけ。手元の node_modules・build の出力・env は送らない。
+*
+!apps/editor-web
+!packages/docs-core
+!packages/docs-ui
+!packages/ui
+!packages/editor-store
+**/node_modules
+**/.next
+**/dist
+**/.env*
+**/*.tsbuildinfo
+**/.DS_Store

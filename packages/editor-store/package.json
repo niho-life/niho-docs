@@ -1,0 +1,38 @@
+{
+  "name": "@niho/editor-store",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "editor.niho.life のページの正本（PostgreSQL）。migration と、owner で絞ったページの読み書き。",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./migrate": {
+      "types": "./src/migrate.ts",
+      "default": "./src/migrate.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "migrations",
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "test": "node --test test/*.test.ts",
+    "migrate": "node src/migrate-cli.ts"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "dependencies": {
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "typescript": "5.9.3"
+  }
+}
