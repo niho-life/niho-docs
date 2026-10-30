@@ -281,7 +281,12 @@ function checkInline(text: string, report: Report, context: InlineContext): void
   }
 }
 
-function checkImageLine(line: string, report: Report): void {
+/** A path that stays inside the folder it is read from: no scheme, no leading `/`, no `.` or `..` segment. */
+function isPlainRelativePath(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/.test(value) && value.split("/").every((part) => part !== ".." && part !== ".");
+}
+
+function checkImageLine(line: string, report: Report, relativeImages: ReadonlySet<string>): void {
   const altEnd = findUnescaped(line, "]", 2);
   const tail = altEnd === -1 || line[altEnd + 1] !== "(" ? null : line.slice(altEnd + 2);
   const match = tail === null ? null : /^([^\s)]+)(?: "((?:[^"\\]|\\.)*)")?\)$/u.exec(tail);
@@ -290,12 +295,23 @@ function checkImageLine(line: string, report: Report): void {
     return;
   }
   checkInline(line.slice(2, altEnd), report, "alt");
-  if (!isHttpsUrl(match[1])) report("unsafe-image");
+  if (!isHttpsUrl(match[1]) && !(match[1] !== undefined && relativeImages.has(match[1]))) report("unsafe-image");
   if (match[2] !== undefined) checkInline(match[2], report, "title");
 }
 
+export interface MarkdownSubsetOptions {
+  /**
+   * Relative image sources that are accepted as they are, besides `https` URLs. For a file that is read
+   * next to its photos (an export archive): the caller lists the exact paths it wrote. Entries that are
+   * not plain relative paths (a scheme, a leading `/`, `.` or `..`, anything outside `[A-Za-z0-9._/-]`)
+   * are ignored, so the list can never admit `javascript:`, `//host` or a path that climbs out.
+   */
+  readonly relativeImages?: Iterable<string>;
+}
+
 /** Every construct outside the subset, by 1-based line. Empty means the text is in the subset. */
-export function checkMarkdownSubset(markdown: string): readonly MarkdownViolation[] {
+export function checkMarkdownSubset(markdown: string, options: MarkdownSubsetOptions = {}): readonly MarkdownViolation[] {
+  const relativeImages = new Set([...(options.relativeImages ?? [])].filter((path) => typeof path === "string" && isPlainRelativePath(path)));
   const violations: MarkdownViolation[] = [];
   let noteStart = 0;
   markdown.split("\n").forEach((line, index) => {
@@ -339,7 +355,7 @@ export function checkMarkdownSubset(markdown: string): readonly MarkdownViolatio
     }
     if (line.startsWith("![")) {
       if (noteStart) report("note-content");
-      return checkImageLine(line, report);
+      return checkImageLine(line, report, relativeImages);
     }
     return checkInline(line, report, "text");
   });
