@@ -135,10 +135,10 @@ domain() {
   fi
   log "DNS records to register (Cloudflare: type CNAME, proxy OFF = \"DNS only\"):"
   gcp beta run domain-mappings describe --domain "$APP_DOMAIN" --region "$GCP_REGION" \
-    --format='table(status.resourceRecords.type, status.resourceRecords.name, status.resourceRecords.rrdata)'
+    --format='table(status.resourceRecords[0].type:label=TYPE, status.resourceRecords[0].name:label=NAME, status.resourceRecords[0].rrdata:label=VALUE)'
   log "certificate status (Google issues it after the record resolves; minutes to an hour):"
   gcp beta run domain-mappings describe --domain "$APP_DOMAIN" --region "$GCP_REGION" \
-    --format='table(status.conditions.type, status.conditions.status, status.conditions.message)'
+    --format='value[separator=" "](status.conditions[0].type, status.conditions[0].status, status.conditions[0].message)'
 }
 
 case "$phase" in
