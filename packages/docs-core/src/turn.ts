@@ -317,7 +317,7 @@ function reasonMessages(ai: string, cli: string): Record<ReasonCode, string> {
     CliLoginRequired: `このMacの ${cli} にログインしていません。${cli} にログインしてから、もう一度実行してください。`,
     UsageLimitReached: `${ai} の利用上限に達しました。しばらく待ってから、もう一度実行してください。`,
     NotConfigured: `この Mac に ${cli} が見つかりません。${cli} を入れてから、もう一度実行してください。`,
-    Unreachable: `このMacの ${ai} を起動できませんでした。NIHO docs を開き直してから、もう一度実行してください。`,
+    Unreachable: `このMacの ${ai} を起動できませんでした。NIHO editor を開き直してから、もう一度実行してください。`,
     SessionNotFound: "このMacに前の会話の記録が見つかりませんでした。もう一度実行してください。",
     Timeout: "時間の上限に達したため、途中で止めました。もう一度実行してください。",
     InvalidStream: `AIの返事を読み取れませんでした。もう一度実行してください。繰り返す場合は ${cli} を最新版に更新してください。`,
