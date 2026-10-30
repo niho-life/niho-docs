@@ -96,19 +96,19 @@ const PATH_KEYS: [&str; 5] = [
   "SearchDirectory",
 ];
 
-const INIT_AGENT_MESSAGE: &str = "Antigravity CLI が NIHO docs の工程用のエージェント（ツール無し）で起動しなかったため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。";
-const INIT_MISSING_MESSAGE: &str = "Antigravity CLI が NIHO docs の工程用のエージェント（ツール無し）で起動したことを確かめられなかったため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。";
+const INIT_AGENT_MESSAGE: &str = "Antigravity CLI が NIHO editor の工程用のエージェント（ツール無し）で起動しなかったため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。";
+const INIT_MISSING_MESSAGE: &str = "Antigravity CLI が NIHO editor の工程用のエージェント（ツール無し）で起動したことを確かめられなかったため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。";
 const TOOL_USE_MESSAGE: &str =
   "Antigravity CLI がツールを使おうとしたため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。";
 const DENIED_ACTIONS_MESSAGE: &str =
   "Antigravity CLI がツールを使おうとして止まりました。Antigravity CLI を最新に更新してから、もう一度試してください。";
 const EMPTY_RESPONSE_MESSAGE: &str = "Antigravity CLI の応答が空でした。もう一度試してください。";
-const READER_INIT_MESSAGE: &str = "Antigravity CLI が NIHO docs の文字起こし用のエージェント（音声を読むだけ）で起動しなかったため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。";
+const READER_INIT_MESSAGE: &str = "Antigravity CLI が NIHO editor の文字起こし用のエージェント（音声を読むだけ）で起動しなかったため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。";
 const READ_OUTSIDE_MESSAGE: &str =
   "Antigravity CLI が渡した音声の外のファイルを読もうとしたため止めました。もう一度試してください。";
 const READER_DENIED_MESSAGE: &str = "Antigravity CLI が音声を読めませんでした。もう一度実行してください。";
-const EDITOR_INIT_MESSAGE: &str = "Antigravity CLI が NIHO docs の修正用のエージェント（文書を読み書きするだけ）で起動しなかったため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。";
-const EDITOR_INIT_MISSING_MESSAGE: &str = "Antigravity CLI が NIHO docs の修正用のエージェント（文書を読み書きするだけ）で起動したことを確かめられなかったため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。";
+const EDITOR_INIT_MESSAGE: &str = "Antigravity CLI が NIHO editor の修正用のエージェント（文書を読み書きするだけ）で起動しなかったため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。";
+const EDITOR_INIT_MISSING_MESSAGE: &str = "Antigravity CLI が NIHO editor の修正用のエージェント（文書を読み書きするだけ）で起動したことを確かめられなかったため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。";
 const EDITOR_TOOL_MESSAGE: &str = "Antigravity CLI が許したもの以外のツールを使おうとしたため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。";
 const OUTSIDE_PATH_MESSAGE: &str =
   "Antigravity CLI が作業フォルダの外のファイルに触れようとしたため止めました。もう一度試してください。";
