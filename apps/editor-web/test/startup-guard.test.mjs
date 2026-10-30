@@ -108,6 +108,38 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
       child.kill("SIGTERM");
     }
   });
+
+  it("sends a nonce-based CSP on pages, and every <script> carries that request's nonce (#44)", async () => {
+    const port = await freePort();
+    const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env: childEnv(port, "niho"), stdio: "ignore" });
+    try {
+      await waitForHttp(port);
+      const fetchHome = async () => {
+        const response = await fetch(`http://127.0.0.1:${port}/`);
+        return { csp: response.headers.get("content-security-policy") ?? "", hsts: response.headers.get("strict-transport-security"), html: await response.text() };
+      };
+      const first = await fetchHome();
+      const second = await fetchHome();
+      const nonceOf = (policy) => /'nonce-([^']+)'/.exec(policy)?.[1];
+      const nonce = nonceOf(first.csp);
+      assert.ok(nonce, "the policy must carry a nonce");
+      assert.notEqual(nonce, nonceOf(second.csp), "the nonce must change on every request");
+      const scriptSrc = first.csp.split("; ").find((part) => part.startsWith("script-src ")) ?? "";
+      assert.match(scriptSrc, /'strict-dynamic'/);
+      assert.doesNotMatch(scriptSrc, /'unsafe-inline'|'unsafe-eval'/);
+      assert.match(first.csp, /frame-ancestors 'none'/);
+      assert.match(first.csp, /upgrade-insecure-requests/);
+      const scripts = [...first.html.matchAll(/<script\b[^>]*>/g)].map((match) => match[0]);
+      assert.ok(scripts.length > 0, "the page must have scripts for this check to mean anything");
+      for (const tag of scripts) assert.ok(tag.includes(`nonce="${nonce}"`), `a <script> without this request's nonce: ${tag.slice(0, 80)}`);
+      assert.equal(first.hsts, "max-age=31536000; includeSubDomains");
+      // API は JSON だけ: 何も読み込まない固定の CSP
+      const api = await fetch(`http://127.0.0.1:${port}/api/pages`);
+      assert.equal(api.headers.get("content-security-policy"), "default-src 'none'; frame-ancestors 'none'");
+    } finally {
+      child.kill("SIGTERM");
+    }
+  });
 });
 
 describe("production start without the entry (defence in depth)", () => {

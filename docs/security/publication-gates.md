@@ -57,6 +57,10 @@ contract の更新には次を必須にする。
 
 contract は認証 context、resource owner / tenant / workspace、upload / download / share / revoke / list、capability の scope / expiry / 再利用条件、idempotency、content 検証、error 分類を含める。秘密、実データ、内部 topology、正確な abuse 閾値は含めない。現在の version 1 は [`cloud-contract-v1.md`](cloud-contract-v1.md) を参照する。
 
+## editor 公開 API contract
+
+editor.niho.life の公開版を発信先（NIHO Experience、NIHO、本人のサイト）が読む API の正本は [`packages/editor-publish-contract`](../../packages/editor-publish-contract/) で、外部 observable behavior は [`editor-publish-api-v1.md`](editor-publish-api-v1.md) に置く。型・検証器・Markdown の投影・参照モデル・負例を同じ version の下で管理し、認可の最終判断と鍵の保管はサーバー側で行う。互換性を壊す変更は新しい major version とする。
+
 ## CI と成果物
 
 公開 CI は標準 GitHub-hosted runner で動かし、fork の PR に secrets を渡さない。`pull_request_target` で未信頼コードを実行しない。permissions は必要最小限にし、契約の負例を合成データで検証する。
