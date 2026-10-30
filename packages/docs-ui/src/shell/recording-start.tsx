@@ -57,9 +57,9 @@ export function RecordingStart(props: RecordingStartProps) {
         )}
       </button>
       <div className="es-fld">
-        <h4>
+        <h2>
           <label htmlFor={backgroundId}>背景情報</label> <em>任意</em>
-        </h4>
+        </h2>
         <textarea
           id={backgroundId}
           className="es-area"
@@ -69,9 +69,9 @@ export function RecordingStart(props: RecordingStartProps) {
         />
       </div>
       <div className="es-fld">
-        <h4>
+        <h2>
           登場人物 <em>話者の名前になります</em>
-        </h4>
+        </h2>
         <ul className="es-people" aria-label="登場人物">
           {props.people.map((person) => (
             <li key={person.name}>
@@ -88,9 +88,9 @@ export function RecordingStart(props: RecordingStartProps) {
         </ul>
       </div>
       <div className="es-fld">
-        <h4>
+        <h2>
           固有名詞 <em>設定から引き継いでいます</em>
-        </h4>
+        </h2>
         <div className="es-terms">
           <code>{props.terms}</code>
           <button type="button" className="es-btn es-btn--quiet es-btn--sm" onClick={props.onEditTerms}>
@@ -99,7 +99,7 @@ export function RecordingStart(props: RecordingStartProps) {
         </div>
       </div>
       <div className="es-fld" role="radiogroup" aria-labelledby={nextId}>
-        <h4 id={nextId}>このあと</h4>
+        <h2 id={nextId}>このあと</h2>
         {NEXTS.map((item) => (
           <button key={item.id} type="button" role="radio" aria-checked={props.next === item.id} className={`es-opt${props.next === item.id ? " es-opt--on" : ""}`} onClick={() => props.onNext(item.id)}>
             <i aria-hidden="true" />
