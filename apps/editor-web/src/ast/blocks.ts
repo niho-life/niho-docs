@@ -83,7 +83,10 @@ const NODES: Record<string, NodeSpec> = {
     attrs: (raw) => {
       const { start } = pick("orderedList", raw, ["start"], ["type"]);
       if (start === undefined || start === null || start === 1) return {};
-      if (typeof start !== "number" || !Number.isInteger(start) || start < 1 || start > 999_999) fail("orderedList", "invalid start");
+      if (typeof start !== "number") fail("orderedList", "invalid start");
+      // 貼り付けた <ol start="0"> や「0. 」の入力規則はエディタが 0・負・巨大な番号を作る。番号の起点にすぎないので、
+      // 範囲外は既定（1）へ丸める。断ると自動保存が 400 で止まり続ける。
+      if (!Number.isInteger(start) || start < 1 || start > 999_999) return {};
       return { start };
     },
   },
@@ -185,8 +188,10 @@ function parseMarks(path: string, raw: unknown): { type: string; attrs?: { href:
 function parseInline(path: string, raw: unknown): Block {
   if (!isPlainObject(raw) || typeof raw.type !== "string") fail(path, "inline node must have a type");
   if (raw.type === "hardBreak") {
-    keysWithin(path, raw, ["type"]);
-    return { type: "hardBreak" };
+    // `<strong>a<br>b</strong>` の貼り付けで、エディタは改行にも太字などの mark を残す。text と同じ検査で保つ
+    keysWithin(path, raw, ["type", "marks"]);
+    const marks = parseMarks(path, raw.marks);
+    return marks ? { type: "hardBreak", marks } : { type: "hardBreak" };
   }
   if (raw.type !== "text") fail(path, `unknown inline node "${raw.type}"`);
   keysWithin(path, raw, ["type", "text", "marks"]);

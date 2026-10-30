@@ -131,6 +131,15 @@ describe("pasting HTML", () => {
     expect(blocks.find((block) => block.type === "heading" && flatten(block).includes("小見出し"))).toMatchObject({ attrs: { level: 3 } });
   });
 
+  it("never leaves a body the server would refuse: marked hard breaks and out-of-range list starts", () => {
+    // paste() はサーバーの検査（validateBlocks）を通らなければ throw する
+    const blocks = paste(makeEditor(), `<p><strong>一行目<br>二行目</strong></p>`);
+    expect(flatten(blocks)).toContain('"type":"hardBreak"');
+    for (const start of ["0", "-2", "1000000", "x"]) {
+      expect(paste(makeEditor(), `<ol start="${start}"><li>番号</li></ol>`).some((block) => block.type === "orderedList")).toBe(true);
+    }
+  });
+
   it("keeps bold and italic that Word and Google Docs write as inline styles", () => {
     const blocks = paste(makeEditor(), `<p><span style="font-weight:700;color:red;background:url(javascript:x)">強い</span><span style="font-style:italic">傾き</span></p>`);
     expect(flatten(blocks)).toContain('"type":"bold"');
