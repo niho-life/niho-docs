@@ -165,6 +165,29 @@ function randomBlock(rng: Rng, assets: readonly PublishedAsset[]): Block {
   }
 }
 
+describe("checkMarkdownSubset: relative images", () => {
+  const photo = `photos/${"a".repeat(64)}.png`;
+  const line = (src: string): string => `![alt](${src} "caption")\n`;
+
+  it("rejects a relative image source unless the caller lists it", () => {
+    expect(checkMarkdownSubset(line(photo)).map((violation) => violation.reason)).toEqual(["unsafe-image"]);
+    expect(checkMarkdownSubset(line(photo), { relativeImages: [photo] })).toEqual([]);
+    expect(checkMarkdownSubset(line(photo), { relativeImages: [`photos/${"b".repeat(64)}.png`] }).map((violation) => violation.reason)).toEqual(["unsafe-image"]);
+  });
+
+  it("never admits a dangerous source, even when it is listed", () => {
+    for (const source of ["javascript:alert(1)", "//host/x.png", "/etc/passwd", "../x.png", "photos/../x.png", "./x.png", "http://example.com/x.png", "data:image/png;base64,AAAA", "photos\\x.png"]) {
+      // Some of these are also malformed image lines; any finding is enough: listing a source never makes it pass.
+      expect(checkMarkdownSubset(line(source), { relativeImages: [source] }).length, source).toBeGreaterThan(0);
+    }
+  });
+
+  it("does not loosen anything else about the line", () => {
+    expect(checkMarkdownSubset(`text ![alt](${photo}) text\n`, { relativeImages: [photo] }).length).toBeGreaterThan(0);
+    expect(checkMarkdownSubset(line(photo).replace("caption", "a_b"), { relativeImages: [photo] }).length).toBeGreaterThan(0);
+  });
+});
+
 describe("projection property", () => {
   it("renders 400 random valid ASTs into the subset, deterministically", () => {
     const assets: PublishedAsset[] = [
