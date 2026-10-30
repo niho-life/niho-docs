@@ -2,6 +2,8 @@ name: Client packages CI
 
 on:
   pull_request:
+  # merge queue が「PR + 先に並んだ変更 + 最新の main」を検証するときに必須チェックを報告する
+  merge_group:
   push:
     branches: [main]
     paths:
