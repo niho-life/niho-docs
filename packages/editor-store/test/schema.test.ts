@@ -16,6 +16,12 @@ function tableBody(sql: string, table: string): string {
   return sql.match(new RegExp(`CREATE TABLE ${table} \\(([\\s\\S]*?)\\n\\);`))?.[1] ?? "";
 }
 
+/**
+ * 秘密の列の検査から外す、ただ 1 つの列: 0004 の共有リンクの token（#34）。256 bit の乱数で、形をこの CHECK に限っている
+ * （任意の秘密・資格情報を入れられない）。リンクを何度も表示するため平文で持つ（設計の決定）。この定義と完全に同じときだけ外す。
+ */
+const SHARE_TOKEN_COLUMN = "token text NOT NULL UNIQUE CHECK (token ~ '^[A-Za-z0-9_-]{43}$')";
+
 describe("migration files", () => {
   it("are numbered, unique, sorted .sql files wrapped in one transaction", async () => {
     const names = (await readdir(new URL("../migrations/", import.meta.url))).filter((name) => !name.startsWith("."));
@@ -88,7 +94,7 @@ describe("migration files", () => {
       assert.doesNotMatch(sql, /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i, "credential URL");
       assert.doesNotMatch(sql, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i, "e-mail address");
       assert.doesNotMatch(sql, /\/Users\/|\/home\//, "absolute user path");
-      const columns = withoutComments(sql);
+      const columns = withoutComments(sql).replace(SHARE_TOKEN_COLUMN, "");
       assert.doesNotMatch(columns, /\b(email|password|secret|token|cookie|access_key)\w*\s+(text|bytea|jsonb)/i, "secret-bearing column");
     }
   });

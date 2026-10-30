@@ -17,6 +17,16 @@ const securityHeaders = [
   { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
 ];
 
+/**
+ * 共有リンク（`/s/{token}`。#34）。全体の規則の後に置く: 同じ名前の header は後の規則の値で置き換わる（値は 1 つだけ）。
+ * token は path にあるので、リンク先へ Referer で渡さない（no-referrer。このページに更新系の要求は無い）。
+ * 共有の停止・作り直しがすぐ効くよう、ブラウザにも途中の cache にも保存させない。
+ */
+export const SHARED_PAGE_HEADERS = [
+  { key: "Cache-Control", value: "private, no-store" },
+  { key: "Referrer-Policy", value: "no-referrer" },
+];
+
 const nextConfig: NextConfig = {
   // Cloud Run の container 用の自己完結の server（Dockerfile）
   output: "standalone",
@@ -38,6 +48,8 @@ const nextConfig: NextConfig = {
       { source: "/api/:path*", headers: [{ key: "Content-Security-Policy", value: API_CSP }] },
       // service worker は更新がすぐ届くよう、ブラウザの HTTP cache に残さない（#49）
       { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }] },
+      // 共有リンクのページ（#34）。private・no-store・no-referrer。全体の規則のあとに置いて、同じ key（Referrer-Policy）を上書きする
+      { source: "/s/:token*", headers: SHARED_PAGE_HEADERS },
     ];
   },
 };
