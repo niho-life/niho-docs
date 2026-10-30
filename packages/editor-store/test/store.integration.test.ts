@@ -4,12 +4,18 @@ import { after, before, describe, it } from "node:test";
 import type { Pool as PgPool } from "pg";
 import { MIGRATIONS_TABLE, applyMigrations, readMigrations } from "../src/migrate.ts";
 import { EditorStore, InvalidPageCursorError } from "../src/store.ts";
+import type { Page, SaveResult } from "../src/types.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
 // 合成のユーザー ID だけを使う（実在の人の値を入れない）
 const OWNER = "synthetic-owner-a";
 const OTHER = "synthetic-owner-b";
+
+function expectSaved(result: SaveResult | null): Page {
+  assert.ok(result !== null && result.status === "saved", `expected a save, got ${result === null ? "null" : result.status}`);
+  return result.page;
+}
 
 describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
   const schema = `editor_store_test_${randomUUID().replaceAll("-", "")}`;
@@ -78,15 +84,17 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
     assert.equal(created.kind, "note");
     assert.equal(created.lang, "ja");
 
-    const blocks = [{ type: "paragraph", content: [{ type: "text", text: "合成の本文" }] }];
-    const saved = await store.savePage(OWNER, created.id, { title: "合成の題名", blocks });
-    assert.ok(saved);
-    assert.ok(Date.parse(saved.updatedAt) >= Date.parse(created.updatedAt));
+    assert.equal(created.revision, 1);
 
-    const again = await store.savePage(OWNER, created.id, { lang: "en" });
-    assert.ok(again);
+    const blocks = [{ type: "paragraph", content: [{ type: "text", text: "合成の本文" }] }];
+    const saved = expectSaved(await store.savePage(OWNER, created.id, { title: "合成の題名", blocks }, { baseRevision: created.revision }));
+    assert.ok(Date.parse(saved.updatedAt) >= Date.parse(created.updatedAt));
+    assert.equal(saved.revision, 2, "every save bumps the revision");
+
+    const again = expectSaved(await store.savePage(OWNER, created.id, { lang: "en" }, { baseRevision: saved.revision }));
     assert.equal(again.title, "合成の題名", "a partial patch keeps the other fields");
     assert.ok(Date.parse(again.updatedAt) >= Date.parse(saved.updatedAt));
+    assert.equal(again.revision, 3);
 
     const otherPool = await newPool();
     try {
@@ -95,6 +103,7 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       assert.equal(read.title, "合成の題名");
       assert.equal(read.lang, "en");
       assert.deepEqual(read.blocks, blocks);
+      assert.equal(read.revision, 3);
     } finally {
       await otherPool.end();
     }
@@ -109,7 +118,8 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
 
     for (const id of [theirs.id, removed.id, randomUUID(), "not-a-uuid", "00000000-0000-0000-0000-00000000000g"]) {
       assert.equal(await store.getPage(OWNER, id), null, id);
-      assert.equal(await store.savePage(OWNER, id, { title: "overwrite" }), null, id);
+      assert.equal(await store.savePage(OWNER, id, { title: "overwrite" }, { baseRevision: 1 }), null, id);
+      assert.equal(await store.savePage(OWNER, id, { title: "overwrite" }, { baseRevision: 99 }), null, `${id} is missing, not in conflict`);
     }
     const untouched = await store.getPage(OTHER, theirs.id);
     assert.equal(untouched?.title, "theirs", "another owner's page is not changed");
@@ -135,7 +145,8 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
     await pool.query("UPDATE pages SET updated_at = timestamptz '2030-01-02 03:04:05.123455+00' WHERE id = ANY($1::uuid[])", [ids.slice(8)]);
     const parent = await store.createPage(OTHER, { title: "theirs" });
     const removed = await store.createPage(owner, { title: "removed" });
-    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [removed.id]);
+    // ゴミ箱へ入れたページは一覧に出さない（#58 の deletePage と同じ規則で読む）
+    assert.equal(await store.deletePage(owner, removed.id), "deleted");
     await pool.query("UPDATE pages SET parent = $2, step_status = 'run' WHERE id = $1", [ids[1], ids[0]]);
 
     const expected = await pool.query<{ id: string }>(
@@ -167,6 +178,10 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
     assert.equal(all.pages.find((page) => page.id === ids[2])?.parent, null);
     const listed = await store.listPages(owner);
     assert.equal(listed.find((page) => page.id === ids[1])?.parent, ids[0]);
+
+    assert.equal(await store.restoreFromTrash(owner, removed.id), true);
+    const restored = await store.listPageChunk(owner, { limit: 20 });
+    assert.ok(restored.pages.some((page) => page.id === removed.id), "a page restored from the trash is listed again");
   });
 
   it("rejects cursors that are not exactly what the list returned", async () => {

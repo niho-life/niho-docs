@@ -19,8 +19,8 @@ export function HomeRedirect({ lastPageId }: { lastPageId: string | null }) {
   return null;
 }
 
-/** `/p/{id}`。最後に開いたページとして覚え、題名と保存を一覧へ知らせる。 */
-export function OpenPage({ summary, blocks }: { summary: PageSummary; blocks: unknown[] }) {
+/** `/p/{id}`。最後に開いたページとして覚え、題名と保存を一覧へ知らせる。revision は読み込んだときの値（保存の `baseRevision`）。 */
+export function OpenPage({ summary, blocks, revision }: { summary: PageSummary; blocks: unknown[]; revision: number }) {
   const frame = useEditorFrame();
   const { pageOpened } = frame;
   const { id } = summary;
@@ -30,7 +30,7 @@ export function OpenPage({ summary, blocks }: { summary: PageSummary; blocks: un
   }, [summary, pageOpened]);
   return (
     <PageEditor
-      page={{ id, title: summary.title, blocks }}
+      page={{ id, title: summary.title, blocks, revision }}
       onTitleChange={(value) => frame.pageTitleChanged(id, value)}
       onSaved={() => frame.pageSaved(id)}
     />
@@ -73,7 +73,7 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
   }, []);
   return (
     <PageEditor
-      page={{ id: null, title: "", blocks: [] }}
+      page={{ id: null, title: "", blocks: [], revision: null }}
       onTitleChange={(value) => {
         titleRef.current = value;
         if (createdRef.current) frame.pageTitleChanged(createdRef.current, value);

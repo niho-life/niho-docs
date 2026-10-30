@@ -11,19 +11,29 @@ import { buildPageExtensions } from "@/editor/page-extensions";
 import { normalizePastedHtml } from "@/editor/paste";
 import { createAutosave, type Autosave, type SaveState } from "@/lib/autosave";
 import { MAX_TITLE_CHARS } from "@/lib/page-limits";
-import { createPageRequest, savePageRequest, type PageBody } from "@/lib/pages-client";
+import { PageConflictError, createPageRequest, savePageRequest, type PageBody, type SavedPage } from "@/lib/pages-client";
 
 export type EditablePage = {
-  /** null はまだ作っていない新しいページ（最初の保存で作る）。 */
-  id: string | null;
   title: string;
   blocks: unknown[];
-};
+} & (
+  | {
+      id: string;
+      /** 読み込んだときの revision。保存のたびに `baseRevision` として送り、応答の値に進める。 */
+      revision: number;
+    }
+  | {
+      /** まだ作っていない新しいページ（最初の保存で作り、その応答の revision から始める）。 */
+      id: null;
+      revision: null;
+    }
+);
 
 const STATE_TEXT: Record<SaveState, string> = {
   saved: "保存済み",
   saving: "保存中",
   error: "保存に失敗",
+  stopped: "保存を止めています",
 };
 
 /** 保存されている blocks を TipTap の doc にする（空のページは空の段落 1 つ）。 */
@@ -42,8 +52,10 @@ export type PageEditorEvents = {
 /**
  * ページの題名と本文。本文は TipTap で、作れるのは限定 AST（src/ast/blocks.ts）の範囲だけ（src/editor/page-extensions.ts）。
  * blocks は TipTap の doc の content（ブロックの配列）をそのまま保存する。貼り付けた HTML は先に洗う（src/editor/paste.ts）。
- * 入力の 1 秒後に PATCH で自動保存し、状態を文字で読み上げる。id が null のページは最初の保存で POST して作り、以後はその id へ PATCH する
- * （id は ref に持ち、エディタは作り直さない。変換中は保存を待つので、作るのも変換の確定の後）。
+ * 入力の 1 秒後に PATCH で自動保存し、状態を文字で読み上げる。保存は revision を付けて 1 つずつ送り、
+ * 別の画面が先に保存していた（409）ら自動保存を止めて知らせる（本文の編集は止めない。帯の操作は次の PR）。
+ * id が null のページは最初の保存で POST して作り、以後はその id へ、作ったときの revision を `baseRevision` にして PATCH する
+ * （id と revision は ref に持ち、エディタは作り直さない。変換中は保存を待つので、作るのも変換の確定の後）。
  * 「/」のブロック一覧と書式のバーは、docs-ui の BlockEditor が Markdown 文書の schema（コード・チェック・取り消し線）を前提にしているため、
  * ここでは付けていない。モック v6 の shell（#54）を本文に繋ぐときに、この schema に合わせて付ける。
  */
@@ -53,12 +65,15 @@ export function PageEditor(props: { page: EditablePage } & PageEditorEvents) {
   const [state, setState] = useState<SaveState>("saved");
   const [unreadable, setUnreadable] = useState(false);
   const [titleClamped, setTitleClamped] = useState(false);
+  const [conflicted, setConflicted] = useState(false);
   const unreadableRef = useRef(false);
   const composingRef = useRef(false);
+  // 保存先のページと、その revision（新しいページは作るまで null）。保存は直列（autosave）なので、
+  // 次の保存は必ず前の保存（作ったときは POST）の応答の revision を使う
+  const savedRef = useRef<SavedPage | null>(page.id === null ? null : { id: page.id, revision: page.revision });
 
   const autosaveRef = useRef<Autosave<PageBody> | null>(null);
   const editorRef = useRef<Editor | null>(null);
-  const idRef = useRef(page.id);
   const eventsRef = useRef<PageEditorEvents>(props);
 
   useEffect(() => {
@@ -68,17 +83,23 @@ export function PageEditor(props: { page: EditablePage } & PageEditorEvents) {
   useEffect(() => {
     const autosave = createAutosave<PageBody>({
       save: async (patch) => {
-        if (idRef.current === null) {
-          const id = await createPageRequest(patch);
-          idRef.current = id;
-          eventsRef.current.onCreated?.(id);
+        const saved = savedRef.current;
+        if (saved === null) {
+          const created = await createPageRequest(patch);
+          savedRef.current = created;
+          eventsRef.current.onCreated?.(created.id);
         } else {
-          await savePageRequest(idRef.current, patch);
+          savedRef.current = { id: saved.id, revision: await savePageRequest(saved.id, patch, { baseRevision: saved.revision }) };
         }
         eventsRef.current.onSaved?.();
       },
       isComposing: () => composingRef.current || Boolean(editorRef.current?.view.composing),
-      onState: setState,
+      onState: (next) => {
+        setState(next);
+        if (next === "stopped") setConflicted(true);
+      },
+      // 別の画面の保存を黙って上書きしない
+      stopOn: (error) => error instanceof PageConflictError,
     });
     autosaveRef.current = autosave;
     return () => {
@@ -143,6 +164,7 @@ export function PageEditor(props: { page: EditablePage } & PageEditorEvents) {
       />
       {titleClamped && <p role="status">題名は {MAX_TITLE_CHARS} 字までです。</p>}
       {unreadable && <p role="alert">本文を読み込めませんでした。この画面では本文を変更しません。</p>}
+      {conflicted && <p role="alert">別の画面で保存されました。このページを開き直してください。</p>}
       <div className="be">
         <EditorContent editor={editor} />
       </div>

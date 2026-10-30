@@ -15,5 +15,12 @@ export default async function PageView(props: { params: Promise<{ id: string }> 
   const page = await store.getPage(session.userId, id);
   if (!page) notFound();
   const { kind, title, lang, parent, stepStatus, createdAt, updatedAt } = page;
-  return <OpenPage key={page.id} summary={{ id: page.id, kind, title, lang, parent, stepStatus, createdAt, updatedAt }} blocks={page.blocks} />;
+  return (
+    <OpenPage
+      key={page.id}
+      summary={{ id: page.id, kind, title, lang, parent, stepStatus, createdAt, updatedAt }}
+      blocks={page.blocks}
+      revision={page.revision}
+    />
+  );
 }
