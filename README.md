@@ -8,7 +8,7 @@ NIHO Docs の公開クライアントコードと、NIHO Photo と共有する�
 
 公開側と非公開側の境界、CI、脆弱性報告は [`docs/security/publication-gates.md`](docs/security/publication-gates.md) に記録しています。Docs / Photo が共有するクラウド contract は [`packages/niho-cloud-contract`](packages/niho-cloud-contract/) が versioned SSOT です。
 
-公開開発から非公開の本番配布までの現在地と接続方針は [`docs/architecture/release-boundary.md`](docs/architecture/release-boundary.md) に記録しています。 このリポジトリを `editor.niho.life`（ページを書く工房）へ再編する方針は [`docs/architecture/editor-niho-life.md`](docs/architecture/editor-niho-life.md) にあります（Epic [#30](https://github.com/niho-life/niho-docs/issues/30)、詳細設計 [`docs/architecture/editor-niho-life-design.md`](docs/architecture/editor-niho-life-design.md)）。公開 `main` の更新だけでは公式サービスは更新されません。security vulnerability の詳細は public issue に書かず [`SECURITY.md`](SECURITY.md) の手順を使ってください。
+公開開発から非公開の本番配布までの現在地と接続方針は [`docs/architecture/release-boundary.md`](docs/architecture/release-boundary.md) に記録しています。 このリポジトリを `editor.niho.life`（ページを書く工房）へ再編する方針は [`docs/architecture/editor-niho-life.md`](docs/architecture/editor-niho-life.md) にあります（Epic [#30](https://github.com/niho-life/niho-editor/issues/30)、詳細設計 [`docs/architecture/editor-niho-life-design.md`](docs/architecture/editor-niho-life-design.md)）。公開 `main` の更新だけでは公式サービスは更新されません。security vulnerability の詳細は public issue に書かず [`SECURITY.md`](SECURITY.md) の手順を使ってください。
 
 ## 現在の抽出範囲
 
