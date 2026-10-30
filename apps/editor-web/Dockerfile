@@ -24,6 +24,8 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0
 COPY --from=build --chown=node:node /repo/apps/editor-web/.next/standalone ./
 COPY --from=build --chown=node:node /repo/apps/editor-web/.next/static ./.next/static
+# standalone の出力には public/ が入らない（manifest・アイコン・service worker・オフライン画面）。build の後処理でも置くが、image に入ることをここで明示する
+COPY --from=build --chown=node:node /repo/apps/editor-web/public ./public
 # 起動の入口: server を読み込む前に認証の方式を検査する（EDITOR_AUTH_MODE=niho 以外は起動しない）
 COPY --from=build --chown=node:node /repo/apps/editor-web/scripts/server-entry.mjs ./scripts/server-entry.mjs
 COPY --from=build --chown=node:node /repo/apps/editor-web/src/auth/config.ts ./src/auth/config.ts

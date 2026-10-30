@@ -46,6 +46,8 @@ const nextConfig: NextConfig = {
     return [
       { source: "/:path*", headers: [...ROBOTS_HEADERS, ...securityHeaders] },
       { source: "/api/:path*", headers: [{ key: "Content-Security-Policy", value: API_CSP }] },
+      // service worker は更新がすぐ届くよう、ブラウザの HTTP cache に残さない（#49）
+      { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }] },
       // 共有リンクのページ（#34）。private・no-store・no-referrer。全体の規則のあとに置いて、同じ key（Referrer-Policy）を上書きする
       { source: "/s/:token*", headers: SHARED_PAGE_HEADERS },
     ];

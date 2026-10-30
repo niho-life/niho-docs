@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import type { Pool as PgPool } from "pg";
 import { MIGRATIONS_TABLE, applyMigrations, readMigrations } from "../src/migrate.ts";
-import { EditorStore } from "../src/store.ts";
+import { EditorStore, InvalidPageCursorError } from "../src/store.ts";
 import type { Page, SaveResult } from "../src/types.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -132,6 +132,76 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
     for (let index = 1; index < list.length; index++) {
       assert.ok(Date.parse(list[index - 1]!.updatedAt) >= Date.parse(list[index]!.updatedAt), "list is newest first");
     }
+  });
+
+  it("pages through the list in chunks, exactly once each, even when many pages share updated_at", async () => {
+    const owner = "synthetic-owner-chunks";
+    const store = new EditorStore(pool);
+    const ids: string[] = [];
+    for (let index = 0; index < 11; index++) ids.push((await store.createPage(owner, { title: `chunk ${index}` })).id);
+    // 7 行を同じ時刻（マイクロ秒まで）にし、残りは別々の時刻にする
+    await pool.query("UPDATE pages SET updated_at = timestamptz '2030-01-02 03:04:05.123456+00' WHERE id = ANY($1::uuid[])", [ids.slice(0, 7)]);
+    await pool.query("UPDATE pages SET updated_at = timestamptz '2030-01-02 03:04:05.123457+00' WHERE id = $1", [ids[7]]);
+    await pool.query("UPDATE pages SET updated_at = timestamptz '2030-01-02 03:04:05.123455+00' WHERE id = ANY($1::uuid[])", [ids.slice(8)]);
+    const parent = await store.createPage(OTHER, { title: "theirs" });
+    const removed = await store.createPage(owner, { title: "removed" });
+    // ゴミ箱へ入れたページは一覧に出さない（#58 の deletePage と同じ規則で読む）
+    assert.equal(await store.deletePage(owner, removed.id), "deleted");
+    await pool.query("UPDATE pages SET parent = $2, step_status = 'run' WHERE id = $1", [ids[1], ids[0]]);
+
+    const expected = await pool.query<{ id: string }>(
+      "SELECT id FROM pages WHERE owner = $1 AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC",
+      [owner],
+    );
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let chunks = 0;
+    do {
+      const chunk = await store.listPageChunk(owner, { limit: 3, cursor });
+      assert.ok(chunk.pages.length <= 3);
+      seen.push(...chunk.pages.map((page) => page.id));
+      cursor = chunk.next;
+      chunks++;
+      assert.ok(chunks < 20, "the cursor must advance");
+    } while (cursor !== null);
+    assert.equal(chunks, 4);
+    assert.deepEqual(seen, expected.rows.map((row) => row.id), "every page once, newest first, ties by id");
+    assert.equal(new Set(seen).size, 11);
+    assert.ok(!seen.includes(removed.id), "deleted pages never appear");
+    assert.ok(!seen.includes(parent.id), "another owner's pages never appear");
+
+    const all = await store.listPageChunk(owner, { limit: 11 });
+    assert.equal(all.next, null, "no next when everything fit");
+    const child = all.pages.find((page) => page.id === ids[1]);
+    assert.equal(child?.parent, ids[0]);
+    assert.equal(child?.stepStatus, "run");
+    assert.equal(all.pages.find((page) => page.id === ids[2])?.parent, null);
+    const listed = await store.listPages(owner);
+    assert.equal(listed.find((page) => page.id === ids[1])?.parent, ids[0]);
+
+    assert.equal(await store.restoreFromTrash(owner, removed.id), true);
+    const restored = await store.listPageChunk(owner, { limit: 20 });
+    assert.ok(restored.pages.some((page) => page.id === removed.id), "a page restored from the trash is listed again");
+  });
+
+  it("rejects cursors that are not exactly what the list returned", async () => {
+    const store = new EditorStore(pool);
+    const id = randomUUID();
+    for (const cursor of [
+      "",
+      "x",
+      id,
+      `2030-01-02T03:04:05.123Z_${id}`,
+      `2030-01-02 03:04:05.123456Z_${id}`,
+      `2030-01-02T03:04:05.123456Z_${id.toUpperCase()}`,
+      `2030-02-30T03:04:05.123456Z_${id}`,
+      `2030-13-01T03:04:05.123456Z_${id}`,
+      `2030-01-02T03:04:05.123456Z_${id}' OR '1'='1`,
+    ]) {
+      await assert.rejects(() => store.listPageChunk(OWNER, { cursor }), InvalidPageCursorError, cursor);
+    }
+    const empty = await store.listPageChunk(OWNER, { cursor: `1970-01-01T00:00:00.000000Z_${id}` });
+    assert.deepEqual(empty, { pages: [], next: null });
   });
 
   it("keeps the database invariants even when the store is bypassed", async () => {

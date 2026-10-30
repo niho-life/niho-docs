@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-/** ページの代わりに出す短い知らせ（未ログイン・保存先が無いとき）。 */
+/** ページの代わりに出す短い知らせ（保存先が無いとき）。 */
 export function Notice(props: { title: string; children: ReactNode }) {
   return (
     <main>
@@ -8,10 +8,6 @@ export function Notice(props: { title: string; children: ReactNode }) {
       <p>{props.children}</p>
     </main>
   );
-}
-
-export function LoginRequired() {
-  return <Notice title="ログインが必要です">NIHO アカウントでのログインは準備中です。</Notice>;
 }
 
 export function StoreUnavailable() {

@@ -28,8 +28,19 @@ function row(owner: string, title: string, body: string, extra: Partial<Row> = {
   return { id: randomUUID(), kind: "note", title, snippet: body.slice(0, 80), updatedAt: new Date().toISOString(), owner, deleted: false, body, ...extra };
 }
 
+/** 検索の API が呼ぶのは getSession だけ。ログインの経路（AuthProvider の残り）は使わない。 */
+const notUsed = async (): Promise<Response> => {
+  throw new Error("the search API never calls the login routes");
+};
+
 function authAs(userId: string | null): AuthProvider {
-  return { mode: "stub", getSession: async () => (userId ? { userId, mode: "stub" } : null) };
+  return {
+    mode: "stub",
+    getSession: async () => (userId ? { userId, mode: "stub" } : null),
+    beginLogin: notUsed,
+    completeLogin: notUsed,
+    logout: notUsed,
+  };
 }
 
 function deps(userId: string | null, search: SearchFn | null): SearchApiDeps {

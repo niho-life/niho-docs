@@ -1,5 +1,8 @@
 /** ブラウザから `/api/pages` を呼ぶ（同じ origin。cookie・token は扱わない）。 */
 
+import type { PageChunk } from "@niho/editor-store";
+import { PAGE_CHUNK } from "./page-limits";
+
 export type PageBody = {
   title?: string;
   blocks?: unknown[];
@@ -10,7 +13,17 @@ export type SaveRequestOptions = {
   baseRevision: number;
   /** 「この内容で上書き」（競合の応答の revision を取り直して送る）。 */
   overwrite?: boolean;
+  /**
+   * タブを閉じる・隠れる瞬間の保存。`fetch` の `keepalive` で、画面が消えたあとも送り終える見込みを上げる
+   * （届く保証は無い。本文が大きく keepalive の上限を超えるときは普通に送る）。
+   */
+  keepalive?: boolean;
 };
+
+/** keepalive の要求の本文の上限（ブラウザの 64 KiB より少し小さく）。超えると fetch がすぐ失敗するので、普通に送る。 */
+export const KEEPALIVE_MAX_BYTES = 60 * 1024;
+/** 応答の無い保存を待つ上限。届かないまま待ち続けて、直列の保存が詰まらないように。 */
+export const SAVE_TIMEOUT_MS = 60_000;
 
 /** 競合の応答が持つ、今のページ（別の画面・端末が保存したもの）。 */
 export type ConflictPage = {
@@ -49,13 +62,22 @@ function conflictPageOf(data: unknown): ConflictPage | null {
   return { title, blocks, revision, updatedAt };
 }
 
-async function send(path: string, method: "POST" | "PATCH", body: unknown): Promise<unknown> {
+function timeoutSignal(ms: number): AbortSignal | undefined {
+  return typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(ms) : undefined;
+}
+
+async function send(path: string, method: "POST" | "PATCH", body: unknown, options: { keepalive?: boolean } = {}): Promise<unknown> {
+  const text = JSON.stringify(body);
+  const keepalive = options.keepalive === true && new TextEncoder().encode(text).byteLength <= KEEPALIVE_MAX_BYTES;
+  const signal = timeoutSignal(SAVE_TIMEOUT_MS);
   const response = await fetch(path, {
     method,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: text,
     credentials: "same-origin",
     cache: "no-store",
+    ...(keepalive ? { keepalive: true } : {}),
+    ...(signal ? { signal } : {}),
   });
   if (response.status === 409) {
     const page = conflictPageOf(await response.json().catch(() => null));
@@ -66,12 +88,19 @@ async function send(path: string, method: "POST" | "PATCH", body: unknown): Prom
   return response.json();
 }
 
-/** 新しい空のページを作り、その id を返す。 */
-export async function createPageRequest(): Promise<string> {
-  const data = (await send("/api/pages", "POST", {})) as { page?: { id?: unknown } };
+/** 保存先のページ（id と、次の保存で `baseRevision` に使う revision）。 */
+export type SavedPage = { id: string; revision: number };
+
+/**
+ * 新しいページを作り（題名・本文を渡せば、それで作る）、その id と revision を返す。
+ * `keepalive` は保存（PATCH）と同じく、タブを閉じる・隠れる瞬間の作成。
+ */
+export async function createPageRequest(body: PageBody = {}, options: { keepalive?: boolean } = {}): Promise<SavedPage> {
+  const data = (await send("/api/pages", "POST", body, { keepalive: options.keepalive })) as { page?: { id?: unknown; revision?: unknown } };
   const id = data.page?.id;
-  if (typeof id !== "string" || !UUID_PATTERN.test(id)) throw new PageRequestError(500);
-  return id;
+  const revision = data.page?.revision;
+  if (typeof id !== "string" || !UUID_PATTERN.test(id) || !isRevision(revision)) throw new PageRequestError(500);
+  return { id, revision };
 }
 
 /**
@@ -80,8 +109,17 @@ export async function createPageRequest(): Promise<string> {
  */
 export async function savePageRequest(id: string, body: PageBody, options: SaveRequestOptions): Promise<number> {
   const payload = { ...body, baseRevision: options.baseRevision, ...(options.overwrite === true ? { overwrite: true } : {}) };
-  const data = (await send(`/api/pages/${encodeURIComponent(id)}`, "PATCH", payload)) as { page?: { revision?: unknown } };
+  const data = (await send(`/api/pages/${encodeURIComponent(id)}`, "PATCH", payload, { keepalive: options.keepalive })) as { page?: { revision?: unknown } };
   const revision = data.page?.revision;
   if (!isRevision(revision)) throw new PageRequestError(500);
   return revision;
+}
+
+/** 一覧の続き（cursor は前の応答の next）。 */
+export async function listPagesRequest(cursor: string): Promise<PageChunk> {
+  const response = await fetch(`/api/pages?limit=${PAGE_CHUNK}&cursor=${encodeURIComponent(cursor)}`, { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) throw new PageRequestError(response.status);
+  const data = (await response.json()) as { pages?: unknown; next?: unknown };
+  if (!Array.isArray(data.pages) || (data.next !== null && typeof data.next !== "string")) throw new PageRequestError(500);
+  return { pages: data.pages as PageChunk["pages"], next: data.next };
 }
