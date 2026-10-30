@@ -1,12 +1,24 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { connection } from "next/server";
 import type { ReactNode } from "react";
+import { RegisterServiceWorker } from "@/components/RegisterServiceWorker";
 import { StubBadge } from "@/components/StubBadge";
 
 // editor.niho.life は全ページ noindex, nofollow（設計 §2）。header の X-Robots-Tag は next.config.ts で全 route に付ける。
+// インストール（#49）: manifest は src/app/manifest.ts、アイコンは public/icons。インストール後も同じ noindex。
 export const metadata: Metadata = {
   title: { default: "NIHO editor", template: "%s · NIHO editor" },
+  applicationName: "NIHO editor",
   robots: { index: false, follow: false },
+  icons: {
+    icon: [{ url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+  appleWebApp: { capable: true, title: "NIHO editor", statusBarStyle: "default" },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#fcfbf8",
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
@@ -17,6 +29,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       <body>
         {children}
         <StubBadge />
+        <RegisterServiceWorker />
       </body>
     </html>
   );

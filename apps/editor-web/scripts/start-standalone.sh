@@ -10,4 +10,6 @@ if [ ! -f "$out/server.js" ]; then
 fi
 rm -rf "$out/.next/static"
 cp -R .next/static "$out/.next/static"
+rm -rf "$out/public"
+cp -R public "$out/public"
 exec node scripts/server-entry.mjs "$out/server.js"

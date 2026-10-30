@@ -2,3 +2,6 @@ node_modules/
 dist/
 .DS_Store
 *.log
+
+# editor.niho.life の配備設定（本番プロジェクトを特定する値を含む）
+scripts/editor-deploy/deploy.env

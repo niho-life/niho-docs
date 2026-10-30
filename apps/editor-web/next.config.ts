@@ -36,6 +36,8 @@ const nextConfig: NextConfig = {
     return [
       { source: "/:path*", headers: [...ROBOTS_HEADERS, ...securityHeaders] },
       { source: "/api/:path*", headers: [{ key: "Content-Security-Policy", value: API_CSP }] },
+      // service worker は更新がすぐ届くよう、ブラウザの HTTP cache に残さない（#49）
+      { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }] },
     ];
   },
 };

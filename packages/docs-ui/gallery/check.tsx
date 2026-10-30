@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { SCREENS } from "./screens";
 
-export const CHECK_WIDTHS = [1440, 390, 320] as const;
+export const CHECK_WIDTHS = [1440, 390, 375, 320] as const;
 const HEIGHT = 900;
 
 export type OverflowRow = {
@@ -24,30 +24,30 @@ declare global {
 
 /** 一覧・レール・公開のシートなど、状態違いの確認（スマホの全画面と、シートの中身の違い）。 */
 const VARIANTS: { id: string; widths: readonly number[] }[] = [
-  { id: "page:memo?sidebar=1&rail=0", widths: [390, 320] },
-  { id: "page:rec?sidebar=1&rail=0", widths: [390, 320] },
-  { id: "page:enoden?rail=1", widths: [390, 320] },
-  { id: "page:kita?rail=1", widths: [390, 320] },
-  { id: "page:rec2?rail=1", widths: [390, 320] },
-  { id: "page:j1030?rail=1", widths: [390, 320] },
-  { id: "page:rec?rail=0", widths: [1440, 390, 320] },
+  { id: "page:memo?sidebar=1&rail=0", widths: [390, 375, 320] },
+  { id: "page:rec?sidebar=1&rail=0", widths: [390, 375, 320] },
+  { id: "page:enoden?rail=1", widths: [390, 375, 320] },
+  { id: "page:kita?rail=1", widths: [390, 375, 320] },
+  { id: "page:rec2?rail=1", widths: [390, 375, 320] },
+  { id: "page:j1030?rail=1", widths: [390, 375, 320] },
+  { id: "page:rec?rail=0", widths: [1440, 390, 375, 320] },
   // フェーズ2: 公開のシート（発信先を選んだ後の足りないもの・条件がそろった・未接続・公開中の更新）
-  { id: "sheet:publish?pick=exp", widths: [1440, 390, 320] },
-  { id: "sheet:publish?pick=niho", widths: [1440, 390, 320] },
-  { id: "sheet:publish?pick=site", widths: [1440, 390, 320] },
-  { id: "sheet:publish?pick=site&conn=0", widths: [1440, 390, 320] },
-  { id: "sheet:publish?page=enoden&pick=exp", widths: [1440, 390, 320] },
-  { id: "sheet:publish?page=gomi", widths: [1440, 390, 320] },
+  { id: "sheet:publish?pick=exp", widths: [1440, 390, 375, 320] },
+  { id: "sheet:publish?pick=niho", widths: [1440, 390, 375, 320] },
+  { id: "sheet:publish?pick=site", widths: [1440, 390, 375, 320] },
+  { id: "sheet:publish?pick=site&conn=0", widths: [1440, 390, 375, 320] },
+  { id: "sheet:publish?page=enoden&pick=exp", widths: [1440, 390, 375, 320] },
+  { id: "sheet:publish?page=gomi", widths: [1440, 390, 375, 320] },
   // 公開プレビュー（発信先ごとの見え方）
-  { id: "preview:enoden", widths: [1440, 390, 320] },
-  { id: "preview:gomi", widths: [1440, 390, 320] },
-  { id: "preview:asaichi", widths: [1440, 390, 320] },
+  { id: "preview:enoden", widths: [1440, 390, 375, 320] },
+  { id: "preview:gomi", widths: [1440, 390, 375, 320] },
+  { id: "preview:asaichi", widths: [1440, 390, 375, 320] },
   // 設定系ページ（スマホで一覧を全画面で開いた状態・未接続）
-  { id: "dest?sidebar=1", widths: [390, 320] },
-  { id: "dest?conn=0", widths: [1440, 390, 320] },
-  { id: "site?sidebar=1", widths: [390, 320] },
-  { id: "account?sidebar=1", widths: [390, 320] },
-  { id: "settings?sidebar=1", widths: [390, 320] },
+  { id: "dest?sidebar=1", widths: [390, 375, 320] },
+  { id: "dest?conn=0", widths: [1440, 390, 375, 320] },
+  { id: "site?sidebar=1", widths: [390, 375, 320] },
+  { id: "account?sidebar=1", widths: [390, 375, 320] },
+  { id: "settings?sidebar=1", widths: [390, 375, 320] },
 ];
 
 function countInner(doc: Document): number {
@@ -103,7 +103,7 @@ async function runCheck(stage: HTMLElement, onRow: (row: OverflowRow) => void): 
   return rows;
 }
 
-/** `#/_check`: 全画面 × 幅 [1440, 390, 320] を iframe で順に開き、横スクロールが出ていないかを表にする。 */
+/** `#/_check`: 全画面 × 幅 [1440, 390, 375, 320] を iframe で順に開き、横スクロールが出ていないかを表にする。 */
 export function Check() {
   const [rows, setRows] = useState<OverflowRow[]>([]);
   const [done, setDone] = useState(false);
