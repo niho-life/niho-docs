@@ -1,0 +1,195 @@
+import { randomUUID } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import type { CreatePageInput, Page, PagePatch, PageSummary } from "@niho/editor-store";
+import type { AuthProvider } from "../auth/types";
+import { MAX_BODY_BYTES } from "./http";
+import { createPage, getPage, listPages, patchPage, type PagesApiDeps } from "./pages-api";
+
+const ORIGIN = "http://editor.test";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** owner ごとに分けた、メモリの中だけの合成の store（EditorStore と同じ約束: 該当なしは null）。 */
+function memoryStore() {
+  const rows = new Map<string, Page & { owner: string; deleted: boolean }>();
+  const visible = (owner: string, id: string) => {
+    const row = rows.get(id);
+    return row && row.owner === owner && !row.deleted ? row : null;
+  };
+  const strip = (row: Page & { owner: string; deleted: boolean }): Page => {
+    const page: Partial<typeof row> = { ...row };
+    delete page.owner;
+    delete page.deleted;
+    return page as Page;
+  };
+  return {
+    rows,
+    async createPage(owner: string, input: CreatePageInput = {}): Promise<Page> {
+      const now = new Date().toISOString();
+      const page = { id: randomUUID(), kind: input.kind ?? "note", title: input.title ?? "", lang: input.lang ?? "ja", blocks: input.blocks ?? [], cover: null, lead: null, parent: null, recipe: null, stepStatus: null, createdAt: now, updatedAt: now } as Page;
+      rows.set(page.id, { ...page, owner, deleted: false });
+      return page;
+    },
+    async listPages(owner: string): Promise<PageSummary[]> {
+      return [...rows.values()].filter((row) => row.owner === owner && !row.deleted).map(({ id, kind, title, lang, createdAt, updatedAt }) => ({ id, kind, title, lang, createdAt, updatedAt }));
+    },
+    async getPage(owner: string, id: string): Promise<Page | null> {
+      if (!UUID.test(id)) return null;
+      const row = visible(owner, id);
+      return row ? strip(row) : null;
+    },
+    async savePage(owner: string, id: string, patch: PagePatch): Promise<Page | null> {
+      if (!UUID.test(id)) return null;
+      const row = visible(owner, id);
+      if (!row) return null;
+      Object.assign(row, patch, { updatedAt: new Date().toISOString() });
+      return strip(row);
+    },
+  };
+}
+
+function authAs(userId: string | null): AuthProvider {
+  return { mode: "stub", getSession: async () => (userId ? { userId, mode: "stub" } : null) };
+}
+
+function deps(userId: string | null, store: ReturnType<typeof memoryStore> | null): PagesApiDeps {
+  return { auth: () => authAs(userId), store: () => store, env: {} };
+}
+
+function request(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Request {
+  const init: RequestInit = { method, headers: { host: "editor.test", ...(method === "GET" ? {} : { origin: ORIGIN, "content-type": "application/json" }), ...headers } };
+  if (body !== undefined) init.body = typeof body === "string" ? body : JSON.stringify(body);
+  return new Request(`${ORIGIN}${path}`, init);
+}
+
+/** date 以外の header を並べたもの（同じ応答かどうかを比べる）。 */
+async function snapshot(response: Response) {
+  const headers = [...response.headers.entries()].filter(([name]) => name !== "date").sort();
+  return { status: response.status, headers, body: await response.text() };
+}
+
+describe("/api/pages", () => {
+  it("creates an empty page, saves it, and reads it back", async () => {
+    const store = memoryStore();
+    const created = await createPage(request("POST", "/api/pages", {}), deps("user-a", store));
+    expect(created.status).toBe(201);
+    const { page } = (await created.json()) as { page: Page };
+    expect(page.title).toBe("");
+    expect(page.blocks).toEqual([]);
+
+    const blocks = [{ type: "paragraph", content: [{ type: "text", text: "合成の本文" }] }];
+    const saved = await patchPage(request("PATCH", `/api/pages/${page.id}`, { title: "合成", blocks }), page.id, deps("user-a", store));
+    expect(saved.status).toBe(200);
+
+    const read = await getPage(request("GET", `/api/pages/${page.id}`), page.id, deps("user-a", store));
+    expect(read.status).toBe(200);
+    expect(((await read.json()) as { page: Page }).page).toMatchObject({ id: page.id, title: "合成", blocks });
+
+    const list = await listPages(request("GET", "/api/pages"), deps("user-a", store));
+    expect(((await list.json()) as { pages: PageSummary[] }).pages.map((item) => item.id)).toEqual([page.id]);
+  });
+
+  it("answers the same 404 for another owner's page, an unknown id, a malformed id, and a deleted page", async () => {
+    const store = memoryStore();
+    const theirs = await store.createPage("user-b", { title: "theirs" });
+    const removed = await store.createPage("user-a", { title: "removed" });
+    store.rows.get(removed.id)!.deleted = true;
+    const ids = [theirs.id, randomUUID(), "not-a-uuid", "../../etc", removed.id];
+
+    const reads = await Promise.all(ids.map(async (id) => snapshot(await getPage(request("GET", `/api/pages/${encodeURIComponent(id)}`), id, deps("user-a", store)))));
+    for (const read of reads) expect(read).toEqual(reads[0]);
+    expect(reads[0]?.status).toBe(404);
+    expect(reads[0]?.body).toBe('{"error":"not_found"}');
+
+    const writes = await Promise.all(ids.map(async (id) => snapshot(await patchPage(request("PATCH", `/api/pages/x`, { title: "overwrite" }), id, deps("user-a", store)))));
+    for (const write of writes) expect(write).toEqual(reads[0]);
+    expect(store.rows.get(theirs.id)?.title).toBe("theirs");
+  });
+
+  it("answers 401 without a session on every route", async () => {
+    const store = memoryStore();
+    const id = randomUUID();
+    const responses = [
+      await listPages(request("GET", "/api/pages"), deps(null, store)),
+      await createPage(request("POST", "/api/pages", {}), deps(null, store)),
+      await getPage(request("GET", `/api/pages/${id}`), id, deps(null, store)),
+      await patchPage(request("PATCH", `/api/pages/${id}`, { title: "x" }), id, deps(null, store)),
+    ];
+    for (const response of responses) {
+      expect(response.status).toBe(401);
+      expect(await response.text()).toBe('{"error":"unauthorized"}');
+    }
+    expect(store.rows.size).toBe(0);
+  });
+
+  it("answers 403 to writes from another origin or without an Origin", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a");
+    for (const origin of ["https://evil.example", "null", ""]) {
+      const headers = { origin };
+      expect((await createPage(request("POST", "/api/pages", {}, headers), deps("user-a", store))).status).toBe(403);
+      expect((await patchPage(request("PATCH", `/api/pages/${page.id}`, { title: "x" }, headers), page.id, deps("user-a", store))).status).toBe(403);
+    }
+    expect(store.rows.size).toBe(1);
+    expect(store.rows.get(page.id)?.title).toBe("");
+  });
+
+  it("answers 413 above 1 MiB and 400 to bodies that are not JSON or not the right shape", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a");
+    const big = JSON.stringify({ title: "x", blocks: [{ type: "paragraph", content: [{ type: "text", text: "a".repeat(MAX_BODY_BYTES) }] }] });
+    expect((await patchPage(request("PATCH", `/api/pages/${page.id}`, big), page.id, deps("user-a", store))).status).toBe(413);
+    expect((await createPage(request("POST", "/api/pages", big), deps("user-a", store))).status).toBe(413);
+
+    const bad: Array<[unknown, Record<string, string>?]> = [
+      ["{", undefined],
+      ["title=x", { "content-type": "application/x-www-form-urlencoded" }],
+      [{ title: "x" }, { "content-type": "text/plain" }],
+      [{}, undefined],
+      [{ blocks: "<p>x</p>" }, undefined],
+      [{ blocks: { type: "doc" } }, undefined],
+      [{ lang: "fr" }, undefined],
+      [{ owner: "user-b" }, undefined],
+    ];
+    for (const [body, headers] of bad) {
+      const response = await patchPage(request("PATCH", `/api/pages/${page.id}`, body, headers), page.id, deps("user-a", store));
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      expect(await response.text()).toBe('{"error":"bad_request"}');
+    }
+  });
+
+  it("answers 503 without a database and 500 without internal details when the store fails", async () => {
+    const id = randomUUID();
+    expect((await listPages(request("GET", "/api/pages"), deps("user-a", null))).status).toBe(503);
+    expect((await getPage(request("GET", `/api/pages/${id}`), id, deps("user-a", null))).status).toBe(503);
+
+    const store = memoryStore();
+    store.getPage = async () => {
+      throw Object.assign(new Error('relation "pages" does not exist at SELECT secret_column FROM pages'), { code: "42P01" });
+    };
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const response = await getPage(request("GET", `/api/pages/${id}`), id, deps("user-a", store));
+    expect(response.status).toBe(500);
+    const text = await response.text();
+    expect(text).toBe('{"error":"internal"}');
+    expect(JSON.stringify(log.mock.calls)).not.toContain("SELECT");
+    log.mockRestore();
+  });
+
+  it("marks every API response noindex, nofollow and uncacheable", async () => {
+    const store = memoryStore();
+    const id = randomUUID();
+    const responses = [
+      await listPages(request("GET", "/api/pages"), deps("user-a", store)),
+      await createPage(request("POST", "/api/pages", {}), deps("user-a", store)),
+      await getPage(request("GET", `/api/pages/${id}`), id, deps("user-a", store)),
+      await patchPage(request("PATCH", `/api/pages/${id}`, "{"), id, deps("user-a", store)),
+      await listPages(request("GET", "/api/pages"), deps(null, store)),
+      await listPages(request("GET", "/api/pages"), deps("user-a", null)),
+    ];
+    for (const response of responses) {
+      expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    }
+  });
+});
