@@ -521,13 +521,25 @@ export async function commitAttempt(db: StepRunsDb, input: CommitInput): Promise
     );
     const pageId = done.rows[0]?.page_id;
     if (!pageId) return { ok: false, reason: "stale_generation" } satisfies CommitResult;
-    const page = await client.query(
+    // 本文を置き換える。利用者の保存と食い違わないよう、先にページの行を押さえる（lock の順は run → attempt → ページ）
+    const locked = await client.query("SELECT 1 FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL FOR UPDATE", [runRow.owner, pageId]);
+    if (locked.rowCount !== 1) throw new Rollback<CommitResult>({ ok: false, reason: "page_missing" });
+    // 作り直しで今の本文（利用者が直した内容を含む）を置き換えるときは、先に版（ai）に残す。最初の生成（空の本文）では残さない。
+    // 版の番号はページごとの連番（packages/editor-store/src/store.ts の #snapshot と同じ）
+    await client.query(
+      `INSERT INTO page_versions (page_id, version, blocks, reason)
+       SELECT p.id, COALESCE((SELECT max(v.version) FROM page_versions v WHERE v.page_id = p.id), 0) + 1, p.blocks, 'ai'
+         FROM pages p
+        WHERE p.owner = $1 AND p.id = $2 AND p.deleted_at IS NULL AND jsonb_array_length(p.blocks) > 0`,
+      [runRow.owner, pageId],
+    );
+    // revision を進める: 利用者が古い revision のまま保存しても、この結果を黙って上書きせず競合として返る（#58 の楽観ロック）
+    await client.query(
       `UPDATE pages
-          SET blocks = $3::jsonb, step_status = 'done', updated_at = GREATEST(clock_timestamp(), updated_at)
+          SET blocks = $3::jsonb, step_status = 'done', revision = revision + 1, updated_at = GREATEST(clock_timestamp(), updated_at)
         WHERE owner = $1 AND id = $2 AND deleted_at IS NULL`,
       [runRow.owner, pageId, JSON.stringify(input.blocks)],
     );
-    if (page.rowCount !== 1) throw new Rollback<CommitResult>({ ok: false, reason: "page_missing" });
     const next = await client.query<{ step_index: number }>(
       "UPDATE step_attempts SET state = 'queued' WHERE run_id = $1 AND step_index = $2 AND state = 'pending' RETURNING step_index",
       [input.runId, input.stepIndex + 1],

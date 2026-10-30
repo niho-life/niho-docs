@@ -128,6 +128,14 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     return (await store.createPage(owner, { kind: "rec", title: "合成の録音", blocks })).id;
   }
 
+  /** 利用者がページを保存する（今の revision を持って。#58 の楽観ロック）。 */
+  async function userEdit(owner: string, id: string, blocks: Block[]) {
+    const current = await store.getPage(owner, id);
+    assert.ok(current, "page exists");
+    const result = await store.savePage(owner, id, { blocks }, { baseRevision: current.revision });
+    assert.equal(result?.status, "saved");
+  }
+
   async function pageRow(id: string) {
     const result = await pool.query<{ kind: string; title: string; parent: string | null; recipe: string | null; step_status: string | null; blocks: Block[]; deleted_at: Date | null }>(
       "SELECT kind, title, parent, recipe, step_status, blocks, deleted_at FROM pages WHERE id = $1",
@@ -471,22 +479,22 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 0);
     assert.deepEqual(await statuses(), ["done", "done", "done"]);
 
-    await store.savePage(OWNER, first, { blocks: paragraph("直した結果 0") });
+    await userEdit(OWNER, first, paragraph("直した結果 0"));
     assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 2);
     assert.deepEqual(await statuses(), ["done", "stale", "stale"]);
     assert.equal((await listRun(pool, OWNER, parent))?.run?.steps[1]?.stepStatus, "stale");
-    await store.savePage(OWNER, first, { blocks: paragraph("合成の結果 0") });
+    await userEdit(OWNER, first, paragraph("合成の結果 0"));
     assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 2);
     assert.deepEqual(await statuses(), ["done", "done", "done"]);
 
-    await store.savePage(OWNER, parent, { blocks: paragraph("直した文字起こし") });
+    await userEdit(OWNER, parent, paragraph("直した文字起こし"));
     await refreshStale(pool, OWNER, parent, RECIPE);
     assert.deepEqual(await statuses(), ["stale", "stale", "stale"]);
-    await store.savePage(OWNER, parent, { blocks: TRANSCRIPT });
+    await userEdit(OWNER, parent, TRANSCRIPT);
     await refreshStale(pool, OWNER, parent, RECIPE);
     assert.deepEqual(await statuses(), ["done", "done", "done"]);
 
-    await store.savePage(OWNER, second, { blocks: paragraph("直した結果 1") });
+    await userEdit(OWNER, second, paragraph("直した結果 1"));
     await refreshStale(pool, OWNER, parent, RECIPE);
     assert.deepEqual(await statuses(), ["done", "done", "stale"]);
     // 前提が変わった段階から作り直すと、新しい基準が記録されて印が消える
@@ -501,7 +509,7 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     const run = await created(parent);
     await completeAll(run.id);
     const second = run.steps[1]!.pageId;
-    await store.savePage(OWNER, run.steps[0]!.pageId, { blocks: paragraph("直した結果 0") });
+    await userEdit(OWNER, run.steps[0]!.pageId, paragraph("直した結果 0"));
     // refresh が読んだ後に行が変わった場合と同じ条件（xmin が違う）で書こうとしても通らない
     const before = await pool.query<{ version: string }>("SELECT xmin::text AS version FROM pages WHERE id = $1", [second]);
     await pool.query("UPDATE pages SET step_status = 'done' WHERE id = $1", [second]);
@@ -516,7 +524,7 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     const parent = await recording();
     const run = await created(parent);
     await complete(run.id, 0);
-    await store.savePage(OWNER, parent, { blocks: paragraph("直した文字起こし") });
+    await userEdit(OWNER, parent, paragraph("直した文字起こし"));
 
     assert.equal(await listRun(pool, OTHER, parent), null);
     assert.equal(await cancelRun(pool, OTHER, parent, run.id), null);
@@ -525,6 +533,41 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     assert.equal((await pageRow(run.steps[0]!.pageId))?.step_status, "done", "another owner's refresh changes nothing");
     assert.equal(await readStepInput(pool, { owner: OTHER, parentId: parent, previousPageId: null }), null);
     assert.equal((await runRow(run.id))?.state, "running");
+  });
+
+  it("bumps the revision when a step writes the page, so a stale save from the user becomes a conflict (#58)", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const subPage = run.steps[0]!.pageId;
+    const before = await store.getPage(OWNER, subPage);
+    assert.ok(before);
+    await complete(run.id, 0);
+    const after = await store.getPage(OWNER, subPage);
+    assert.equal(after?.revision, before.revision + 1);
+    // 利用者が結果を見る前の revision のまま保存しても、worker の結果を黙って上書きしない
+    const stale = await store.savePage(OWNER, subPage, { blocks: paragraph("利用者の古い画面からの保存") }, { baseRevision: before.revision });
+    assert.equal(stale?.status, "conflict");
+    assert.deepEqual((await store.getPage(OWNER, subPage))?.blocks, paragraph("合成の結果 0"));
+  });
+
+  it("keeps the body it replaces as an ai version when a rerun overwrites a sub-page, but not on the first generation", async () => {
+    const parent = await recording();
+    const first = await created(parent);
+    const subPage = first.steps[0]!.pageId;
+    const versions = async () =>
+      (await pool.query<{ version: number; reason: string; blocks: Block[] }>("SELECT version, reason, blocks FROM page_versions WHERE page_id = $1 ORDER BY version", [subPage])).rows;
+    await completeAll(first.id);
+    assert.deepEqual(await versions(), [], "the first generation replaces an empty body: nothing to keep");
+
+    // 利用者がサブページを直してから、その段階を作り直す
+    await userEdit(OWNER, subPage, paragraph("利用者が直した内容"));
+    const rerun = await created(parent, { fromStep: 0 });
+    await complete(rerun.id, 0, "作り直した結果");
+    // 利用者の保存（#58 の savePage）が残す autosave の版とは別に、作り直しが ai の版を 1 つ残す
+    const kept = (await versions()).filter((version) => version.reason === "ai");
+    assert.equal(kept.length, 1);
+    assert.deepEqual(kept[0]?.blocks, paragraph("利用者が直した内容"), "the user's edit survives in the history");
+    assert.deepEqual((await store.getPage(OWNER, subPage))?.blocks, paragraph("作り直した結果"));
   });
 
   it("lets pages that carry step records be hard-deleted (the trash purge), taking the records with them", async () => {
