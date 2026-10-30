@@ -6,25 +6,34 @@
  * database. Transactions really roll back: the state at the start is kept and restored when the work or
  * the commit throws. Tests can make the k-th store call (every transaction method and the commit)
  * throw, to prove that a failure anywhere leaves the store exactly as it was.
+ *
+ * The same store also holds the connections and keys of #41 (`ConnectionStore`), in the same
+ * transactions as publications. Keys are kept as the service hands them over: hash and last 4 only.
  */
 
 import { canonicalJson, type Author } from "@niho/editor-publish-contract";
 import {
+  draftFingerprint,
   placeKey,
   samePlace,
+  type AssetBytes,
   type AssetRecord,
   type AssetUrls,
   type AuthorSource,
   type Clock,
+  type ConnectionRecord,
   type ConnectionSource,
+  type ConnectionStore,
+  type ConnectionTx,
   type DeclarationSource,
+  type DraftFingerprints,
   type DraftPage,
   type FactsQuery,
   type FactsSource,
+  type KeyRecord,
   type Place,
   type PublicationRecord,
   type PublishStore,
-  type PublishTx,
   type RedirectRecord,
   type RoleReader,
   type ServerFacts,
@@ -40,6 +49,10 @@ export interface MemoryState {
   versions: Record<string, VersionRecord>;
   /** By `${handle}/${slug}` of `from`. */
   redirects: Record<string, RedirectRecord>;
+  /** By connection id (#41). */
+  connections: Record<string, ConnectionRecord>;
+  /** By key id (#41). */
+  keys: Record<string, KeyRecord>;
 }
 
 /** Thrown by an injected fault. Carries no data. */
@@ -66,12 +79,12 @@ function frozenClone<T>(value: T): T {
 }
 
 function emptyState(): MemoryState {
-  return { pages: {}, assets: {}, publications: {}, versions: {}, redirects: {} };
+  return { pages: {}, assets: {}, publications: {}, versions: {}, redirects: {}, connections: {}, keys: {} };
 }
 
 const versionKey = (pageId: string, version: number): string => `${pageId}#${version}`;
 
-export class MemoryPublishStore implements PublishStore {
+export class MemoryPublishStore implements PublishStore, ConnectionStore {
   private state: MemoryState;
   private calls = 0;
   private failAt: number | null = null;
@@ -136,9 +149,27 @@ export class MemoryPublishStore implements PublishStore {
     return Object.values(this.state.redirects).map((record) => frozenClone(record));
   }
 
+  assetsOf(pageId: string): AssetRecord[] {
+    return Object.values(this.state.assets)
+      .filter((entry) => entry.pageId === pageId)
+      .map((entry) => frozenClone(entry.asset));
+  }
+
+  connection(connectionId: string): ConnectionRecord | null {
+    const connection = this.state.connections[connectionId];
+    return connection ? frozenClone(connection) : null;
+  }
+
+  keysOf(connectionId: string): KeyRecord[] {
+    return Object.values(this.state.keys)
+      .filter((key) => key.connectionId === connectionId)
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : 1))
+      .map((key) => frozenClone(key));
+  }
+
   // --- port ---
 
-  transaction<T>(work: (tx: PublishTx) => Promise<T>): Promise<T> {
+  transaction<T>(work: (tx: ConnectionTx) => Promise<T>): Promise<T> {
     const run = async (): Promise<T> => {
       const before = clone(this.state);
       let active = true;
@@ -165,7 +196,7 @@ export class MemoryPublishStore implements PublishStore {
     if (this.failAt !== null && this.calls === this.failAt) throw new InjectedStoreFault();
   }
 
-  private createTx(isActive: () => boolean): PublishTx {
+  private createTx(isActive: () => boolean): ConnectionTx {
     const enter = (): MemoryState => {
       if (!isActive()) throw new Error("transaction is closed");
       this.tick();
@@ -232,8 +263,90 @@ export class MemoryPublishStore implements PublishStore {
       deleteRedirect: async (from) => {
         delete enter().redirects[placeKey(from)];
       },
+
+      // --- connections and keys (#41) ---
+      getConnection: async (connectionId) => {
+        const connection = enter().connections[connectionId];
+        return connection ? frozenClone(connection) : null;
+      },
+      connectionLive: async (actorId, handle) => {
+        const known = Object.values(enter().connections).filter((connection) => connection.handle === handle);
+        // A handle this store has no record of is left to the pre-check: the #39 tests keep their
+        // connections outside the store (`MemoryConnections`). A real adapter must not do this; a
+        // connection is never deleted, so a handle that passed the pre-check always has its row.
+        if (known.length === 0) return true;
+        return known.some((connection) => connection.ownerId === actorId && connection.removedAt === null);
+      },
+      getConnectionByHandle: async (handle) => {
+        const connection = Object.values(enter().connections).find((candidate) => candidate.handle === handle);
+        return connection ? frozenClone(connection) : null;
+      },
+      listConnections: async (ownerId) =>
+        Object.values(enter().connections)
+          .filter((connection) => connection.ownerId === ownerId)
+          .map((connection) => frozenClone(connection)),
+      putConnection: async (record) => {
+        const state = enter();
+        for (const other of Object.values(state.connections)) {
+          if (other.id !== record.id && other.handle === record.handle) throw new Error("unique (handle)");
+        }
+        state.connections[record.id] = clone(record);
+      },
+      listKeys: async (connectionId) =>
+        Object.values(enter().keys)
+          .filter((key) => key.connectionId === connectionId)
+          .map((key) => frozenClone(key)),
+      findKeyBySha256: async (sha256) => {
+        const key = Object.values(enter().keys).find((candidate) => candidate.sha256 === sha256);
+        return key ? frozenClone(key) : null;
+      },
+      putKey: async (record) => {
+        const state = enter();
+        for (const other of Object.values(state.keys)) {
+          if (other.id !== record.id && other.sha256 === record.sha256) throw new Error("unique (sha256)");
+        }
+        state.keys[record.id] = clone(record);
+      },
+      listPublicationsByHandle: async (handle) =>
+        Object.values(enter().publications)
+          .filter((publication) => publication.handle === handle)
+          .map((publication) => frozenClone(publication)),
+      getVersion: async (pageId, version) => {
+        const record = enter().versions[versionKey(pageId, version)];
+        return record ? frozenClone(record) : null;
+      },
     };
   }
+}
+
+/** Photo bytes by sha256, as a content-addressed asset store would serve them. Tests can corrupt them. */
+export class MemoryAssetBytes implements AssetBytes {
+  private readonly files = new Map<string, Uint8Array>();
+  reads = 0;
+
+  set(sha256: string, data: Uint8Array): void {
+    this.files.set(sha256, Uint8Array.from(data));
+  }
+
+  remove(sha256: string): void {
+    this.files.delete(sha256);
+  }
+
+  async read(asset: { readonly sha256: string }): Promise<Uint8Array | null> {
+    this.reads += 1;
+    const data = this.files.get(asset.sha256);
+    return data ? Uint8Array.from(data) : null;
+  }
+}
+
+/** The current draft's fingerprint, computed from the store's page and assets (outside any transaction). */
+export function memoryDraftFingerprints(store: MemoryPublishStore): DraftFingerprints {
+  return {
+    async read(pageId) {
+      const page = store.page(pageId);
+      return page ? draftFingerprint(page, store.assetsOf(pageId)) : null;
+    },
+  };
 }
 
 // --- the other ports --------------------------------------------------------------------
