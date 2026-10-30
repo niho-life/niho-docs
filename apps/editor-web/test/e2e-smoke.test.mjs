@@ -711,3 +711,45 @@ describe("editor-web e2e (niho until #19459, next dev)", () => {
     assert.equal(editor.headers.get("location"), `/auth/login?next=%2Fp%2F${pageId}`);
   });
 });
+
+describe("editor-web e2e (niho until #19459, next dev)", () => {
+  let base;
+  let dev;
+
+  before(async () => {
+    dev = await startDev("niho", 401);
+    base = dev.base;
+  });
+
+  after(async () => {
+    await dev?.stop();
+  });
+
+  it("sends an unauthenticated visitor to /auth/login with the screen as next", async () => {
+    const id = randomUUID();
+    for (const [path, expected, headers] of [
+      [`/p/${id}`, `/auth/login?next=%2Fp%2F${id}`, {}],
+      ["/p/new?from=recording", "/auth/login?next=%2Fp%2Fnew%3Ffrom%3Drecording", {}],
+      ["/settings", "/auth/login?next=%2Fsettings", { "x-editor-path": "//evil.example" }],
+      ["/", "/auth/login", {}],
+      ["/p/not-a-uuid", "/auth/login", {}],
+    ]) {
+      const response = await fetch(`${base}${path}`, { redirect: "manual", headers });
+      assert.equal(response.status, 307, path);
+      assert.equal(response.headers.get("location"), expected, path);
+    }
+  });
+
+  it("comes back to the login screen with an error and keeps next while niho login is unavailable", async () => {
+    const start = await fetch(`${base}/auth/login/start?next=%2Fsettings`, { redirect: "manual" });
+    assert.equal(start.status, 303);
+    assert.equal(start.headers.get("location"), "/auth/login?next=%2Fsettings&error=unavailable");
+    const login = await fetch(`${base}/auth/login?next=%2Fsettings&error=unavailable`);
+    assert.equal(login.status, 200);
+    const html = await login.text();
+    assert.match(html, /NIHOでログイン/);
+    assert.match(html, /role="alert"[^>]*>ログインできませんでした。もう一度お試しください。/);
+    assert.match(html, /<meta name="robots" content="noindex, nofollow"\/>/);
+    assert.doesNotMatch(html, /data-auth-mode="stub"/);
+  });
+});
