@@ -1,0 +1,129 @@
+{
+  "contractVersion": "1",
+  "id": "4f1c2b3a-5d6e-4f70-8a91-b2c3d4e5f607",
+  "slug": "morning-walk-along-the-coast",
+  "dest": "exp",
+  "lang": "en",
+  "title": "A morning walk along the coast",
+  "lead": "Start early, follow the shoreline, and stop for tea.",
+  "cover": {
+    "id": "asset-cover-01",
+    "url": "https://assets.example.com/a/cover-01.jpg",
+    "contentType": "image/jpeg",
+    "bytes": 182044,
+    "sha256": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "alt": "Shoreline at sunrise",
+    "credit": "Example Photo Studio"
+  },
+  "category": "walks",
+  "author": { "name": "Example Writer", "handle": "example-writer", "url": "https://writer.example.com/" },
+  "range": "live",
+  "version": 3,
+  "publishedAt": "2026-09-01T00:00:00.000Z",
+  "updatedAt": "2026-09-15T08:30:00.000Z",
+  "canonicalUrl": "https://exp.example.com/guides/morning-walk-along-the-coast",
+  "extras": { "app": true, "news": false, "xp": true },
+  "related": ["coastal-tea-ceremony", "sunrise-yoga"],
+  "blocks": [
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Meet at the " },
+        { "type": "text", "text": "station", "marks": [{ "type": "bold" }] },
+        { "type": "text", "text": " at 7:00 (sharp). See the " },
+        { "type": "text", "text": "harbor map", "marks": [{ "type": "link", "href": "/maps/harbor?view=full#start" }] },
+        { "type": "text", "text": "." }
+      ]
+    },
+    { "type": "heading", "level": 2, "content": [{ "type": "text", "text": "Route" }] },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        [{ "type": "text", "text": "Walk to the pier" }],
+        [
+          { "type": "text", "text": "Turn left at the " },
+          { "type": "text", "text": "red", "marks": [{ "type": "italic" }] },
+          { "type": "text", "text": " gate" }
+        ],
+        [
+          { "type": "text", "text": "Follow " },
+          {
+            "type": "text",
+            "text": "the coastal path",
+            "marks": [{ "type": "link", "href": "https://maps.example.com/route_(coast)" }, { "type": "bold" }]
+          }
+        ]
+      ]
+    },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [[{ "type": "text", "text": "Water" }], [{ "type": "text", "text": "Hat & sunscreen" }]]
+    },
+    { "type": "figure", "assetId": "asset-figure-01", "caption": "The harbor at 7:30 \"golden hour\"" },
+    { "type": "quote", "content": [{ "type": "text", "text": "The sea is calm before nine." }] },
+    { "type": "divider" },
+    { "type": "heading", "level": 3, "content": [{ "type": "text", "text": "Tea break" }] },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Try the " },
+        { "type": "text", "text": "matcha", "marks": [{ "type": "italic" }] },
+        { "type": "text", "text": " at " },
+        {
+          "type": "text",
+          "text": "Example Tea",
+          "marks": [{ "type": "bold" }, { "type": "link", "href": "https://tea.example.com/menu?item=matcha_1" }]
+        },
+        { "type": "text", "text": ". " },
+        { "type": "text", "text": "Old menu", "marks": [{ "type": "strike" }] },
+        { "type": "text", "text": " uses " },
+        { "type": "text", "text": "code_name", "marks": [{ "type": "code" }] },
+        { "type": "text", "text": "." }
+      ]
+    },
+    {
+      "type": "note",
+      "blocks": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Bring cash for the tea house." }] },
+        {
+          "type": "list",
+          "ordered": false,
+          "items": [
+            [{ "type": "text", "text": "Coins" }],
+            [{ "type": "text", "text": "Small bills", "marks": [{ "type": "bold" }] }]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "confirm", "text": "opening hours" },
+        { "type": "text", "text": " may change in winter." }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Bold and italic", "marks": [{ "type": "bold" }, { "type": "italic" }] },
+        { "type": "text", "text": " then " },
+        { "type": "text", "text": "bold ", "marks": [{ "type": "bold" }] },
+        { "type": "text", "text": "with italic", "marks": [{ "type": "bold" }, { "type": "italic" }] }
+      ]
+    }
+  ],
+  "markdown": "Meet at the **station** at 7\\:00 \\(sharp\\)\\. See the [harbor map](/maps/harbor?view=full#start)\\.\n\n## Route\n\n1. Walk to the pier\n2. Turn left at the *red* gate\n3. Follow [**the coastal path**](https://maps.example.com/route_%28coast%29)\n\n- Water\n- Hat \\& sunscreen\n\n![Fishing boats in the harbor \\[morning\\]](https://assets.example.com/a/harbor_%28morning%29.jpg \"The harbor at 7\\:30 \\\"golden hour\\\"\")\n\nThe sea is calm before nine\\.\n\n### Tea break\n\nTry the *matcha* at [**Example Tea**](https://tea.example.com/menu?item=matcha_1)\\. Old menu uses code\\_name\\.\n\n:::note\nBring cash for the tea house\\.\n\n- Coins\n- **Small bills**\n:::\n\n[CONFIRM: opening hours] may change in winter\\.\n\n***Bold and italic*** then **bold** ***with italic***\n",
+  "assets": [
+    {
+      "id": "asset-figure-01",
+      "url": "https://assets.example.com/a/harbor_(morning).jpg",
+      "contentType": "image/webp",
+      "bytes": 96512,
+      "sha256": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "alt": "Fishing boats in the harbor [morning]",
+      "credit": null
+    }
+  ]
+}

@@ -1,0 +1,216 @@
+// @vitest-environment jsdom
+import { Editor } from "@tiptap/core";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { BLOCK_NODE_NAMES, INLINE_NODE_NAMES, MARK_NAMES, validateBlocks } from "@/ast/blocks";
+import { normalizePastedHtml } from "./paste";
+import { buildPageExtensions } from "./page-extensions";
+
+beforeAll(() => {
+  // jsdom に無い描画の API（ProseMirror が読む）
+  const rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }) as DOMRect;
+  Range.prototype.getBoundingClientRect = rect;
+  Range.prototype.getClientRects = () => ({ length: 0, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }) as unknown as DOMRectList;
+  Element.prototype.scrollIntoView = () => undefined;
+});
+
+let editor: Editor | null = null;
+
+function makeEditor(content?: unknown): Editor {
+  const element = document.createElement("div");
+  document.body.appendChild(element);
+  editor = new Editor({
+    element,
+    extensions: buildPageExtensions(),
+    content: content as never,
+    editorProps: { transformPastedHTML: normalizePastedHtml },
+  });
+  return editor;
+}
+
+afterEach(() => {
+  editor?.destroy();
+  editor = null;
+  document.body.innerHTML = "";
+});
+
+function savedBlocks(current: Editor) {
+  const result = validateBlocks(current.getJSON().content ?? []);
+  if (!result.ok) throw new Error(`the editor produced a body the server would refuse: ${result.reason}`);
+  return result.blocks;
+}
+
+function paste(current: Editor, html: string) {
+  current.commands.clearContent();
+  current.view.pasteHTML(html, new Event("paste") as ClipboardEvent);
+  return savedBlocks(current);
+}
+
+function flatten(value: unknown): string {
+  return JSON.stringify(value);
+}
+
+describe("the page editor schema matches the limited AST", () => {
+  it("only has nodes and marks the AST allows", () => {
+    const current = makeEditor();
+    const nodes = Object.keys(current.schema.nodes).filter((name) => name !== "doc");
+    const allowed = new Set([...BLOCK_NODE_NAMES, ...INLINE_NODE_NAMES, "listItem"]);
+    expect(nodes.filter((name) => !allowed.has(name))).toEqual([]);
+    expect(Object.keys(current.schema.marks).filter((name) => !MARK_NAMES.includes(name))).toEqual([]);
+  });
+
+  it("differs from the AST only by what has no way to be created yet (callout, image, recording)", () => {
+    const current = makeEditor();
+    const missing = [...BLOCK_NODE_NAMES, ...INLINE_NODE_NAMES, "listItem"].filter((name) => !(name in current.schema.nodes));
+    expect(missing.sort()).toEqual(["callout", "image", "recording"]);
+    expect(MARK_NAMES.filter((name) => !(name in current.schema.marks))).toEqual([]);
+  });
+
+  it("produces a body the server accepts for every block the editor can make", () => {
+    const current = makeEditor();
+    current
+      .chain()
+      .setContent({
+        type: "doc",
+        content: [
+          { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "見出し2" }] },
+          { type: "heading", attrs: { level: 3 }, content: [{ type: "text", text: "見出し3" }] },
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "太字", marks: [{ type: "bold" }] },
+              { type: "text", text: "斜体", marks: [{ type: "italic" }] },
+              { type: "text", text: "リンク", marks: [{ type: "link", attrs: { href: "https://niho.life/" } }] },
+              { type: "hardBreak" },
+              { type: "text", text: "次の行" },
+            ],
+          },
+          { type: "bulletList", content: [{ type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "a" }] }] }] },
+          { type: "orderedList", attrs: { start: 1 }, content: [{ type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "b" }] }] }] },
+          { type: "blockquote", content: [{ type: "paragraph", content: [{ type: "text", text: "引用" }] }] },
+          { type: "horizontalRule" },
+          { type: "paragraph" },
+        ],
+      })
+      .run();
+    const blocks = savedBlocks(current);
+    expect(blocks.map((block) => block.type)).toEqual(["heading", "heading", "paragraph", "bulletList", "orderedList", "blockquote", "horizontalRule", "paragraph"]);
+  });
+
+  it("refuses to load a body outside the AST instead of rewriting it (so the page can stay read-only)", () => {
+    const element = document.createElement("div");
+    let contentError = false;
+    const current = new Editor({
+      element,
+      extensions: buildPageExtensions(),
+      content: { type: "doc", content: [{ type: "codeBlock", content: [{ type: "text", text: "x" }] }] },
+      enableContentCheck: true,
+      onContentError: () => {
+        contentError = true;
+      },
+    });
+    expect(contentError).toBe(true);
+    current.destroy();
+  });
+});
+
+describe("pasting HTML", () => {
+  it("turns formatted HTML into blocks of the AST", () => {
+    const current = makeEditor();
+    const blocks = paste(
+      current,
+      `<h1>大見出し</h1><p>本文 <strong>太字</strong> と <em>斜体</em> と <a href="https://niho.life/x">リンク</a></p>
+       <ul><li>りんご</li><li>みかん</li></ul><ol start="3"><li>三</li></ol><blockquote><p>引用</p></blockquote><hr><h4>小見出し</h4>`,
+    );
+    // 末尾の空の段落はエディタが常に 1 つ置く（trailing node）
+    expect(blocks.map((block) => block.type)).toEqual(["heading", "paragraph", "bulletList", "orderedList", "blockquote", "horizontalRule", "heading", "paragraph"]);
+    expect(blocks[0]).toMatchObject({ type: "heading", attrs: { level: 2 } });
+    expect(flatten(blocks)).toContain('"href":"https://niho.life/x"');
+    expect(flatten(blocks)).toContain('"type":"bold"');
+    expect(flatten(blocks)).toContain('"type":"italic"');
+    expect(flatten(blocks)).toContain('"start":3');
+    expect(blocks.find((block) => block.type === "heading" && flatten(block).includes("小見出し"))).toMatchObject({ attrs: { level: 3 } });
+  });
+
+  it("never leaves a body the server would refuse: marked hard breaks and out-of-range list starts", () => {
+    // paste() はサーバーの検査（validateBlocks）を通らなければ throw する
+    const blocks = paste(makeEditor(), `<p><strong>一行目<br>二行目</strong></p>`);
+    expect(flatten(blocks)).toContain('"type":"hardBreak"');
+    for (const start of ["0", "-2", "1000000", "x"]) {
+      expect(paste(makeEditor(), `<ol start="${start}"><li>番号</li></ol>`).some((block) => block.type === "orderedList")).toBe(true);
+    }
+  });
+
+  it("keeps bold and italic that Word and Google Docs write as inline styles", () => {
+    const blocks = paste(makeEditor(), `<p><span style="font-weight:700;color:red;background:url(javascript:x)">強い</span><span style="font-style:italic">傾き</span></p>`);
+    expect(flatten(blocks)).toContain('"type":"bold"');
+    expect(flatten(blocks)).toContain('"type":"italic"');
+  });
+
+  it("does not bring in script, style, iframe, svg, forms, comments, event handlers or images", () => {
+    const html = `
+      <!-- <script>alert('comment')</script> -->
+      <style>body { background: url(https://evil.example/track.gif) }</style>
+      <script>alert('script')</script>
+      <p onclick="alert('click')" style="position:fixed" class="evil" id="x">安全な文章<script>alert('inline')</script></p>
+      <iframe src="https://evil.example/"></iframe>
+      <svg><text>svg-text</text><script>alert('svg')</script></svg>
+      <form action="https://evil.example/"><input name="q" value="form-value"><button>send</button></form>
+      <img src="https://evil.example/pixel.gif" onerror="alert('img')">
+      <object data="x"></object><embed src="x"><template><p>template-text</p></template>
+      <math><mi>math-text</mi></math>`;
+    const blocks = paste(makeEditor(), html);
+    const text = flatten(blocks);
+    expect(text).toContain("安全な文章");
+    for (const leaked of ["alert", "comment", "svg-text", "form-value", "send", "template-text", "math-text", "evil", "onclick", "position", "script", "style", "iframe"]) {
+      expect(text, leaked).not.toContain(leaked);
+    }
+    expect(validateBlocks(blocks).ok).toBe(true);
+  });
+
+  it("keeps links only for http, https and mailto, and leaves the text of the others", () => {
+    const blocks = paste(
+      makeEditor(),
+      `<p><a href="javascript:alert(1)">js</a> <a href="JaVaScRiPt:alert(1)">JS</a> <a href="data:text/html,x">data</a> <a href="/relative">rel</a> <a href="mailto:hello@example.com">mail</a></p>`,
+    );
+    const text = flatten(blocks);
+    expect(text).toContain('"href":"mailto:hello@example.com"');
+    expect(text).not.toContain("javascript");
+    expect(text).not.toContain("data:text");
+    expect(text).not.toContain('"href":"/relative"');
+    for (const label of ["js", "JS", "data", "rel", "mail"]) expect(text).toContain(label);
+  });
+
+  it("turns code, tables and task lists into plain text blocks instead of unknown nodes", () => {
+    const blocks = paste(
+      makeEditor(),
+      `<pre><code>const a = 1;</code></pre><table><tr><td>セル</td></tr></table><ul><li><input type="checkbox" checked> やること</li></ul>`,
+    );
+    const text = flatten(blocks);
+    expect(text).toContain("const a = 1;");
+    expect(text).toContain("セル");
+    expect(text).toContain("やること");
+    expect(validateBlocks(blocks).ok).toBe(true);
+  });
+
+  it("pastes plain text as paragraphs, never as HTML", () => {
+    const current = makeEditor();
+    current.commands.clearContent();
+    current.view.pasteHTML("", new Event("paste") as ClipboardEvent);
+    const sample = "<script>alert(1)</script>\n\n二つ目";
+    // プレーンテキストの貼り付け（クリップボードに HTML が無い場合）は文字のまま
+    current.commands.insertContent({ type: "paragraph", content: [{ type: "text", text: sample }] });
+    const blocks = savedBlocks(current);
+    expect(flatten(blocks)).toContain("<script>alert(1)</script>");
+    expect(blocks.every((block) => block.type === "paragraph")).toBe(true);
+  });
+});
+
+describe("normalizePastedHtml", () => {
+  it("drops everything that is not a text-level element and keeps the readable text", () => {
+    const html = normalizePastedHtml(`<div class="a"><script>x</script><p style="color:red; font-weight: bold">t</p></div>`);
+    expect(html).not.toContain("script");
+    expect(html).not.toContain("color");
+    expect(html).toContain("font-weight: bold");
+    expect(html).toContain(">t<");
+  });
+});

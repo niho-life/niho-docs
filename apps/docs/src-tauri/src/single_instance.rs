@@ -90,7 +90,7 @@ pub(crate) fn init(dev: bool) -> TauriPlugin<Wry> {
             return Err(
               io::Error::new(
                 io::ErrorKind::TimedOut,
-                "既存の NIHO docs が終了中です。もう一度開いてください。",
+                "既存の NIHO editor が終了中です。もう一度開いてください。",
               )
               .into(),
             );
@@ -184,7 +184,7 @@ fn socket_path(data_dir: &Path) -> io::Result<PathBuf> {
   if !metadata.is_dir() || metadata.uid() != uid || metadata.permissions().mode() & 0o077 != 0 {
     return Err(io::Error::new(
       io::ErrorKind::PermissionDenied,
-      "NIHO docs の起動用フォルダを使えません。",
+      "NIHO editor の起動用フォルダを使えません。",
     ));
   }
   // 本番・開発版・明示的な試験用の保存領域は独立。アプリの場所と版は鍵に含めない。

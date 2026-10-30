@@ -1,0 +1,33 @@
+{
+  "contractVersion": "1",
+  "id": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+  "slug": "kamakura-morning-market",
+  "dest": "niho",
+  "lang": "ja",
+  "title": "朝市をたずねる",
+  "lead": "朝 7 時に開く市場の歩き方。",
+  "cover": null,
+  "category": "town",
+  "author": { "name": "Example Resident", "handle": null, "url": null },
+  "range": "live",
+  "version": 12,
+  "publishedAt": "2026-09-30T23:50:00.000Z",
+  "updatedAt": "2026-09-30T23:50:00.000Z",
+  "canonicalUrl": "https://niho.example.com/article/kamakura-morning-market",
+  "extras": { "app": false, "news": true, "xp": false },
+  "related": [],
+  "blocks": [
+    { "type": "heading", "level": 2, "content": [{ "type": "text", "text": "行き方" }] },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "駅から歩いて 5 分。" },
+        { "type": "text", "text": "現金のみ", "marks": [{ "type": "bold" }] },
+        { "type": "text", "text": "です（2026 年 9 月時点）。" }
+      ]
+    }
+  ],
+  "markdown": "## 行き方\n\n駅から歩いて 5 分。**現金のみ**です（2026 年 9 月時点）。\n",
+  "assets": [],
+  "preview": { "expiresAt": "2026-10-01T00:05:00.000Z", "dest": "niho", "noindex": true }
+}

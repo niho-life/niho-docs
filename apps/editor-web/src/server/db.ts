@@ -23,3 +23,12 @@ export function getStore(env: Readonly<Record<string, string | undefined>> = pro
   }
   return new EditorStore(holder.__nihoEditorPool.pool);
 }
+
+/**
+ * EditorStore の外のクエリ（検索）が使う Pool。getStore と同じ 1 つを共有する（Pool を作る道は getStore の 1 本だけ）。
+ * DATABASE_URL が未設定なら null（呼び出し側で 503）。
+ */
+export function getPool(env: Readonly<Record<string, string | undefined>> = process.env): Pool | null {
+  if (!getStore(env)) return null;
+  return holder.__nihoEditorPool?.pool ?? null;
+}

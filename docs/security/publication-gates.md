@@ -80,6 +80,10 @@ contract は認証 context、resource owner / tenant / workspace、upload / down
 - アプリ用の DB ロールは DML だけで、スキーマの変更と migration の記録の書き換えはできない。
 - 全ての応答に `X-Robots-Tag: noindex, nofollow`。ページは nonce ベースの CSP で、`/api` は何も読み込まない CSP。
 
+## editor 公開 API contract
+
+editor.niho.life の公開版を発信先（NIHO Experience、NIHO、本人のサイト）が読む API の正本は [`packages/editor-publish-contract`](../../packages/editor-publish-contract/) で、外部 observable behavior は [`editor-publish-api-v1.md`](editor-publish-api-v1.md) に置く。型・検証器・Markdown の投影・参照モデル・負例を同じ version の下で管理し、認可の最終判断と鍵の保管はサーバー側で行う。互換性を壊す変更は新しい major version とする。
+
 ## CI と成果物
 
 公開 CI は標準 GitHub-hosted runner で動かし、fork の PR に secrets を渡さない。`pull_request_target` で未信頼コードを実行しない。permissions は必要最小限にし、契約の負例を合成データで検証する。
