@@ -56,8 +56,14 @@ async function staticAsset(request) {
   if (hit) return hit;
   const response = await fetch(request);
   if (response.ok && response.type === "basic") {
-    await cache.put(request, response.clone());
-    await trim(cache);
+    // キャッシュは best-effort。端末の保存容量が足りない（QuotaExceededError）などで書けなくても、取得できた応答は返す
+    // （ここで投げると respondWith が失敗し、オンラインなのに JS・CSS が読めない）
+    try {
+      await cache.put(request, response.clone());
+      await trim(cache);
+    } catch {
+      // 書けなかった・片付けられなかった。次の要求でまた試す
+    }
   }
   return response;
 }

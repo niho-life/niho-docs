@@ -10,7 +10,7 @@ const ORIGIN = "https://editor.example.test";
 type FetchEvent = { request: { url: string; method: string; mode: string }; respondWith: (response: Promise<Response>) => void; waitUntil: (work: Promise<unknown>) => void };
 type Handler = (event: FetchEvent) => void;
 
-function load(network: (url: string) => Promise<Response>) {
+function load(network: (url: string) => Promise<Response>, options: { putFails?: boolean; keysFails?: boolean } = {}) {
   const handlers = new Map<string, Handler>();
   const stores = new Map<string, Map<string, Response>>();
   const networkCalls: string[] = [];
@@ -26,9 +26,11 @@ function load(network: (url: string) => Promise<Response>) {
         return entries.get(keyOf(request))?.clone();
       },
       async put(request: { url: string }, response: Response) {
+        if (options.putFails) throw Object.assign(new Error("Quota exceeded"), { name: "QuotaExceededError" });
         entries.set(keyOf(request), response);
       },
       async keys() {
+        if (options.keysFails) throw Object.assign(new Error("Storage unavailable"), { name: "UnknownError" });
         return [...entries.keys()].map((url) => ({ url }));
       },
       async delete(request: string | { url: string }) {
@@ -152,6 +154,19 @@ describe("service worker: static files", () => {
     const second = await worker.fire("fetch", worker.request("/_next/static/chunks/app-abc123.js"));
     expect(await second.response?.text()).toBe("body of /_next/static/chunks/app-abc123.js");
     expect(worker.networkCalls).toHaveLength(1);
+  });
+
+  it("still returns the downloaded file when the cache cannot be written (storage full)", async () => {
+    const worker = load(online, { putFails: true });
+    const result = await worker.fire("fetch", worker.request("/_next/static/chunks/app-abc123.js"));
+    expect(result.response?.ok).toBe(true);
+    expect(await result.response?.text()).toBe("body of /_next/static/chunks/app-abc123.js");
+  });
+
+  it("still returns the downloaded file when trimming the cache fails", async () => {
+    const worker = load(online, { keysFails: true });
+    const result = await worker.fire("fetch", worker.request("/_next/static/chunks/app-def456.js"));
+    expect(await result.response?.text()).toBe("body of /_next/static/chunks/app-def456.js");
   });
 
   it("does not store a failed response", async () => {
