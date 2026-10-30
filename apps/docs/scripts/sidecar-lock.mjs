@@ -20,7 +20,7 @@
 //   node apps/docs/scripts/sidecar-lock.mjs check-binary --binary src-tauri/binaries/niho-speech-aarch64-apple-darwin
 //     ビルドした実行ファイルが NIHO docs と同じ環境（HOME と PATH だけ・cwd /）で lock の版を答え、arm64 で、macOS の外の
 //     dylib を読まないか
-//   node apps/docs/scripts/sidecar-lock.mjs check-app --app "…/NIHO docs.app"
+//   node apps/docs/scripts/sidecar-lock.mjs check-app --app "…/NIHO editor.app"
 //     .app の Contents/MacOS/niho-speech が check-binary を通り、署名 ID が lock どおりか
 //   node apps/docs/scripts/sidecar-lock.mjs self-test
 //
@@ -429,10 +429,10 @@ function selfTest() {
     expectExit("missing binary", EXIT.mismatch, () => checkBinary(path.join(root, "nope/niho-speech"), lockPath));
     write("not-executable/niho-speech", "x", 0o644);
     expectExit("not executable", EXIT.mismatch, () => checkBinary(path.join(root, "not-executable/niho-speech"), lockPath));
-    const app = path.join(root, "NIHO docs.app");
-    fakeTool("NIHO docs.app/Contents/MacOS/niho-speech", "0.1.1");
+    const app = path.join(root, "NIHO editor.app");
+    fakeTool("NIHO editor.app/Contents/MacOS/niho-speech", "0.1.1");
     quiet(() => checkApp(app, lockPath));
-    fakeTool("NIHO docs.app/Contents/MacOS/niho-speech", "0.1.0");
+    fakeTool("NIHO editor.app/Contents/MacOS/niho-speech", "0.1.0");
     expectExit("app with an old sidecar", EXIT.mismatch, () => checkApp(app, lockPath));
     fs.rmSync(path.join(app, "Contents/MacOS/niho-speech"));
     expectExit("app without the sidecar", EXIT.mismatch, () => checkApp(app, lockPath));

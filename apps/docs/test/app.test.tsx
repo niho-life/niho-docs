@@ -240,7 +240,7 @@ describe("ホームとフローがまだ無い録音", () => {
     expect(container.querySelector(".home-page .help")?.textContent).toBe("ページはまだありません。");
     // レールの先頭は「ホーム」の行も「＋ 新しい」の箱も無く、タイトルバーのアプリ名がホームへのボタン（#18929）
     expect([...container.querySelectorAll(".rail button")].some((node) => node.textContent?.trim() === "ホーム")).toBe(false);
-    expect(container.querySelector('.window-titlebar .lead button[aria-label="NIHO docs ホームへ"]')?.textContent).toBe("NIHO docs");
+    expect(container.querySelector('.window-titlebar .lead button[aria-label="NIHO editor ホームへ"]')?.textContent).toBe("NIHO editor");
     const add = container.querySelector<HTMLButtonElement>(".window-titlebar .lead .tb-new")!;
     expect([add.getAttribute("aria-label"), add.getAttribute("title"), add.textContent]).toEqual(["新規作成", "新規作成", ""]);
     await click(add);

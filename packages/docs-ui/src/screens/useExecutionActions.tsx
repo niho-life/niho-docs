@@ -2,7 +2,7 @@
 
 import type { DocsAutoVersionReason } from "@niho/docs-core";
 import { candidateFor, effortLabel, providerLabel, redirectedNote, remoteRunAcceptedLabel, selectedSourceCandidate, shortModelLabel, snapshotModelLabel, SOURCE_CANDIDATE_CLOUD_REASON, SOURCE_STEP_ID, type ArtifactCandidate, type PromptRef, type RunStartAction } from "@niho/docs-core";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { type Failure, type FailureAction } from "../components/FailureBand";
 import type { ProjectEntry } from "../host/DocsHost";
 import { type AutoVersionTarget } from "../lib/artifact-auto-version";
@@ -74,6 +74,17 @@ export function useExecutionActions(context: Context) {
     savingRef, rootChangeRef, setFailure, setPersonalNihoPending,
     activeRun, view, cloud, documentScopeId, accountExecutionProblem,
   } = context;
+
+  // 画面が閉じたあとに終わった実行は、state を更新しない。実アプリでは React が無視するだけだが、テストでは jsdom の破棄後に
+  // window が無く、React の setState が `window is not defined` を投げて、全テスト通過でも終了コード 1 になる（main の必須チェックが
+  // たまに落ちる原因）。ref の掃除は閉じたあとも行う。
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
 
   // ---- 実行 ----
 
@@ -480,6 +491,7 @@ export function useExecutionActions(context: Context) {
             viewRef.current?.key !== captured.key || cloudContextRef.current.generation !== capturedContext.generation ||
             cloudContextRef.current.scopeId !== capturedContext.scopeId
           ) return;
+          if (unmountedRef.current) return;
           showFailure(message);
           setNotice({
             projectId: captured.projectId,
@@ -491,7 +503,7 @@ export function useExecutionActions(context: Context) {
           if (route.kind === "generation_only" && route.executor === "niho_api") {
             const listed = await bridge.personalNihoPending().catch(() => null);
             if (
-              listed && viewRef.current?.key === captured.key && cloudContextRef.current.generation === capturedContext.generation &&
+              listed && !unmountedRef.current && viewRef.current?.key === captured.key && cloudContextRef.current.generation === capturedContext.generation &&
               cloudContextRef.current.scopeId === capturedContext.scopeId
             ) {
               setPersonalNihoPending(
@@ -502,13 +514,13 @@ export function useExecutionActions(context: Context) {
         }
       } finally {
         if (runAbortRef.current === controller) {
-          setNihoRunConfirmation((shown) => shown?.capturedKey === captured.key ? null : shown);
-          if (flushTimer.current !== null) window.clearTimeout(flushTimer.current);
+          if (!unmountedRef.current) setNihoRunConfirmation((shown) => shown?.capturedKey === captured.key ? null : shown);
+          if (flushTimer.current !== null && typeof window !== "undefined") window.clearTimeout(flushTimer.current);
           flushTimer.current = null;
           runAbortRef.current = null;
           if (runFlushRef.current === controller) runFlushRef.current = null;
           runRef.current = null;
-          setActiveRun(null);
+          if (!unmountedRef.current) setActiveRun(null);
         }
       }
     })();

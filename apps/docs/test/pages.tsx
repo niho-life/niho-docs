@@ -173,7 +173,7 @@ export async function shownVersion(container: HTMLElement): Promise<string | nul
 
 /** タイトルバーのアプリ名（押すとホーム。レールに「ホーム」の行は無い。#18929）。 */
 export function homeButton(container: HTMLElement): HTMLButtonElement {
-  const found = container.querySelector<HTMLButtonElement>('.window-titlebar button[aria-label="NIHO docs ホームへ"]');
+  const found = container.querySelector<HTMLButtonElement>('.window-titlebar button[aria-label="NIHO editor ホームへ"]');
   if (!found) throw new Error("home button not found");
   return found;
 }
