@@ -1,0 +1,13 @@
+/* ギャラリー自身の見た目（shell.css の外。配布物には入らない） */
+html,body{margin:0;height:100%}
+body{font:14px/1.6 var(--font-family-sans);color:var(--ed-ink);background:var(--ed-canvas)}
+#root{height:100%}
+.g-frame{height:100vh;height:100dvh;overflow:hidden}
+.g-index{max-width:720px;margin:0 auto;padding:32px 20px}
+.g-index li{margin:6px 0}
+.g-index code,.g-check code{color:var(--ed-ink-mute)}
+.g-check{padding:20px}
+.g-check table{border-collapse:collapse;font-size:13px}
+.g-check th,.g-check td{border-bottom:1px solid var(--ed-line-2);padding:3px 12px;text-align:left}
+.g-check tr.bad td{background:var(--ed-red-soft);color:var(--ed-red)}
+.g-stage{position:absolute;left:-10000px;top:0}

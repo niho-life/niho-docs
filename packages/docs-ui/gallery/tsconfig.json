@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["./**/*.ts", "./**/*.tsx", "../src/shell/**/*.ts", "../src/shell/**/*.tsx", "../src/styles.d.ts"]
+}
