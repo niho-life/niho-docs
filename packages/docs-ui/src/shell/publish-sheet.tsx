@@ -85,7 +85,7 @@ function PublishForm(props: PublishFormProps) {
   const noteId = useId();
   const { current, dests, picked, missing, range, extras } = props;
   const chosen = dests.find((dest) => dest.id === picked);
-  const blocked = !chosen || missing.length > 0;
+  const blocked = !chosen || !chosen.connected || missing.length > 0;
   const heading = current ? (current.updated ? "更新を公開" : "公開の設定") : "公開";
   const action = current?.updated ? "更新を公開" : current ? "保存" : "公開する";
   const focusId = chosen && chosen.connected ? chosen.id : dests.find((dest) => dest.connected)?.id;
@@ -214,7 +214,11 @@ function PublishForm(props: PublishFormProps) {
       </div>
       <div className="es-sh-foot">
         {chosen ? (
-          missing.length > 0 ? (
+          !chosen.connected ? (
+            <span id={noteId} className="es-sh-note es-sh-left">
+              {chosen.label} に接続すると公開できます
+            </span>
+          ) : missing.length > 0 ? (
             <span id={noteId} className="es-sh-note es-sh-left">
               あと {missing.length} つ
             </span>

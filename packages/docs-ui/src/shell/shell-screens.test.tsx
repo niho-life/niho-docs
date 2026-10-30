@@ -129,6 +129,15 @@ describe("PublishSheet（publish）", () => {
     expect([...html.matchAll(/role="radio"/g)]).toHaveLength(2);
   });
 
+  it("選んだ発信先の接続が切れているときは、条件が空でも公開できない（接続を促す）", () => {
+    const dests = DESTS.map((dest) => (dest.id === "site" ? { ...dest, connected: false } : dest));
+    const html = form({ dests, picked: "site", missing: [] });
+    expect(html).toMatch(/<button type="button" class="es-btn es-btn--primary" disabled=""/);
+    expect(html).toContain("自分のサイト に接続すると公開できます");
+    const connected = form({ picked: "site", missing: [] });
+    expect(connected).not.toMatch(/es-btn--primary" disabled/);
+  });
+
   it("公開中は「公開の設定」「公開をやめる」「保存」、更新ありは「更新を公開」", () => {
     const live = form({ picked: "exp", current: {} });
     expect(live).toContain("<h2>公開の設定</h2>");
