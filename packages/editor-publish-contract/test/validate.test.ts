@@ -66,6 +66,18 @@ describe("rejection details", () => {
     expect(!result.ok && result.errors.length).toBe(MAX_VALIDATION_ISSUES);
   });
 
+  it("keeps judging values after the issue list is full", () => {
+    // Once the list holds MAX_VALIDATION_ISSUES, later invalid values must still count as invalid and never throw.
+    const invalid = { type: "paragraph", content: [{ type: "text", text: "" }] };
+    for (const length of [MAX_VALIDATION_ISSUES - 1, MAX_VALIDATION_ISSUES, MAX_VALIDATION_ISSUES + 1, 500]) {
+      const result = parseBlocks(Array.from({ length }, () => invalid));
+      expect(result.ok, `length ${length}`).toBe(false);
+      expect(!result.ok && result.errors.length).toBeLessThanOrEqual(MAX_VALIDATION_ISSUES);
+    }
+    const mixed = [...Array.from({ length: 150 }, () => ({ type: "script" })), invalid, { type: "divider" }];
+    expect(parseBlocks(mixed).ok).toBe(false);
+  });
+
   it("rejects non-objects at the top level", () => {
     for (const input of [null, [], "doc", 1, undefined]) {
       expect(parsePublishedDoc(input).ok).toBe(false);
