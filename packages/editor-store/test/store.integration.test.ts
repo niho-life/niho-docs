@@ -36,7 +36,7 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
     await pool.end();
   });
 
-  it("applies every migration to an empty schema once and creates exactly the four tables without rows", async () => {
+  it("applies every migration to an empty schema once and creates exactly the documented tables without rows", async () => {
     const client = await pool.connect();
     try {
       const names = (await readMigrations()).map((file) => file.name);
@@ -52,9 +52,10 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name",
       [schema],
     );
-    // ai_usage は AI の使用量（0005。ページの表とは別）
-    assert.deepEqual(tables.rows.map((row) => row.table_name), ["ai_usage", "assets", MIGRATIONS_TABLE, "page_versions", "pages", "publications"].sort());
-    for (const table of ["pages", "page_versions", "assets", "publications", "ai_usage"]) {
+    // ai_usage は AI の使用量（0005）、step_runs・step_attempts は手順の実行（ページの表とは別）
+    const documented = ["pages", "page_versions", "assets", "publications", "step_runs", "step_attempts", "ai_usage"];
+    assert.deepEqual(tables.rows.map((row) => row.table_name), [...documented, MIGRATIONS_TABLE].sort());
+    for (const table of documented) {
       const count = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM ${table}`);
       assert.equal(count.rows[0]?.n, "0", `${table} must be empty after migration`);
     }
