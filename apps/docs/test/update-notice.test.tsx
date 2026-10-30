@@ -159,7 +159,7 @@ it("再起動を頼んでもアプリが閉じなければ、しばらくして�
   expect(container.querySelector('[role="status"]')?.textContent).toContain("再起動できませんでした。閉じて開き直すと 0.1.2 になります。");
 });
 
-it("別の NIHO docs が工程を実行している間は、確かめずに断り、止めて再起動も出さない", async () => {
+it("別の NIHO editor が工程を実行している間は、確かめずに断り、止めて再起動も出さない", async () => {
   const bridge = new FakeBridge();
   bridge.update = { enabled: true, stagedVersion: "0.1.2" };
   bridge.updateBusy = true;
@@ -168,7 +168,7 @@ it("別の NIHO docs が工程を実行している間は、確かめずに断�
 
   await click(button(container, "更新して再起動"));
   expect(container.querySelector('[role="dialog"]')).toBeNull();
-  expect(container.querySelector('[role="status"]')?.textContent).toContain("別の NIHO docs で工程が動いています。");
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("別の NIHO editor で工程が動いています。");
   // 終われば、もう一度押して開き直せる
   bridge.updateOtherApp = false;
   bridge.updateBusy = false;

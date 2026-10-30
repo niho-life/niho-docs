@@ -102,7 +102,7 @@ export function UpdateNotice(props: { bridge: Pick<Bridge, "watchUpdate" | "rest
           ) : refreshFailed ? (
             <span>最新版を取得できませんでした。接続を確認して、もう一度お試しください。</span>
           ) : otherApp ? (
-            <span>別の NIHO docs で工程が動いています。終わってから、もう一度押してください。</span>
+            <span>別の NIHO editor で工程が動いています。終わってから、もう一度押してください。</span>
           ) : restarting && !waitingClose ? (
             <span>最新版を確認・取得しています…</span>
           ) : (

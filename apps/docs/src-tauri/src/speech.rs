@@ -162,13 +162,13 @@ impl SpeechError {
       SpeechError::NotFound if cfg!(debug_assertions) => {
         "文字起こしの部品が見つかりません。`npm run sidecar:build` で作ってから、もう一度実行してください。"
       }
-      SpeechError::NotFound => "この Mac の文字起こしの部品が見つかりません。NIHO docs を入れ直してから、もう一度実行してください。",
+      SpeechError::NotFound => "この Mac の文字起こしの部品が見つかりません。NIHO editor を入れ直してから、もう一度実行してください。",
       SpeechError::ModelMissing => "この Mac の音声認識の言語モデルがまだありません。設定で取得してから、もう一度実行してください。",
       SpeechError::Unavailable => "この Mac では音声認識を使えません。macOS 26 以降の Apple Silicon の Mac で使えます。",
       SpeechError::BadInput => "音声ファイルを読めませんでした。ファイルを確かめてから、もう一度実行してください。",
       SpeechError::TooLarge => "音声が大きすぎるか長すぎます。1 ファイル 2 GB・6 時間までです。分けてから、もう一度実行してください。",
       SpeechError::TooLong => "音声が長すぎます。1 つの録音の合計 6 時間までです。音声を減らしてから、もう一度実行してください。",
-      SpeechError::Permission => "音声ファイルを開く権限がありません。システム設定の「プライバシーとセキュリティ」で NIHO docs にファイルへのアクセスを許可してから、もう一度実行してください。",
+      SpeechError::Permission => "音声ファイルを開く権限がありません。システム設定の「プライバシーとセキュリティ」で NIHO editor にファイルへのアクセスを許可してから、もう一度実行してください。",
       SpeechError::Failed => "文字起こしが途中で止まりました。もう一度実行してください。",
     }
   }

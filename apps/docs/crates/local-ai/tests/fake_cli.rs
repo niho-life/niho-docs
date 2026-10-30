@@ -1712,7 +1712,7 @@ fn agy_started_with_another_agent_is_not_configured() {
     error_of(&events),
     (
       ReasonCode::NotConfigured,
-      "Antigravity CLI が NIHO docs の工程用のエージェント（ツール無し）で起動しなかったため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。".to_string()
+      "Antigravity CLI が NIHO editor の工程用のエージェント（ツール無し）で起動しなかったため止めました。Antigravity CLI を最新に更新してから、もう一度試してください。".to_string()
     )
   );
   assert!(h.scratch_is_empty());
