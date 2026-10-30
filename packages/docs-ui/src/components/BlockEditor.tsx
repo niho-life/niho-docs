@@ -203,8 +203,10 @@ function FormatBar(props: { editor: Editor }) {
       aria-label="書式"
       onMouseDown={keepFocus}
       options={{ placement: "top-start", offset: 8 }}
+      // グローバルの document ではなく、要素の ownerDocument を見る。TipTap の更新タイマーは画面（テストでは jsdom）が破棄されたあとにも
+      // 発火することがあり、そのとき `document` が無いと ReferenceError で全テスト通過でも終了コード 1 になる
       shouldShow={({ editor: current, state: editorState, view, element }) =>
-        (view.hasFocus() || element.contains(document.activeElement)) && shouldShowFormatBar(editorState, current.isEditable)
+        (view.hasFocus() || element.contains(element.ownerDocument.activeElement)) && shouldShowFormatBar(editorState, current.isEditable)
       }
     >
       <div className="be-turn">

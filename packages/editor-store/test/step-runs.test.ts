@@ -1,0 +1,606 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { after, before, describe, it } from "node:test";
+import type { Pool as PgPool } from "pg";
+import { applyMigrations } from "../src/migrate.ts";
+import {
+  MAX_TRIES,
+  cancelRun,
+  canonicalJson,
+  claimAttempt,
+  commitAttempt,
+  computeBasis,
+  createRun,
+  failAttempt,
+  heartbeatAttempt,
+  isIdempotencyKey,
+  isStepErrorCode,
+  listRun,
+  readStepInput,
+  refreshStale,
+  stepPageId,
+  sweepExpiredLeases,
+  type StepClaim,
+  type StepRecipe,
+  type StepRunsDb,
+} from "../src/step-runs.ts";
+import { EditorStore } from "../src/store.ts";
+import type { Block } from "../src/types.ts";
+
+const databaseUrl = process.env.TEST_DATABASE_URL;
+
+// 合成のユーザー ID・本文・指示文だけを使う（実在の人の値を入れない）
+const OWNER = "synthetic-owner-a";
+const OTHER = "synthetic-owner-b";
+
+const RECIPE: StepRecipe = {
+  id: "tpl-synthetic",
+  steps: [
+    { id: "aaaa1111", name: "合成の段階 1", instruction: "合成の指示 1" },
+    { id: "bbbb2222", name: "合成の段階 2", instruction: "合成の指示 2" },
+    { id: "cccc3333", name: "合成の段階 3", instruction: "合成の指示 3" },
+  ],
+};
+
+function paragraph(text: string): Block[] {
+  return [{ type: "paragraph", content: [{ type: "text", text }] }];
+}
+
+const TRANSCRIPT = paragraph("合成の文字起こし");
+
+describe("step runs without a database", () => {
+  const untouchable: StepRunsDb = {
+    query: (() => {
+      throw new Error("must not reach the database");
+    }) as unknown as StepRunsDb["query"],
+    connect: (() => {
+      throw new Error("must not reach the database");
+    }) as unknown as StepRunsDb["connect"],
+  };
+
+  it("derives the sub-page id from the parent, the recipe and the step (fixed values)", () => {
+    const parent = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+    assert.equal(stepPageId(parent, "tpl-1", 0), "c11cf89c-21f8-50be-9768-808ee1198bf5");
+    assert.equal(stepPageId(parent, "tpl-1", 1), "6a3abd86-e699-5034-89fe-510b42b3f78a");
+    assert.equal(stepPageId(parent.toUpperCase(), "tpl-1", 0), stepPageId(parent, "tpl-1", 0));
+    assert.notEqual(stepPageId(parent, "tpl-2", 0), stepPageId(parent, "tpl-1", 0));
+    assert.match(stepPageId(randomUUID(), "tpl-3", 2), /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  it("computes the input basis from the canonical JSON of the previous blocks and the instruction (fixed value)", () => {
+    assert.equal(canonicalJson([{ b: 1, a: { d: [1, { z: 1, y: 2 }], c: null } }]), '[{"a":{"c":null,"d":[1,{"y":2,"z":1}]},"b":1}]');
+    const blocks = paragraph("合成の本文");
+    const basis = computeBasis(blocks, "合成の指示");
+    assert.equal(basis, "38ddc6bcad045dd669e9d8a9eedef6a82d47404b48057af98516d56a2e4cd93c");
+    // key の順・指示文の前後の空白だけの違いは同じ基準
+    assert.equal(computeBasis([{ content: [{ text: "合成の本文", type: "text" }], type: "paragraph" }], "  合成の指示\n"), basis);
+    assert.notEqual(computeBasis(paragraph("合成の本文。"), "合成の指示"), basis);
+    assert.notEqual(computeBasis(blocks, "合成の別の指示"), basis);
+  });
+
+  it("validates error codes and idempotency keys", () => {
+    for (const code of ["internal", "lease_expired", "a", "x".repeat(64)]) assert.ok(isStepErrorCode(code), code);
+    for (const code of ["", "Internal", "has space", "x".repeat(65), "message: secret"]) assert.ok(!isStepErrorCode(code), code);
+    for (const key of ["a", "abc-DEF_123", "k".repeat(128)]) assert.ok(isIdempotencyKey(key), key);
+    for (const key of ["", "has space", "k".repeat(129), "a/b", "鍵"]) assert.ok(!isIdempotencyKey(key), key);
+  });
+
+  it("treats malformed ids as missing and refuses an empty owner without querying", async () => {
+    assert.deepEqual(await createRun(untouchable, OWNER, "not-a-uuid", { recipe: RECIPE }), { status: "not_found" });
+    assert.equal(await listRun(untouchable, OWNER, "not-a-uuid"), null);
+    assert.equal(await cancelRun(untouchable, OWNER, "not-a-uuid", randomUUID()), null);
+    assert.equal(await cancelRun(untouchable, OWNER, randomUUID(), "x' OR '1'='1"), null);
+    assert.deepEqual(await claimAttempt(untouchable, "not-a-uuid", 0), { ok: false, reason: "run_inactive" });
+    assert.equal(await heartbeatAttempt(untouchable, { runId: "not-a-uuid", stepIndex: 0, generation: 1 }), false);
+    assert.equal(await refreshStale(untouchable, OWNER, "not-a-uuid", RECIPE), 0);
+    await assert.rejects(() => createRun(untouchable, "", randomUUID(), { recipe: RECIPE }), TypeError);
+    await assert.rejects(() => listRun(untouchable, "", randomUUID()), TypeError);
+    await assert.rejects(() => createRun(untouchable, OWNER, randomUUID(), { recipe: RECIPE, fromStep: 3 }), RangeError);
+    await assert.rejects(() => createRun(untouchable, OWNER, randomUUID(), { recipe: RECIPE, idempotencyKey: "has space" }), TypeError);
+  });
+});
+
+describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
+  const schema = `editor_steps_test_${randomUUID().replaceAll("-", "")}`;
+  let pool: PgPool;
+  let store: EditorStore;
+
+  before(async () => {
+    const { Pool } = await import("pg");
+    // 並行の claim を本当に並行にするため、接続を多めに持つ
+    pool = new Pool({ connectionString: databaseUrl, max: 25, options: `-c search_path=${schema}` });
+    await pool.query(`CREATE SCHEMA "${schema}"`);
+    const client = await pool.connect();
+    try {
+      await applyMigrations(client);
+    } finally {
+      client.release();
+    }
+    store = new EditorStore(pool);
+  });
+
+  after(async () => {
+    await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await pool.end();
+  });
+
+  async function recording(owner = OWNER, blocks: Block[] = TRANSCRIPT): Promise<string> {
+    return (await store.createPage(owner, { kind: "rec", title: "合成の録音", blocks })).id;
+  }
+
+  /** 利用者がページを保存する（今の revision を持って。#58 の楽観ロック）。 */
+  async function userEdit(owner: string, id: string, blocks: Block[]) {
+    const current = await store.getPage(owner, id);
+    assert.ok(current, "page exists");
+    const result = await store.savePage(owner, id, { blocks }, { baseRevision: current.revision });
+    assert.equal(result?.status, "saved");
+  }
+
+  async function pageRow(id: string) {
+    const result = await pool.query<{ kind: string; title: string; parent: string | null; recipe: string | null; step_status: string | null; blocks: Block[]; deleted_at: Date | null }>(
+      "SELECT kind, title, parent, recipe, step_status, blocks, deleted_at FROM pages WHERE id = $1",
+      [id],
+    );
+    return result.rows[0];
+  }
+
+  async function attemptRow(runId: string, stepIndex: number) {
+    const result = await pool.query<{ state: string; generation: number; tries: number; error_code: string | null; input_basis: string | null; lease_until: Date | null }>(
+      "SELECT state, generation, tries, error_code, input_basis, lease_until FROM step_attempts WHERE run_id = $1 AND step_index = $2",
+      [runId, stepIndex],
+    );
+    return result.rows[0];
+  }
+
+  async function runRow(runId: string) {
+    return (await pool.query<{ state: string; finished_at: Date | null }>("SELECT state, finished_at FROM step_runs WHERE id = $1", [runId])).rows[0];
+  }
+
+  async function created(parentId: string, options: { fromStep?: number; idempotencyKey?: string } = {}) {
+    const result = await createRun(pool, OWNER, parentId, { recipe: RECIPE, ...options });
+    assert.equal(result.status, "created");
+    assert.ok(result.status === "created");
+    return result.run;
+  }
+
+  async function claimed(runId: string, stepIndex: number): Promise<StepClaim> {
+    const result = await claimAttempt(pool, runId, stepIndex);
+    assert.ok(result.ok, `claim ${stepIndex}: ${result.ok ? "" : result.reason}`);
+    return result.claim;
+  }
+
+  const refOf = (claim: StepClaim) => ({ runId: claim.runId, stepIndex: claim.stepIndex, generation: claim.generation });
+
+  /** claim → 入力を読む → 基準を付けて確定。 */
+  async function complete(runId: string, stepIndex: number, text = `合成の結果 ${stepIndex}`) {
+    const claim = await claimed(runId, stepIndex);
+    const input = await readStepInput(pool, claim);
+    assert.ok(input);
+    const previous = stepIndex === 0 ? input.parentBlocks : input.previousBlocks;
+    assert.ok(previous);
+    const result = await commitAttempt(pool, { ...refOf(claim), blocks: paragraph(text), inputBasis: computeBasis(previous, RECIPE.steps[stepIndex]!.instruction) });
+    assert.ok(result.ok, `commit ${stepIndex}`);
+    return { claim, next: result.next };
+  }
+
+  async function completeAll(runId: string, fromStep = 0) {
+    for (let index = fromStep; index < RECIPE.steps.length; index++) await complete(runId, index);
+  }
+
+  it("applies the migration to an empty schema and accepts failed as a step status", async () => {
+    const page = await store.createPage(OWNER);
+    await pool.query("UPDATE pages SET step_status = 'failed' WHERE id = $1", [page.id]);
+    await assert.rejects(() => pool.query("UPDATE pages SET step_status = 'paused' WHERE id = $1", [page.id]), { code: "23514" });
+  });
+
+  it("creates a run with deterministic sub-pages and queues the first step", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    assert.equal(run.state, "queued");
+    assert.equal(run.recipe, RECIPE.id);
+    assert.equal(run.fromStep, 0);
+    assert.deepEqual(run.steps.map((step) => step.state), ["queued", "pending", "pending"]);
+    assert.deepEqual(run.steps.map((step) => step.stepId), RECIPE.steps.map((step) => step.id));
+    for (const [index, step] of run.steps.entries()) {
+      assert.equal(step.pageId, stepPageId(parent, RECIPE.id, index));
+      assert.equal(step.stepStatus, "wait");
+      assert.equal(step.tries, 0);
+      const page = await pageRow(step.pageId);
+      assert.deepEqual(
+        { kind: page?.kind, title: page?.title, parent: page?.parent, recipe: page?.recipe, status: page?.step_status, blocks: page?.blocks },
+        { kind: "step", title: RECIPE.steps[index]!.name, parent, recipe: RECIPE.id, status: "wait", blocks: [] },
+      );
+    }
+    assert.deepEqual(await listRun(pool, OWNER, parent), { run });
+  });
+
+  it("refuses a second run on the same recording while one is in progress, even when many arrive at once", async () => {
+    const parent = await recording();
+    await created(parent);
+    assert.deepEqual(await createRun(pool, OWNER, parent, { recipe: RECIPE }), { status: "run_in_progress" });
+
+    const fresh = await recording();
+    const results = await Promise.all(Array.from({ length: 10 }, () => createRun(pool, OWNER, fresh, { recipe: RECIPE })));
+    assert.equal(results.filter((result) => result.status === "created").length, 1);
+    assert.equal(results.filter((result) => result.status === "run_in_progress").length, 9);
+    const count = await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM step_runs WHERE parent = $1", [fresh]);
+    assert.equal(count.rows[0]?.n, "1");
+  });
+
+  it("returns the same run for the same Idempotency-Key, also when the retries race", async () => {
+    const parent = await recording();
+    const key = `synthetic-${randomUUID()}`;
+    const first = await created(parent, { idempotencyKey: key });
+    const again = await createRun(pool, OWNER, parent, { recipe: RECIPE, idempotencyKey: key });
+    assert.equal(again.status, "existing");
+    assert.equal(again.status === "existing" ? again.run.id : null, first.id);
+
+    const racing = await recording();
+    const raceKey = `synthetic-${randomUUID()}`;
+    const results = await Promise.all(Array.from({ length: 6 }, () => createRun(pool, OWNER, racing, { recipe: RECIPE, idempotencyKey: raceKey })));
+    assert.equal(results.filter((result) => result.status === "created").length, 1);
+    const ids = new Set(results.map((result) => (result.status === "created" || result.status === "existing" ? result.run.id : result.status)));
+    assert.equal(ids.size, 1, "every retry sees the one run");
+  });
+
+  it("refuses parents that are not the owner's live recording page", async () => {
+    const note = (await store.createPage(OWNER, { kind: "note" })).id;
+    const theirs = await recording(OTHER);
+    const removed = await recording();
+    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [removed]);
+    for (const parent of [note, theirs, removed, randomUUID()]) {
+      assert.deepEqual(await createRun(pool, OWNER, parent, { recipe: RECIPE }), { status: "not_found" }, parent);
+      const count = await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM step_runs WHERE parent = $1", [parent]);
+      assert.equal(count.rows[0]?.n, "0");
+    }
+  });
+
+  it("reuses completed upstream sub-pages from fromStep and refuses fromStep without them", async () => {
+    const parent = await recording();
+    assert.deepEqual(await createRun(pool, OWNER, parent, { recipe: RECIPE, fromStep: 1 }), { status: "invalid_from_step" });
+    assert.deepEqual(await listRun(pool, OWNER, parent), { run: null }, "no run is left behind");
+    const children = await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM pages WHERE parent = $1", [parent]);
+    assert.equal(children.rows[0]?.n, "0", "no sub-page is left behind");
+
+    const first = await created(parent);
+    await completeAll(first.id);
+    const upstream = await pageRow(first.steps[0]!.pageId);
+
+    const rerun = await created(parent, { fromStep: 2 });
+    assert.deepEqual(rerun.steps.map((step) => step.state), ["reused", "reused", "queued"]);
+    assert.deepEqual(rerun.steps.map((step) => step.pageId), first.steps.map((step) => step.pageId), "the same pages");
+    assert.deepEqual(rerun.steps.map((step) => step.stepStatus), ["done", "done", "wait"]);
+    assert.deepEqual((await pageRow(first.steps[0]!.pageId))?.blocks, upstream?.blocks, "the upstream result is kept");
+    await complete(rerun.id, 2, "作り直した結果");
+    assert.equal((await runRow(rerun.id))?.state, "succeeded");
+    assert.deepEqual((await pageRow(first.steps[2]!.pageId))?.blocks, paragraph("作り直した結果"));
+
+    // 削除したサブページは、その段階から作り直すと戻る
+    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [first.steps[2]!.pageId]);
+    assert.equal((await createRun(pool, OWNER, parent, { recipe: RECIPE, fromStep: 2 })).status, "created");
+    assert.equal((await pageRow(first.steps[2]!.pageId))?.deleted_at, null);
+  });
+
+  it("claims a queued attempt exactly once under 20 concurrent claims and advances the generation", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const results = await Promise.all(Array.from({ length: 20 }, () => claimAttempt(pool, run.id, 0)));
+    const winners = results.filter((result) => result.ok);
+    assert.equal(winners.length, 1);
+    for (const result of results) if (!result.ok) assert.equal(result.reason, "not_queued");
+    const winner = winners[0];
+    assert.ok(winner?.ok);
+    assert.equal(winner.claim.generation, 1);
+    assert.equal(winner.claim.tries, 1);
+    assert.equal(winner.claim.owner, OWNER);
+    assert.equal(winner.claim.parentId, parent);
+    assert.equal(winner.claim.previousPageId, null);
+
+    const attempt = await attemptRow(run.id, 0);
+    assert.equal(attempt?.state, "running");
+    assert.ok(attempt?.lease_until && attempt.lease_until.getTime() > Date.now());
+    assert.equal((await pageRow(run.steps[0]!.pageId))?.step_status, "run");
+    assert.equal((await runRow(run.id))?.state, "running");
+
+    // 前の段階が済んでいなければ、次の段階は claim できない
+    assert.deepEqual(await claimAttempt(pool, run.id, 1), { ok: false, reason: "not_queued" });
+    await pool.query("UPDATE step_attempts SET state = 'queued' WHERE run_id = $1 AND step_index = 1", [run.id]);
+    assert.deepEqual(await claimAttempt(pool, run.id, 1), { ok: false, reason: "superseded" });
+    await pool.query("UPDATE step_attempts SET state = 'pending' WHERE run_id = $1 AND step_index = 1", [run.id]);
+    assert.deepEqual(await claimAttempt(pool, run.id, 9), { ok: false, reason: "not_queued" });
+  });
+
+  it("commits only with the current generation, then queues the next step and finishes the run on the last step", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const claim = await claimed(run.id, 0);
+    const basis = computeBasis(TRANSCRIPT, RECIPE.steps[0]!.instruction);
+
+    const stale = await commitAttempt(pool, { ...refOf(claim), generation: claim.generation - 1, blocks: paragraph("古い結果"), inputBasis: basis });
+    assert.deepEqual(stale, { ok: false, reason: "stale_generation" });
+    assert.deepEqual((await pageRow(claim.pageId))?.blocks, [], "a stale commit writes nothing");
+    assert.equal((await attemptRow(run.id, 0))?.state, "running");
+
+    assert.deepEqual(await commitAttempt(pool, { ...refOf(claim), blocks: paragraph("合成の結果 0"), inputBasis: basis }), { ok: true, next: 1 });
+    const page = await pageRow(claim.pageId);
+    assert.equal(page?.step_status, "done");
+    assert.deepEqual(page?.blocks, paragraph("合成の結果 0"));
+    const attempt = await attemptRow(run.id, 0);
+    assert.equal(attempt?.state, "succeeded");
+    assert.equal(attempt?.input_basis, basis);
+    assert.equal(attempt?.lease_until, null);
+    assert.equal((await attemptRow(run.id, 1))?.state, "queued");
+    assert.deepEqual(await commitAttempt(pool, { ...refOf(claim), blocks: paragraph("二度目"), inputBasis: basis }), { ok: false, reason: "stale_generation" });
+
+    const second = await complete(run.id, 1);
+    assert.equal(second.claim.previousPageId, claim.pageId);
+    assert.equal(second.next, 2);
+    assert.equal((await complete(run.id, 2)).next, null);
+    const finished = await runRow(run.id);
+    assert.equal(finished?.state, "succeeded");
+    assert.ok(finished?.finished_at);
+    const view = (await listRun(pool, OWNER, parent))?.run;
+    assert.deepEqual(view?.steps.map((step) => [step.state, step.stepStatus]), [["succeeded", "done"], ["succeeded", "done"], ["succeeded", "done"]]);
+  });
+
+  it("does not commit into a sub-page that was deleted while the step ran", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const claim = await claimed(run.id, 0);
+    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE id = $1", [claim.pageId]);
+    const result = await commitAttempt(pool, { ...refOf(claim), blocks: paragraph("x"), inputBasis: computeBasis(TRANSCRIPT, RECIPE.steps[0]!.instruction) });
+    assert.deepEqual(result, { ok: false, reason: "page_missing" });
+    assert.equal((await attemptRow(run.id, 0))?.state, "running", "nothing was written");
+  });
+
+  it("retries a retryable failure until MAX_TRIES, then fails the run and cancels the rest", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    await complete(run.id, 0);
+    for (let tries = 1; tries < MAX_TRIES; tries++) {
+      const claim = await claimed(run.id, 1);
+      assert.equal(claim.tries, tries);
+      assert.equal(claim.generation, tries);
+      const result = await failAttempt(pool, { ...refOf(claim), code: "model_timeout", retryable: true });
+      assert.deepEqual(result, { ok: true, outcome: "retry", generation: tries, tries });
+      const attempt = await attemptRow(run.id, 1);
+      assert.equal(attempt?.state, "queued");
+      assert.equal(attempt?.lease_until, null);
+      assert.equal((await pageRow(claim.pageId))?.step_status, "wait");
+      // 古い世代の失敗は通らない
+      assert.deepEqual(await failAttempt(pool, { ...refOf(claim), code: "model_timeout", retryable: true }), { ok: false, reason: "stale_generation" });
+    }
+    const last = await claimed(run.id, 1);
+    assert.equal(last.tries, MAX_TRIES);
+    assert.deepEqual(await failAttempt(pool, { ...refOf(last), code: "model_timeout", retryable: true }), { ok: true, outcome: "failed" });
+
+    const view = (await listRun(pool, OWNER, parent))?.run;
+    assert.equal(view?.state, "failed");
+    assert.deepEqual(view?.steps.map((step) => [step.state, step.stepStatus, step.errorCode]), [
+      ["succeeded", "done", null],
+      ["failed", "failed", "model_timeout"],
+      ["canceled", "wait", null],
+    ]);
+    assert.ok((await runRow(run.id))?.finished_at);
+    assert.deepEqual((await pageRow(run.steps[0]!.pageId))?.blocks, paragraph("合成の結果 0"), "the upstream result is kept");
+  });
+
+  it("fails at once on a non-retryable error", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const claim = await claimed(run.id, 0);
+    assert.deepEqual(await failAttempt(pool, { ...refOf(claim), code: "invalid_output", retryable: false }), { ok: true, outcome: "failed" });
+    const view = (await listRun(pool, OWNER, parent))?.run;
+    assert.equal(view?.state, "failed");
+    assert.deepEqual(view?.steps.map((step) => [step.state, step.tries]), [["failed", 1], ["canceled", 0], ["canceled", 0]]);
+    await assert.rejects(() => failAttempt(pool, { ...refOf(claim), code: "Not A Code", retryable: false }), TypeError);
+  });
+
+  it("cancels idempotently, advances the running generation so a late result is refused, and keeps completed sub-pages", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    await complete(run.id, 0);
+    const running = await claimed(run.id, 1);
+
+    const canceled = await cancelRun(pool, OWNER, parent, run.id);
+    assert.equal(canceled?.state, "canceled");
+    assert.deepEqual(canceled?.steps.map((step) => [step.state, step.stepStatus]), [["succeeded", "done"], ["canceled", "wait"], ["canceled", "wait"]]);
+    assert.equal((await attemptRow(run.id, 1))?.generation, running.generation + 1);
+
+    const late = await commitAttempt(pool, { ...refOf(running), blocks: paragraph("遅れた結果"), inputBasis: computeBasis(paragraph("x"), "y") });
+    assert.deepEqual(late, { ok: false, reason: "stale_generation" });
+    assert.deepEqual((await pageRow(running.pageId))?.blocks, [], "the late result is not written");
+    assert.equal(await heartbeatAttempt(pool, refOf(running)), false);
+    assert.deepEqual(await failAttempt(pool, { ...refOf(running), code: "internal", retryable: true }), { ok: false, reason: "stale_generation" });
+    assert.deepEqual(await claimAttempt(pool, run.id, 1), { ok: false, reason: "run_inactive" });
+
+    assert.deepEqual(await cancelRun(pool, OWNER, parent, run.id), canceled, "cancel is idempotent");
+    assert.deepEqual((await pageRow(run.steps[0]!.pageId))?.blocks, paragraph("合成の結果 0"));
+    // 取消のあとは新しい run を作れる
+    assert.equal((await createRun(pool, OWNER, parent, { recipe: RECIPE })).status, "created");
+    // 別の録音ページの path では取り消せない
+    assert.equal(await cancelRun(pool, OWNER, await recording(), run.id), null);
+  });
+
+  it("extends the lease on heartbeat only for the current generation", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const claim = (await claimAttempt(pool, run.id, 0, { leaseSeconds: 30 }));
+    assert.ok(claim.ok);
+    const before = (await attemptRow(run.id, 0))?.lease_until?.getTime() ?? 0;
+    assert.equal(await heartbeatAttempt(pool, refOf(claim.claim), { leaseSeconds: 600 }), true);
+    const after = (await attemptRow(run.id, 0))?.lease_until?.getTime() ?? 0;
+    assert.ok(after - before > 500_000, "the lease was extended");
+    assert.equal(await heartbeatAttempt(pool, { ...refOf(claim.claim), generation: claim.claim.generation + 1 }), false);
+  });
+
+  it("sweeps expired leases back to the queue, and to failed (lease_expired) after MAX_TRIES", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const expire = () => pool.query("UPDATE step_attempts SET lease_until = clock_timestamp() - interval '1 second' WHERE run_id = $1 AND state = 'running'", [run.id]);
+
+    const live = await recording();
+    const liveRun = await created(live);
+    await claimed(liveRun.id, 0);
+
+    for (let tries = 1; tries < MAX_TRIES; tries++) {
+      const claim = await claimed(run.id, 0);
+      await expire();
+      const swept = await sweepExpiredLeases(pool);
+      assert.deepEqual(swept.filter((ref) => ref.runId === run.id), [refOf(claim)]);
+      assert.ok(!swept.some((ref) => ref.runId === liveRun.id), "a live lease is not touched");
+      const attempt = await attemptRow(run.id, 0);
+      assert.equal(attempt?.state, "queued");
+      assert.equal(attempt?.error_code, "lease_expired");
+      assert.equal((await pageRow(claim.pageId))?.step_status, "wait");
+      assert.equal(await heartbeatAttempt(pool, refOf(claim)), false, "the stalled worker lost its lease");
+    }
+    const last = await claimed(run.id, 0);
+    assert.equal(last.tries, MAX_TRIES);
+    await expire();
+    assert.deepEqual((await sweepExpiredLeases(pool)).filter((ref) => ref.runId === run.id), []);
+    const view = (await listRun(pool, OWNER, parent))?.run;
+    assert.equal(view?.state, "failed");
+    assert.deepEqual(view?.steps.map((step) => [step.state, step.stepStatus, step.errorCode]), [
+      ["failed", "failed", "lease_expired"],
+      ["canceled", "wait", null],
+      ["canceled", "wait", null],
+    ]);
+    assert.equal((await attemptRow(liveRun.id, 0))?.state, "running");
+  });
+
+  it("marks downstream sub-pages stale when an upstream page changes, and done again when it is restored", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    await completeAll(run.id);
+    const [first, second, third] = run.steps.map((step) => step.pageId) as [string, string, string];
+    const statuses = async () => Promise.all([first, second, third].map(async (id) => (await pageRow(id))?.step_status));
+
+    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 0);
+    assert.deepEqual(await statuses(), ["done", "done", "done"]);
+
+    await userEdit(OWNER, first, paragraph("直した結果 0"));
+    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 2);
+    assert.deepEqual(await statuses(), ["done", "stale", "stale"]);
+    assert.equal((await listRun(pool, OWNER, parent))?.run?.steps[1]?.stepStatus, "stale");
+    await userEdit(OWNER, first, paragraph("合成の結果 0"));
+    assert.equal(await refreshStale(pool, OWNER, parent, RECIPE), 2);
+    assert.deepEqual(await statuses(), ["done", "done", "done"]);
+
+    await userEdit(OWNER, parent, paragraph("直した文字起こし"));
+    await refreshStale(pool, OWNER, parent, RECIPE);
+    assert.deepEqual(await statuses(), ["stale", "stale", "stale"]);
+    await userEdit(OWNER, parent, TRANSCRIPT);
+    await refreshStale(pool, OWNER, parent, RECIPE);
+    assert.deepEqual(await statuses(), ["done", "done", "done"]);
+
+    await userEdit(OWNER, second, paragraph("直した結果 1"));
+    await refreshStale(pool, OWNER, parent, RECIPE);
+    assert.deepEqual(await statuses(), ["done", "done", "stale"]);
+    // 前提が変わった段階から作り直すと、新しい基準が記録されて印が消える
+    const rerun = await created(parent, { fromStep: 2 });
+    await completeAll(rerun.id, 2);
+    await refreshStale(pool, OWNER, parent, RECIPE);
+    assert.deepEqual(await statuses(), ["done", "done", "done"]);
+  });
+
+  it("guards the refresh's write with the row version (xmin), so a row changed after the read is not overwritten", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    await completeAll(run.id);
+    const second = run.steps[1]!.pageId;
+    await userEdit(OWNER, run.steps[0]!.pageId, paragraph("直した結果 0"));
+    // refresh が読んだ後に行が変わった場合と同じ条件（xmin が違う）で書こうとしても通らない
+    const before = await pool.query<{ version: string }>("SELECT xmin::text AS version FROM pages WHERE id = $1", [second]);
+    await pool.query("UPDATE pages SET step_status = 'done' WHERE id = $1", [second]);
+    const write = await pool.query(
+      "UPDATE pages SET step_status = 'stale' WHERE owner = $1 AND id = $2 AND step_status = 'done' AND xmin::text = $3",
+      [OWNER, second, before.rows[0]?.version],
+    );
+    assert.equal(write.rowCount, 0);
+  });
+
+  it("keeps runs of another owner out of reach", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    await complete(run.id, 0);
+    await userEdit(OWNER, parent, paragraph("直した文字起こし"));
+
+    assert.equal(await listRun(pool, OTHER, parent), null);
+    assert.equal(await cancelRun(pool, OTHER, parent, run.id), null);
+    assert.deepEqual(await createRun(pool, OTHER, parent, { recipe: RECIPE }), { status: "not_found" });
+    assert.equal(await refreshStale(pool, OTHER, parent, RECIPE), 0);
+    assert.equal((await pageRow(run.steps[0]!.pageId))?.step_status, "done", "another owner's refresh changes nothing");
+    assert.equal(await readStepInput(pool, { owner: OTHER, parentId: parent, previousPageId: null }), null);
+    assert.equal((await runRow(run.id))?.state, "running");
+  });
+
+  it("bumps the revision when a step writes the page, so a stale save from the user becomes a conflict (#58)", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const subPage = run.steps[0]!.pageId;
+    const before = await store.getPage(OWNER, subPage);
+    assert.ok(before);
+    await complete(run.id, 0);
+    const after = await store.getPage(OWNER, subPage);
+    assert.equal(after?.revision, before.revision + 1);
+    // 利用者が結果を見る前の revision のまま保存しても、worker の結果を黙って上書きしない
+    const stale = await store.savePage(OWNER, subPage, { blocks: paragraph("利用者の古い画面からの保存") }, { baseRevision: before.revision });
+    assert.equal(stale?.status, "conflict");
+    assert.deepEqual((await store.getPage(OWNER, subPage))?.blocks, paragraph("合成の結果 0"));
+  });
+
+  it("keeps the body it replaces as an ai version when a rerun overwrites a sub-page, but not on the first generation", async () => {
+    const parent = await recording();
+    const first = await created(parent);
+    const subPage = first.steps[0]!.pageId;
+    const versions = async () =>
+      (await pool.query<{ version: number; reason: string; blocks: Block[] }>("SELECT version, reason, blocks FROM page_versions WHERE page_id = $1 ORDER BY version", [subPage])).rows;
+    await completeAll(first.id);
+    assert.deepEqual(await versions(), [], "the first generation replaces an empty body: nothing to keep");
+
+    // 利用者がサブページを直してから、その段階を作り直す
+    await userEdit(OWNER, subPage, paragraph("利用者が直した内容"));
+    const rerun = await created(parent, { fromStep: 0 });
+    await complete(rerun.id, 0, "作り直した結果");
+    // 利用者の保存（#58 の savePage）が残す autosave の版とは別に、作り直しが ai の版を 1 つ残す
+    const kept = (await versions()).filter((version) => version.reason === "ai");
+    assert.equal(kept.length, 1);
+    assert.deepEqual(kept[0]?.blocks, paragraph("利用者が直した内容"), "the user's edit survives in the history");
+    assert.deepEqual((await store.getPage(OWNER, subPage))?.blocks, paragraph("作り直した結果"));
+  });
+
+  it("lets pages that carry step records be hard-deleted (the trash purge), taking the records with them", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    await complete(run.id, 0);
+    const count = async (sql: string, id: string) => Number((await pool.query<{ n: string }>(sql, [id])).rows[0]?.n);
+    assert.equal(await count("SELECT count(*)::text AS n FROM step_attempts WHERE run_id = $1", run.id), 3);
+
+    // 出力のサブページを消す（子が先）: その段階の記録も消える。外部キーで止まらない
+    await pool.query("DELETE FROM pages WHERE parent = $1", [parent]);
+    assert.equal(await count("SELECT count(*)::text AS n FROM step_attempts WHERE run_id = $1", run.id), 0);
+    assert.equal(await count("SELECT count(*)::text AS n FROM step_runs WHERE id = $1", run.id), 1);
+
+    // 録音ページを消す: run も一緒に消える
+    await pool.query("DELETE FROM pages WHERE id = $1", [parent]);
+    assert.equal(await count("SELECT count(*)::text AS n FROM step_runs WHERE id = $1", run.id), 0);
+  });
+
+  it("keeps the step tables' invariants even when the functions are bypassed", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const theirs = await recording(OTHER);
+    await assert.rejects(() => pool.query("INSERT INTO step_runs (owner, parent, recipe) VALUES ($1, $2, 'tpl-1')", [OWNER, theirs]), { code: "23503" });
+    await assert.rejects(() => pool.query("UPDATE step_runs SET state = 'paused' WHERE id = $1", [run.id]), { code: "23514" });
+    await assert.rejects(() => pool.query("UPDATE step_runs SET idempotency_key = $2 WHERE id = $1", [run.id, "k".repeat(129)]), { code: "23514" });
+    await assert.rejects(() => pool.query("UPDATE step_attempts SET error_code = 'Message: secret' WHERE run_id = $1", [run.id]), { code: "23514" });
+    await assert.rejects(() => pool.query("UPDATE step_attempts SET input_basis = 'abc' WHERE run_id = $1", [run.id]), { code: "23514" });
+    await assert.rejects(() => pool.query("UPDATE step_attempts SET state = 'running', lease_until = NULL WHERE run_id = $1 AND step_index = 0", [run.id]), { code: "23514" });
+    // 実行中の attempt は run あたり 1 つまで
+    await assert.rejects(
+      () => pool.query("UPDATE step_attempts SET state = 'running', lease_until = clock_timestamp() WHERE run_id = $1", [run.id]),
+      { code: "23505" },
+    );
+  });
+});

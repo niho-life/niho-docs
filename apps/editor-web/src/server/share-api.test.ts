@@ -82,8 +82,19 @@ function row(owner: string, extra: Partial<Row> = {}): Row {
   return { id: randomUUID(), owner, title: "合成の題名", blocks: [{ type: "paragraph", content: [{ type: "text", text: "合成の本文" }] }], deleted: false, token: null, createdAt: new Date(0).toISOString(), rotatedAt: null, ...extra };
 }
 
+/** 共有・複製・書き出しの API が呼ぶのは getSession だけ。ログインの経路（AuthProvider の残り）は使わない。 */
+const notUsed = async (): Promise<Response> => {
+  throw new Error("the page action APIs never call the login routes");
+};
+
 function authAs(userId: string | null): AuthProvider {
-  return { mode: "stub", getSession: async () => (userId ? { userId, mode: "stub" } : null) };
+  return {
+    mode: "stub",
+    getSession: async () => (userId ? { userId, mode: "stub" } : null),
+    beginLogin: notUsed,
+    completeLogin: notUsed,
+    logout: notUsed,
+  };
 }
 
 function deps(userId: string | null, store: PageActionsStore | null, env: Record<string, string | undefined> = {}): ShareApiDeps {

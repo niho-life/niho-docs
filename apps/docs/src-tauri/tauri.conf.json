@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "NIHO docs",
+  "productName": "NIHO editor",
   "version": "0.1.51",
   "identifier": "life.niho.docs",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "NIHO docs",
+        "title": "NIHO editor",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "trafficLightPosition": { "x": 12, "y": 14 },
@@ -54,7 +54,7 @@
     "targets": ["app"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.png"],
     "category": "Productivity",
-    "shortDescription": "NIHO docs",
+    "shortDescription": "NIHO editor",
     "longDescription": "工程を本人が設計できる、Mac のドキュメント制作アプリ。",
     "macOS": {
       "signingIdentity": "-",

@@ -36,7 +36,7 @@ export function ShellRailSection({ title, icon, summary, fill, open = true, onTo
   );
   return (
     <section className={`es-cd${open ? " es-cd--open" : ""}${fill ? " es-cd--fill" : ""}`}>
-      <h3 className="es-ch-h">
+      <h2 className="es-ch-h">
         {fill || !onToggle ? (
           <span className="es-ch es-ch--static">{heading}</span>
         ) : (
@@ -48,7 +48,7 @@ export function ShellRailSection({ title, icon, summary, fill, open = true, onTo
             </span>
           </button>
         )}
-      </h3>
+      </h2>
       <div id={body} className="es-cb" hidden={!open}>
         {children}
       </div>

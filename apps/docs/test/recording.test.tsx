@@ -128,7 +128,7 @@ describe("録音", () => {
     const container = await openNewProject(bridge);
     await click(button(container, "この Mac で録音"));
     expect(bridge.activeRecording).toBeNull();
-    expect(container.textContent).toContain("マイクの使用が許可されていません。システム設定で NIHO docs を許可してください。");
+    expect(container.textContent).toContain("マイクの使用が許可されていません。システム設定で NIHO editor を許可してください。");
     await click(button(container, "システム設定を開く"));
     expect(bridge.openedMicSettings).toBe(1);
 

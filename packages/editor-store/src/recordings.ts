@@ -3,14 +3,14 @@ import { isPageId } from "./store.ts";
 import type { OwnerId, PageLang, Queryable } from "./types.ts";
 
 /**
- * 録音ページの文字起こし（#36 段 1）。録音ページ（kind = 'rec'）に page_recordings の 1 行（migrations/0005_page_recordings.sql）。
+ * 録音ページの文字起こし（#36 段 1）。録音ページ（kind = 'rec'）に page_recordings の 1 行（migrations/0007_page_recordings.sql）。
  * 読み書きは全て本人の・ゴミ箱でないページだけ。別の人のページ・削除済み・存在しない・UUID として不正な id・録音の無いページは
  * どれも null（呼び出し側は同じ 404 にする）。
  * 書き込みは revision を見る: 呼び出し側が読んだ revision と今の revision が違えば書かずに最新を返す（別の画面で先に直された）。
  * 段落・話者の操作そのもの（純粋な関数）は呼び出し側が持ち、ここは形の検査と保存だけをする。
  */
 
-/** 段落の数の上限（0005 の CHECK と同じ）。1 時間の録音を数秒ごとに区切っても収まり、1 行の jsonb を数 MB に抑える。 */
+/** 段落の数の上限（0007 の CHECK と同じ）。1 時間の録音を数秒ごとに区切っても収まり、1 行の jsonb を数 MB に抑える。 */
 export const RECORDING_SEGMENTS_MAX = 20_000;
 /** 1 つの段落の文字数の上限（code point の数）。 */
 export const RECORDING_SEGMENT_TEXT_MAX_CHARS = 5_000;
@@ -21,9 +21,9 @@ export const RECORDING_SEGMENT_TEXT_MAX_CHARS = 5_000;
 export const RECORDING_TEXT_MAX_BYTES = 8 * 1024 * 1024;
 /** 話者の名前の文字数の上限（docs-core の TRANSCRIPT_SPEAKER_NAME_MAX_CHARS と同じ）。 */
 export const RECORDING_SPEAKER_NAME_MAX_CHARS = 60;
-/** engine の文字数の上限（0005 の CHECK と同じ）。 */
+/** engine の文字数の上限（0007 の CHECK と同じ）。 */
 export const RECORDING_ENGINE_MAX_CHARS = 64;
-/** 元のファイルの名前の文字数の上限（0005 の CHECK と同じ）。 */
+/** 元のファイルの名前の文字数の上限（0007 の CHECK と同じ）。 */
 export const RECORDING_SOURCE_NAME_MAX_CHARS = 200;
 /** 録音ページの題名の上限（0001 の CHECK と同じ）。 */
 const PAGE_TITLE_MAX_CHARS = 500;

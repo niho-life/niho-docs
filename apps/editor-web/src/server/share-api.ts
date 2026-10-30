@@ -3,7 +3,7 @@ import type { DocsPageShareState } from "@niho/docs-core";
 import type { Block, DuplicatedPage, OwnerId, PageShareState } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
 import { exportMarkdown } from "../export/markdown";
-import { ROBOTS_HEADER_VALUE, errorResponse, expectedOrigin, isSameOriginRequest, jsonResponse, notFoundResponse } from "./http";
+import { ROBOTS_HEADER_VALUE, errorResponse, expectedOrigin, guarded, isSameOriginRequest, jsonResponse, notFoundResponse } from "./http";
 
 /**
  * 「…」の操作のうちサーバーで行うもの（#34）: リンクで共有（状態・開始・作り直し・停止）、複製、Markdown の書き出し。
@@ -28,21 +28,6 @@ export type ShareApiDeps = {
   store: () => PageActionsStore | null;
   env?: Readonly<Record<string, string | undefined>>;
 };
-
-/**
- * 想定外の失敗は 500 の汎用エラー（内部の情報は応答に出さず、ログにも名前と code だけを書く。token・SQL を出さない）。
- * pages-api.ts の guarded と同じ（#33 と並行して触らないよう、ここに置いている）。
- */
-async function guarded(route: string, handler: () => Promise<Response>): Promise<Response> {
-  try {
-    return await handler();
-  } catch (error) {
-    const name = error instanceof Error ? error.name : "unknown";
-    const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : undefined;
-    console.error("editor-web: request failed", { route, name, code });
-    return errorResponse("internal");
-  }
-}
 
 /**
  * 共有の状態の公開してよい識別子（docs-core の publicId）。token そのものは url の中だけに出し、ここには

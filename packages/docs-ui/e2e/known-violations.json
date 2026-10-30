@@ -1,0 +1,6 @@
+{
+  "note": "axe（serious 以上）の違反の「いまの状態」。(screen, width, rule) の集合が実行結果と一致しないと e2e/axe.spec.ts が落ちる（新しい違反も、直った違反も）。直したら該当の行を消す。足してはいけない（新しい違反は直す）。更新は UPDATE_KNOWN=1 npx playwright test e2e/axe.spec.ts。",
+  "entries": [
+
+  ]
+}

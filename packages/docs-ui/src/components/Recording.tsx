@@ -18,7 +18,7 @@ export type RecordingState =
 /** 録音を始められない理由（欄の中に出す）。permission はシステム設定へ、device はマイクをつなぐ案内。 */
 export type RecordingProblem = { kind: "permission" } | { kind: "device" } | { kind: "message"; text: string };
 
-export const MIC_PERMISSION_MESSAGE = "マイクの使用が許可されていません。システム設定で NIHO docs を許可してください。";
+export const MIC_PERMISSION_MESSAGE = "マイクの使用が許可されていません。システム設定で NIHO editor を許可してください。";
 export const MIC_DEVICE_MESSAGE = "マイクが見つかりません。マイクをつないでから、もう一度押してください。";
 const ENDED_BY_ITSELF_MESSAGE = "録音が止まりました（マイクが外れたか、保存先に書けなくなりました）。保存できなかった場合は「前回の録音」から録音のページに保存できます。";
 

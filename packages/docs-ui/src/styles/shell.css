@@ -12,12 +12,13 @@
 /* ===== root・reset ===== */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root{--es-header:48px;position:relative;height:100%;min-height:0;font-family:var(--ed-font-sans);font-size:14px;line-height:1.6;color:var(--ed-ink);background:var(--ed-canvas);-webkit-font-smoothing:antialiased}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root *{box-sizing:border-box}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root h1,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root h2,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root h3,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root h4,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root p,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root dl,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root dd,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root ul,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root ol{margin:0}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root ul,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root ol{padding:0;list-style:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root h1:where(:not(.ProseMirror *)),:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root h2:where(:not(.ProseMirror *)),:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root h3:where(:not(.ProseMirror *)),:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root h4:where(:not(.ProseMirror *)),:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root p:where(:not(.ProseMirror *)),:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root dl:where(:not(.ProseMirror *)),:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root dd:where(:not(.ProseMirror *)),:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root ul:where(:not(.ProseMirror *)),:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root ol:where(:not(.ProseMirror *)){margin:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root ul:where(:not(.ProseMirror *)),:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root ol:where(:not(.ProseMirror *)){padding:0;list-style:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root button,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root input,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root textarea{font:inherit;color:inherit}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root button{cursor:pointer;background:none;border:0;padding:0;text-align:inherit}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root a{color:inherit;text-decoration:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root a:where(:not(.ProseMirror *)){color:inherit;text-decoration:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root :focus-visible{outline:2px solid var(--ed-accent-ink);outline-offset:2px;border-radius:6px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root ::placeholder{color:var(--ed-ink-mute);opacity:1}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root [hidden]{display:none!important}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root code{font:12px var(--ed-font-mono);color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ico{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
@@ -62,6 +63,10 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-rail="open"] .es-dbody{grid-template-columns:minmax(0,1fr) 340px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas{min-width:0;min-height:0;overflow:auto;padding:8px 48px 120px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas-in{max-width:680px;margin:auto}
+/* 本文へ移動（skip link）。普段は切り抜いて見せず（場所と大きさは保つので、はみ出しにならない）、フォーカスで現れる。移動先の main（tabindex=-1）には枠を出さない */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-skip{position:absolute;top:8px;left:8px;z-index:60;display:inline-flex;align-items:center;height:36px;padding:0 16px;border-radius:999px;background:var(--ed-white);color:var(--ed-ink);font-size:13.5px;font-weight:600;box-shadow:0 8px 24px rgba(28,28,26,.14),0 0 0 1px var(--ed-line-2)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-skip:not(:focus){clip-path:inset(50%)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas:focus{outline:none}
 
 /* ===== 左の一覧 ===== */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb{display:flex;flex-direction:column;min-height:0;height:100%;background:var(--ed-canvas);border-right:1px solid var(--ed-line)}
@@ -137,6 +142,7 @@
 
 /* ===== ページ（中央の列） ===== */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-cover{aspect-ratio:16/8.5;border-radius:18px;position:relative;margin-top:8px;background:linear-gradient(135deg,var(--ed-sand) 0,var(--ed-sand-2) 100%)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-cover-ph{position:absolute;inset:0;border-radius:inherit}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-chg{position:absolute;right:12px;bottom:12px;background:rgba(255,255,255,.95);border-radius:999px;padding:4px 12px;font-size:12.5px;font-weight:600}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-addcover{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--ed-ink-mute);margin-top:16px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-addcover:hover{color:var(--ed-ink)}
@@ -144,7 +150,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt{font-family:var(--ed-font-serif);font-weight:400;font-size:42px;line-height:1.1;letter-spacing:-.02em;margin-top:8px;outline:none;overflow-wrap:anywhere}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt.es-ja{font-family:var(--ed-font-sans);font-weight:600;font-size:32px;letter-spacing:0}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt.es-tt--journal{font-size:28px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt:empty::before,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ld:empty::before,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-bd:empty::before{content:attr(data-ph);color:var(--ed-ink-faint)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt:empty::before,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ld:empty::before,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-bd:empty::before{content:attr(data-ph);color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin-top:10px;font-size:12.5px;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-meta>span{display:inline-flex;align-items:center;gap:6px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-meta .es-ico{width:16px;height:16px}
@@ -157,7 +163,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-bd.es-ja h2{font-weight:600;font-size:21px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-bd ul{list-style:disc;padding-left:22px;margin-top:10px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-bd li{margin-top:4px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-bd mark{background:var(--ed-amber-soft);color:var(--ed-amber);border-radius:4px;padding:1px 4px;font:600 13px var(--ed-font-sans);cursor:pointer}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-bd mark{background:var(--ed-amber-soft);color:var(--ed-amber-ink);border-radius:4px;padding:1px 4px;font:600 13px var(--ed-font-sans);cursor:pointer}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-addrow{display:flex;align-items:center;gap:8px;margin-top:12px;height:30px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-addrow button{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--ed-ink-faint)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-addrow button:hover{background:var(--ed-sand-2);color:var(--ed-ink)}
@@ -201,7 +207,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-acts{display:flex;gap:4px;margin-top:8px;font-family:var(--ed-font-sans);flex-wrap:wrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-blk .es-acts button{font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;border:1px solid var(--ed-line-2);color:var(--ed-ink-sub)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-blk .es-acts button.es-ok{background:var(--ed-primary-bg);color:var(--ed-primary-ink);border-color:transparent}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-blk--done{opacity:.55}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-blk--done{color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-note{font-family:var(--ed-font-sans);font-size:12.5px;color:var(--ed-ink-mute);margin-top:6px}
 
 /* ===== 録音から：はじめる画面 ===== */
@@ -219,9 +225,9 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-drop--on b{color:var(--ed-accent-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-drop small{display:block;margin-top:3px;font-size:12px;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-fld{margin-top:24px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-fld h4{font-size:12.5px;font-weight:600;color:var(--ed-ink-sub);margin-bottom:8px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-fld h4 label{font:inherit}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-fld h4 em{font-style:normal;font-weight:400;color:var(--ed-ink-mute);font-size:12px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-fld h2{font-size:12.5px;font-weight:600;color:var(--ed-ink-sub);margin-bottom:8px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-fld h2 label{font:inherit}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-fld h2 em{font-style:normal;font-weight:400;color:var(--ed-ink-mute);font-size:12px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-area{width:100%;min-height:84px;resize:vertical;border:1px solid var(--ed-line-2);border-radius:10px;padding:8px 11px;background:var(--ed-white);font-size:14px;outline:none;line-height:1.6}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-area:focus{border-color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-people{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -272,17 +278,17 @@
 /* ページ設定 */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ps section{padding:13px 0 0;border-top:1px solid var(--ed-line)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ps section:first-child{border-top:0;padding-top:2px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ps h4{font-size:12px;font-weight:600;color:var(--ed-ink-mute);margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ps h4 button{font-size:12px;font-weight:600;color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ps h3{font-size:12px;font-weight:600;color:var(--ed-ink-mute);margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ps h3 button{font-size:12px;font-weight:600;color:var(--ed-ink-sub)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pubcard{display:grid;grid-template-columns:34px minmax(0,1fr);gap:10px;align-items:center;background:var(--ed-white);border:1px solid var(--ed-line);border-radius:12px;padding:9px 11px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pubcard i{width:34px;height:34px;border-radius:8px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pubcard--exp i{background:var(--ed-deep)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pubcard--niho i{background:var(--ed-brown)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pubcard--site i{background:var(--ed-ink-mute)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pubcard--planned{opacity:.85}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pubcard--planned>i{opacity:.85}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pubcard b{display:block;font-size:13.5px;line-height:1.3}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pubcard code{display:block;margin-top:1px;overflow-wrap:anywhere;font-size:12px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-upnote{font-size:12.5px;color:var(--ed-amber);font-weight:600;margin-top:8px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-upnote{font-size:12.5px;color:var(--ed-amber-ink);font-weight:600;margin-top:8px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-upnote--ok{color:var(--ed-accent-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-todo{margin-top:10px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-todo button{display:flex;align-items:center;gap:8px;font-size:13px;padding:3px 0;width:100%}
@@ -348,7 +354,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-foot--center{border-top:0;justify-content:center}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-note{flex:1 1 12em;min-width:0;font-size:12px;overflow-wrap:anywhere}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-note.es-sh-hint{font-size:12.5px;color:var(--ed-ink-mute)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-note.es-sh-left{font-size:12.5px;color:var(--ed-amber);font-weight:600}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-note.es-sh-left{font-size:12.5px;color:var(--ed-amber-ink);font-weight:600}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sh-acts{display:flex;align-items:center;gap:8px;flex:none;margin-left:auto}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dst{display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:12px;align-items:center;width:100%;padding:10px 8px;border-radius:12px;text-align:left}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dst:hover{background:var(--ed-sand)}
@@ -533,6 +539,7 @@
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-rail="open"] .es-mtb{display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-rail="open"] .es-dbody{grid-template-columns:minmax(0,1fr)}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="rail"] .es-canvas{visibility:hidden}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="list"] .es-skip,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="rail"] .es-skip{display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-rail{position:absolute;left:0;right:0;bottom:0;top:var(--es-header);z-index:46;border-left:0}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas{padding:0 18px 80px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt{font-size:30px}

@@ -1,6 +1,6 @@
 //! 「この Mac で続きを受ける」を ON にしている間の常駐（#18804 S2）。
 //!
-//! - メニューバー（ON の間だけ）: 状態の 1 行・「NIHO docs を開く」・「続きを受ける」（チェック）・「NIHO docs を終了」。
+//! - メニューバー（ON の間だけ）: 状態の 1 行・「NIHO editor を開く」・「続きを受ける」（チェック）・「NIHO editor を終了」。
 //!   文は設定の行と同じ（design-guide-docs.md §4.1）。
 //! - 窓を閉じても終わらない: 窓を隠して Dock から消える（Accessory）。画面が書きかけを保存してから窓を壊しても、最後の窓が
 //!   閉じたことによる終了（`RunEvent::ExitRequested { code: None }`）を止めてメニューバーに残る。「開く」・Dock の再度の起動
@@ -195,9 +195,9 @@ fn show_tray(app: &AppHandle, status: &PcRunnerStatus) -> tauri::Result<()> {
     return Ok(());
   }
   let status_item = MenuItem::with_id(app, MENU_STATUS, status_line(status), false, None::<&str>)?;
-  let open = MenuItem::with_id(app, MENU_OPEN, "NIHO docs を開く", true, None::<&str>)?;
+  let open = MenuItem::with_id(app, MENU_OPEN, "NIHO editor を開く", true, None::<&str>)?;
   let toggle = CheckMenuItem::with_id(app, MENU_TOGGLE, "続きを受ける", true, status.enabled, None::<&str>)?;
-  let quit = MenuItem::with_id(app, MENU_QUIT, "NIHO docs を終了", true, None::<&str>)?;
+  let quit = MenuItem::with_id(app, MENU_QUIT, "NIHO editor を終了", true, None::<&str>)?;
   let menu = Menu::with_items(
     app,
     &[
@@ -214,7 +214,7 @@ fn show_tray(app: &AppHandle, status: &PcRunnerStatus) -> tauri::Result<()> {
       app.on_menu_event(|app, event| on_menu(app, event.id().as_ref()));
     }
   }
-  let mut builder = TrayIconBuilder::with_id(TRAY_ID).menu(&menu).tooltip("NIHO docs");
+  let mut builder = TrayIconBuilder::with_id(TRAY_ID).menu(&menu).tooltip("NIHO editor");
   if let Some(icon) = app.default_window_icon() {
     builder = builder.icon(icon.clone());
   }

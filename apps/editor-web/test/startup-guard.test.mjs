@@ -99,10 +99,83 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
       assert.equal(await response.text(), '{"error":"unauthorized"}');
       assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow");
       const home = await fetch(`http://127.0.0.1:${port}/`);
+      assert.equal(new URL(home.url).pathname, "/auth/login", "an unauthenticated visit ends on the login screen");
       assert.equal(home.headers.get("x-robots-tag"), "noindex, nofollow");
       const html = await home.text();
       assert.match(html, /<meta name="robots" content="noindex, nofollow"\/>/);
       assert.doesNotMatch(html, /data-auth-mode="stub"/);
+    } finally {
+      child.kill("SIGTERM");
+    }
+  });
+
+  it("sends a nonce-based CSP on pages, and every <script> carries that request's nonce (#44)", async () => {
+    const port = await freePort();
+    const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env: childEnv(port, "niho"), stdio: "ignore" });
+    try {
+      await waitForHttp(port);
+      const fetchHome = async () => {
+        const response = await fetch(`http://127.0.0.1:${port}/`);
+        return { csp: response.headers.get("content-security-policy") ?? "", hsts: response.headers.get("strict-transport-security"), html: await response.text() };
+      };
+      const first = await fetchHome();
+      const second = await fetchHome();
+      const nonceOf = (policy) => /'nonce-([^']+)'/.exec(policy)?.[1];
+      const nonce = nonceOf(first.csp);
+      assert.ok(nonce, "the policy must carry a nonce");
+      assert.notEqual(nonce, nonceOf(second.csp), "the nonce must change on every request");
+      const scriptSrc = first.csp.split("; ").find((part) => part.startsWith("script-src ")) ?? "";
+      assert.match(scriptSrc, /'strict-dynamic'/);
+      assert.doesNotMatch(scriptSrc, /'unsafe-inline'|'unsafe-eval'/);
+      assert.match(first.csp, /frame-ancestors 'none'/);
+      assert.match(first.csp, /upgrade-insecure-requests/);
+      const scripts = [...first.html.matchAll(/<script\b[^>]*>/g)].map((match) => match[0]);
+      assert.ok(scripts.length > 0, "the page must have scripts for this check to mean anything");
+      for (const tag of scripts) assert.ok(tag.includes(`nonce="${nonce}"`), `a <script> without this request's nonce: ${tag.slice(0, 80)}`);
+      assert.equal(first.hsts, "max-age=31536000; includeSubDomains");
+      // API は JSON だけ: 何も読み込まない固定の CSP
+      const api = await fetch(`http://127.0.0.1:${port}/api/pages`);
+      assert.equal(api.headers.get("content-security-policy"), "default-src 'none'; frame-ancestors 'none'");
+    } finally {
+      child.kill("SIGTERM");
+    }
+  });
+
+  it("serves the manifest, icons, service worker and offline page, all noindex (#49)", async () => {
+    const port = await freePort();
+    const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env: childEnv(port, "niho"), stdio: "ignore" });
+    try {
+      await waitForHttp(port);
+      const get = (path) => fetch(`http://127.0.0.1:${port}${path}`);
+      const manifestResponse = await get("/manifest.webmanifest");
+      assert.equal(manifestResponse.status, 200);
+      assert.match(manifestResponse.headers.get("content-type") ?? "", /json/);
+      assert.equal(manifestResponse.headers.get("x-robots-tag"), "noindex, nofollow");
+      const manifest = await manifestResponse.json();
+      assert.equal(manifest.display, "standalone");
+      assert.equal(manifest.start_url, "/");
+      for (const icon of manifest.icons) {
+        const response = await get(icon.src);
+        assert.equal(response.status, 200, icon.src);
+        assert.equal(response.headers.get("content-type"), "image/png", icon.src);
+      }
+
+      const worker = await get("/sw.js");
+      assert.equal(worker.status, 200);
+      assert.match(worker.headers.get("content-type") ?? "", /javascript/);
+      assert.equal(worker.headers.get("cache-control"), "no-cache, must-revalidate");
+      assert.equal(worker.headers.get("x-robots-tag"), "noindex, nofollow");
+      assert.match(await worker.text(), /niho-editor-shell-/);
+
+      const offline = await get("/offline.html");
+      assert.equal(offline.status, 200);
+      assert.equal(offline.headers.get("x-robots-tag"), "noindex, nofollow");
+      assert.match(await offline.text(), /つながっていません/);
+
+      const html = await (await get("/")).text();
+      assert.match(html, /<link rel="manifest" href="\/manifest\.webmanifest"/);
+      assert.match(html, /rel="apple-touch-icon"/);
+      assert.match(html, /<meta name="robots" content="noindex, nofollow"\/>/);
     } finally {
       child.kill("SIGTERM");
     }

@@ -7,7 +7,7 @@ export type PageKind = (typeof PAGE_KINDS)[number];
 export const PAGE_LANGS = ["ja", "en"] as const;
 export type PageLang = (typeof PAGE_LANGS)[number];
 
-export const STEP_STATUSES = ["done", "run", "wait", "stale"] as const;
+export const STEP_STATUSES = ["done", "run", "wait", "stale", "failed"] as const;
 export type StepStatus = (typeof STEP_STATUSES)[number];
 
 /**
@@ -30,12 +30,23 @@ export type Page = {
   parent: string | null;
   recipe: string | null;
   stepStatus: StepStatus | null;
+  /** 楽観ロックの番号。保存のたびに +1。保存の要求はこれを `baseRevision` として持ってくる。 */
+  revision: number;
   createdAt: string;
   updatedAt: string;
 };
 
-/** 一覧の 1 行（本文は含めない）。 */
-export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "createdAt" | "updatedAt">;
+/** 一覧の 1 行（本文は含めない）。parent はサブページを親の下に並べるため、stepStatus は「作成中」を出すため。 */
+export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "parent" | "stepStatus" | "createdAt" | "updatedAt">;
+
+/** 一覧のひと区切り。next は続きを読むときに cursor に渡す値（続きが無ければ null）。 */
+export type PageChunk = { pages: PageSummary[]; next: string | null };
+
+export type PageChunkOptions = {
+  limit?: number;
+  /** 前の区切りの next。無ければ先頭から。 */
+  cursor?: string | null;
+};
 
 export type CreatePageInput = {
   kind?: PageKind;
@@ -52,5 +63,65 @@ export type PagePatch = {
   blocks?: Block[];
 };
 
+/** 保存のしかた。`baseRevision` が今の revision と違えば何も書かずに競合を返す。 */
+export type SaveOptions = {
+  baseRevision: number;
+  /** 「この内容で上書き」。更新の前に今の本文を版（理由 `overwrite`）として残す。 */
+  overwrite?: boolean;
+};
+
+/** 保存の結果（該当するページが無いときは null）。競合のときは何も書かず、今のページを返す。 */
+export type SaveResult = { status: "saved"; page: Page } | { status: "conflict"; page: Page };
+
+/** 版を残す理由。設計 §5.1。 */
+export const VERSION_REASONS = ["autosave", "ai", "publish", "overwrite", "restore"] as const;
+export type VersionReason = (typeof VERSION_REASONS)[number];
+
+/** 版の一覧の 1 行（本文は含めない）。 */
+export type PageVersionSummary = {
+  version: number;
+  reason: VersionReason;
+  createdAt: string;
+  blockCount: number;
+};
+
+export type PageVersion = {
+  version: number;
+  reason: VersionReason;
+  createdAt: string;
+  blocks: Block[];
+};
+
+export type RestoreOptions = {
+  baseRevision: number;
+  /**
+   * 戻す版の本文を、保存のときと同じ検査に通す。保存してよい形に組み直した写しを返し、通らなければ null。
+   * （限定 AST の検査は Web の側が持つので、ここでは受け取って使うだけ）
+   */
+  accept: (blocks: unknown) => Block[] | null;
+};
+
+/** 「この版に戻す」の結果（ページか版が無いときは null）。 */
+export type RestoreResult =
+  | { status: "restored"; page: Page }
+  | { status: "conflict"; page: Page }
+  | { status: "unrestorable" };
+
+/** ゴミ箱へ入れた結果（該当するページが無いときは null）。公開中のページは入れない。 */
+export type DeleteResult = "deleted" | "published";
+
+/** ゴミ箱の 1 行（本文は含めない）。 */
+export type TrashedPage = Pick<Page, "id" | "kind" | "title"> & { deletedAt: string };
+
+export type PurgeResult = {
+  /** 完全に消したページの数。 */
+  pages: number;
+  /** 一緒に消えた資産の object の位置（実体の削除は別の処理）。 */
+  assetPaths: string[];
+};
+
 /** pg の Pool / PoolClient のうち、このパッケージが使う部分。 */
 export type Queryable = Pick<Pool, "query">;
+
+/** transaction のために接続を 1 本借りられるもの（pg の Pool）。 */
+export type Database = Pick<Pool, "query" | "connect">;

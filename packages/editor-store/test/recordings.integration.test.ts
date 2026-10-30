@@ -98,14 +98,14 @@ const editText = (index: number, text: string) => (data: RecordingData): Recordi
   speakerNames: data.speakerNames,
 });
 
-describe("0005 on a database that has 0001, 0003 and 0004", { skip: databaseUrl === undefined }, () => {
+describe("0007 on a database that has 0001 to 0006", { skip: databaseUrl === undefined }, () => {
   let pool: PgPool;
   let drop: () => Promise<void>;
   let dir: string;
 
   before(async () => {
-    ({ pool, drop } = await withSchema("recordings0005"));
-    dir = await mkdtemp(join(tmpdir(), "editor-store-0005-"));
+    ({ pool, drop } = await withSchema("recordings0007"));
+    dir = await mkdtemp(join(tmpdir(), "editor-store-0007-"));
   });
 
   after(async () => {
@@ -118,7 +118,7 @@ describe("0005 on a database that has 0001, 0003 and 0004", { skip: databaseUrl 
     const dirUrl = pathToFileURL(`${dir}/`);
     // 適用済みの一覧は readMigrations() から取る（0002 は別の PR。ここにあれば一緒に入る）
     const names = (await readMigrations()).map((file) => file.name);
-    const earlier = names.filter((name) => name < "0005");
+    const earlier = names.filter((name) => name < "0007");
     assert.ok(earlier.includes("0001_editor_store.sql") && earlier.includes("0003_search_text.sql") && earlier.includes("0004_page_shares.sql"));
     for (const name of earlier) await copyFile(join(migrations, name), join(dir, name));
     const client = await pool.connect();
@@ -127,9 +127,9 @@ describe("0005 on a database that has 0001, 0003 and 0004", { skip: databaseUrl 
       const page = await insertPage(pool, { kind: "note" });
       const before = (await pool.query("SELECT * FROM pages WHERE id = $1", [page])).rows[0];
 
-      await copyFile(join(migrations, "0005_page_recordings.sql"), join(dir, "0005_page_recordings.sql"));
+      await copyFile(join(migrations, "0007_page_recordings.sql"), join(dir, "0007_page_recordings.sql"));
       const second = await applyMigrations(client, dirUrl);
-      assert.deepEqual(second.applied, ["0005_page_recordings.sql"]);
+      assert.deepEqual(second.applied, ["0007_page_recordings.sql"]);
       assert.deepEqual(second.skipped, earlier);
 
       assert.deepEqual((await pool.query("SELECT * FROM pages WHERE id = $1", [page])).rows[0], before, "existing rows are unchanged");

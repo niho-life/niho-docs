@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // package 単独のテスト（`npm -C packages/docs-ui test`。#18876）。@niho/docs-core（devDependencies の file:../docs-core）の
 // ソースを読むので、その dir も読めるようにする。peer（TipTap・markdown-it・React など）は、この package の node_modules の
@@ -22,5 +22,9 @@ export default defineConfig({
   },
   server: {
     fs: { allow: [__dirname, docsCoreDir, uiDir] },
+  },
+  test: {
+    // e2e/ は Playwright（実ブラウザ。`npm run test:browser`）の spec。vitest は拾わない
+    exclude: [...configDefaults.exclude, "e2e/**"],
   },
 });

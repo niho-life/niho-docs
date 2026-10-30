@@ -41,10 +41,10 @@ const untouchable: Queryable & Connectable = {
   },
 };
 
-describe("0005_page_recordings.sql", () => {
+describe("0007_page_recordings.sql", () => {
   it("declares one owner-scoped recording row per page with the documented checks, and depends only on 0001", async () => {
-    const file = (await readMigrations()).find((candidate) => candidate.name === "0005_page_recordings.sql");
-    assert.ok(file, "0005_page_recordings.sql exists");
+    const file = (await readMigrations()).find((candidate) => candidate.name === "0007_page_recordings.sql");
+    assert.ok(file, "0007_page_recordings.sql exists");
     const sql = withoutComments(file.sql);
     const body = sql.match(/CREATE TABLE page_recordings \(([\s\S]*?)\n\);/)?.[1] ?? "";
     assert.ok(body.length > 0, "page_recordings is created");

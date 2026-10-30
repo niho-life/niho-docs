@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readdir } from "node:fs/promises";
 import { describe, it } from "node:test";
 import { MIGRATION_FILE_PATTERN, migrationBody, readMigrations } from "../src/migrate.ts";
-import { EditorStore, isPageId } from "../src/store.ts";
-import type { Queryable } from "../src/types.ts";
+import { EditorStore, InvalidPageCursorError, isPageId } from "../src/store.ts";
+import type { Database } from "../src/types.ts";
 
 const TABLES = ["pages", "page_versions", "assets", "publications"] as const;
 
@@ -74,6 +74,18 @@ describe("migration files", () => {
     assert.match(publications, /UNIQUE \(dest, slug\)/);
   });
 
+  it("adds the revision, widens the version reasons, and indexes the trash in 0002 without touching 0001", async () => {
+    const files = await readMigrations();
+    const second = files.find((file) => file.name === "0002_versions_and_trash.sql");
+    assert.ok(second);
+    const sql = withoutComments(second.sql);
+    assert.match(sql, /ALTER TABLE pages\s+ADD COLUMN revision integer NOT NULL DEFAULT 1 CHECK \(revision > 0\);/);
+    assert.match(sql, /DROP CONSTRAINT page_versions_reason_check;/);
+    assert.match(sql, /CHECK \(reason IN \('autosave', 'ai', 'publish', 'overwrite', 'restore'\)\)/);
+    assert.match(sql, /CREATE INDEX pages_owner_deleted_idx\s+ON pages \(owner, deleted_at DESC\)\s+WHERE deleted_at IS NOT NULL;/);
+    assert.doesNotMatch(sql, /\bDROP\s+(TABLE|COLUMN)\b|\bDELETE\s+FROM\b|\bUPDATE\s+\w+\s+SET\b/i, "0002 must keep every existing row");
+  });
+
   it("contains no records, secrets, credentials, real addresses, or token columns", async () => {
     for (const file of await readMigrations()) {
       const sql = file.sql;
@@ -89,10 +101,13 @@ describe("migration files", () => {
 });
 
 describe("EditorStore without a database", () => {
-  const untouchable: Queryable = {
+  const untouchable: Database = {
     query: (() => {
       throw new Error("must not reach the database");
-    }) as unknown as Queryable["query"],
+    }) as unknown as Database["query"],
+    connect: (() => {
+      throw new Error("must not reach the database");
+    }) as unknown as Database["connect"],
   };
 
   it("treats ids that are not UUIDs as missing without querying", async () => {
@@ -100,15 +115,48 @@ describe("EditorStore without a database", () => {
     for (const id of ["", "not-a-uuid", "123", "{6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11}", "6f1d0d7c6f6c4c399a526a1f3b1c0d11", "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11' OR '1'='1"]) {
       assert.equal(isPageId(id), false, id);
       assert.equal(await store.getPage("stub-user", id), null);
-      assert.equal(await store.savePage("stub-user", id, { title: "x" }), null);
+      assert.equal(await store.savePage("stub-user", id, { title: "x" }, { baseRevision: 1 }), null);
+      assert.equal(await store.createVersion("stub-user", id, "ai"), null);
+      assert.equal(await store.listVersions("stub-user", id), null);
+      assert.equal(await store.getVersion("stub-user", id, 1), null);
+      assert.equal(await store.restoreVersion("stub-user", id, 1, { baseRevision: 1, accept: () => [] }), null);
+      assert.equal(await store.deletePage("stub-user", id), null);
+      assert.equal(await store.restoreFromTrash("stub-user", id), false);
     }
     assert.equal(isPageId("6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11"), true);
+  });
+
+  it("rejects a malformed list cursor without querying", async () => {
+    const store = new EditorStore(untouchable);
+    for (const cursor of ["", "next", "2030-01-02T03:04:05.123456Z_not-a-uuid", "2030-01-02T03:04:05Z_6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11"]) {
+      await assert.rejects(() => store.listPageChunk("stub-user", { cursor }), InvalidPageCursorError);
+    }
   });
 
   it("refuses an empty owner instead of reading rows of nobody", async () => {
     const store = new EditorStore(untouchable);
     await assert.rejects(() => store.listPages(""), TypeError);
+    await assert.rejects(() => store.listPageChunk(""), TypeError);
     await assert.rejects(() => store.getPage("", "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11"), TypeError);
     await assert.rejects(() => store.createPage(""), TypeError);
+    await assert.rejects(() => store.listTrash(""), TypeError);
+    await assert.rejects(() => store.deletePage("", "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11"), TypeError);
+  });
+
+  it("refuses a save or a restore without a positive integer baseRevision, and version numbers that are not positive integers", async () => {
+    const store = new EditorStore(untouchable);
+    const id = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+    for (const baseRevision of [0, -1, 1.5, Number.NaN, 2 ** 31, "1" as unknown as number, undefined as unknown as number]) {
+      await assert.rejects(() => store.savePage("stub-user", id, { title: "x" }, { baseRevision }), TypeError, String(baseRevision));
+      await assert.rejects(() => store.restoreVersion("stub-user", id, 1, { baseRevision, accept: () => [] }), TypeError, String(baseRevision));
+    }
+    for (const version of [0, -1, 1.5, Number.NaN, 2 ** 31]) {
+      assert.equal(await store.getVersion("stub-user", id, version), null, String(version));
+      assert.equal(await store.restoreVersion("stub-user", id, version, { baseRevision: 1, accept: () => [] }), null, String(version));
+    }
+    await assert.rejects(() => store.createVersion("stub-user", id, "manual" as never), TypeError);
+    await assert.rejects(() => store.purgeTrash({ olderThanDays: 0 }), RangeError);
+    await assert.rejects(() => store.purgeTrash({ olderThanDays: 1.5 }), RangeError);
+    assert.throws(() => new EditorStore(untouchable, { autosaveVersionIntervalMs: -1 }), RangeError);
   });
 });
