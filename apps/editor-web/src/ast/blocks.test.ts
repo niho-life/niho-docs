@@ -34,6 +34,22 @@ describe("validateBlocks: what a page may contain", () => {
     expect(ok(blocks)).toEqual(blocks);
   });
 
+  it("keeps the marks the editor leaves on a hard break (<strong>a<br>b</strong>)", () => {
+    const blocks = ok([paragraph(text("a", [{ type: "bold" }]), { type: "hardBreak", marks: [{ type: "bold" }] }, text("b", [{ type: "bold" }]))]);
+    expect(blocks).toEqual([paragraph(text("a", [{ type: "bold" }]), { type: "hardBreak", marks: [{ type: "bold" }] }, text("b", [{ type: "bold" }]))]);
+    expect(reason([paragraph({ type: "hardBreak", marks: [{ type: "script" }] })])).toMatch(/unknown mark/);
+    expect(reason([paragraph({ type: "hardBreak", attrs: {} })])).toMatch(/unknown/);
+  });
+
+  it("rounds an out-of-range ordered-list start to the default instead of rejecting the page (start 0, negative, huge)", () => {
+    const list = (start: unknown) => [{ type: "orderedList", attrs: { start }, content: [{ type: "listItem", content: [paragraph(text("a"))] }] }];
+    for (const start of [0, -3, 1_000_000, 2.5]) {
+      expect(ok(list(start))).toEqual([{ type: "orderedList", content: [{ type: "listItem", content: [paragraph(text("a"))] }] }]);
+    }
+    expect(ok(list(999_999))[0]).toMatchObject({ attrs: { start: 999_999 } });
+    expect(reason(list("3"))).toMatch(/invalid start/);
+  });
+
   it("keeps an empty document and an empty paragraph", () => {
     expect(ok([])).toEqual([]);
     expect(ok([{ type: "paragraph", content: [] }])).toEqual([{ type: "paragraph" }]);
