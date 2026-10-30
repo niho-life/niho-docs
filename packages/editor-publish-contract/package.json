@@ -1,0 +1,33 @@
+{
+  "name": "@niho/editor-publish-contract",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "editor の公開 API contract v1 の正本（型・実行時検証・Markdown の投影・ETag・参照モデル・負例）",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./v1": "./src/v1.ts",
+    "./validate": "./src/validate.ts",
+    "./markdown": "./src/markdown.ts",
+    "./etag": "./src/etag.ts",
+    "./keys": "./src/keys.ts",
+    "./test-support": "./test-support/reference-server.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  }
+}

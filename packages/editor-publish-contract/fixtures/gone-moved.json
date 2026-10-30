@@ -1,0 +1,4 @@
+{
+  "error": { "code": "gone", "requestId": "req_example_01", "retryable": false },
+  "movedTo": { "dest": "niho", "canonicalUrl": "https://niho.example.com/article/moved-between-faces" }
+}
