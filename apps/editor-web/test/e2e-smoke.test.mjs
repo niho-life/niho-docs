@@ -202,4 +202,34 @@ describe("editor-web e2e (stub, next dev)", () => {
     const robotsTxt = await responses["GET /robots.txt"].text();
     assert.doesNotMatch(robotsTxt, /disallow/i);
   });
+
+  it("finds the page just saved by its body text, and never another owner's page (#35)", async () => {
+    // 合成の語（他の行と当たらないよう要求ごとに変える）
+    const token = `合成検索${randomUUID().slice(0, 8)}`;
+    const page = (await (await write("POST", "/api/pages", {})).json()).page;
+    createdIds.push(page.id);
+    const blocks = [{ type: "bulletList", content: [{ type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: `本文の ${token} の行` }] }] }] }];
+    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { title: "合成の検索 e2e", blocks })).status, 200);
+    const other = await pool.query("INSERT INTO pages (owner, title, blocks) VALUES ($1, $2, $3::jsonb) RETURNING id", [
+      OTHER_OWNER,
+      `他人の ${token}`,
+      JSON.stringify([{ type: "paragraph", content: [{ type: "text", text: `他人の本文 ${token}` }] }]),
+    ]);
+    createdIds.push(other.rows[0].id);
+
+    const response = await fetch(`${base}/api/search?q=${encodeURIComponent(token)}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow");
+    const { results } = await response.json();
+    assert.deepEqual(results.map((hit) => hit.id), [page.id]);
+    assert.deepEqual(Object.keys(results[0]).sort(), ["id", "kind", "snippet", "title", "updatedAt"]);
+    assert.match(results[0].snippet, new RegExp(token));
+    assert.doesNotMatch(JSON.stringify(results), /他人/);
+
+    assert.deepEqual(await (await fetch(`${base}/api/search?q=`)).json(), { results: [] });
+    assert.deepEqual(await (await fetch(`${base}/api/search?q=a%00b`)).json(), { results: [] }, "NUL is not sent to the database");
+    assert.equal((await fetch(`${base}/api/search?q=${"a".repeat(101)}`)).status, 400);
+    assert.equal((await fetch(`${base}/api/search?q=x&limit=0`)).status, 400);
+  });
 });

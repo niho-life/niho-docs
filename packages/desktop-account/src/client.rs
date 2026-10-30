@@ -28,7 +28,7 @@ impl ClientId {
   pub fn name(self) -> &'static str {
     match self {
       ClientId::Camera => "NIHO photo",
-      ClientId::Docs => "NIHO docs",
+      ClientId::Docs => "NIHO editor",
     }
   }
 

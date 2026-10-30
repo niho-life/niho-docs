@@ -158,7 +158,7 @@ function guidance(provider: ProviderId, status: ProviderStatus): { text: string;
   if (!status.authenticated) {
     if (provider === "gpt") {
       return {
-        text: "NIHO docs は Codex CLI をこのアプリ専用の設定で動かします。ターミナルの codex でログイン済みでも、ここで一度ログインしてください。",
+        text: "NIHO editor は Codex CLI をこのアプリ専用の設定で動かします。ターミナルの codex でログイン済みでも、ここで一度ログインしてください。",
       };
     }
     return { text: "ターミナルで agy を起動して Google のアカウントでログインしてから、「確認」を押してください。" };
