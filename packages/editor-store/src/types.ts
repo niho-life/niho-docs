@@ -34,8 +34,17 @@ export type Page = {
   updatedAt: string;
 };
 
-/** 一覧の 1 行（本文は含めない）。 */
-export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "createdAt" | "updatedAt">;
+/** 一覧の 1 行（本文は含めない）。parent はサブページを親の下に並べるため、stepStatus は「作成中」を出すため。 */
+export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "parent" | "stepStatus" | "createdAt" | "updatedAt">;
+
+/** 一覧のひと区切り。next は続きを読むときに cursor に渡す値（続きが無ければ null）。 */
+export type PageChunk = { pages: PageSummary[]; next: string | null };
+
+export type PageChunkOptions = {
+  limit?: number;
+  /** 前の区切りの next。無ければ先頭から。 */
+  cursor?: string | null;
+};
 
 export type CreatePageInput = {
   kind?: PageKind;

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readdir } from "node:fs/promises";
 import { describe, it } from "node:test";
 import { MIGRATION_FILE_PATTERN, migrationBody, readMigrations } from "../src/migrate.ts";
-import { EditorStore, isPageId } from "../src/store.ts";
+import { EditorStore, InvalidPageCursorError, isPageId } from "../src/store.ts";
 import type { Queryable } from "../src/types.ts";
 
 const TABLES = ["pages", "page_versions", "assets", "publications"] as const;
@@ -99,9 +99,17 @@ describe("EditorStore without a database", () => {
     assert.equal(isPageId("6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11"), true);
   });
 
+  it("rejects a malformed list cursor without querying", async () => {
+    const store = new EditorStore(untouchable);
+    for (const cursor of ["", "next", "2030-01-02T03:04:05.123456Z_not-a-uuid", "2030-01-02T03:04:05Z_6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11"]) {
+      await assert.rejects(() => store.listPageChunk("stub-user", { cursor }), InvalidPageCursorError);
+    }
+  });
+
   it("refuses an empty owner instead of reading rows of nobody", async () => {
     const store = new EditorStore(untouchable);
     await assert.rejects(() => store.listPages(""), TypeError);
+    await assert.rejects(() => store.listPageChunk(""), TypeError);
     await assert.rejects(() => store.getPage("", "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11"), TypeError);
     await assert.rejects(() => store.createPage(""), TypeError);
   });
