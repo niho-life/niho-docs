@@ -7,10 +7,9 @@
  * - Photos are de-duplicated by sha256. Their bytes are checked against `bytes` and `sha256`; a photo
  *   that is missing or does not match is never put in silently: the whole export fails and says which.
  * - Two pages with the same slug never overwrite each other (`slug.md`, `slug-2.md`, …).
- * - The Markdown must stay in the contract's subset (`checkMarkdownSubset`). The only finding allowed is
- *   `unsafe-image` on a standalone image line whose source is one of the archive's own `photos/…`
- *   paths: the checker accepts absolute https image sources only, and a relative path is the point of
- *   an export. Anything else fails the export.
+ * - The Markdown must stay in the contract's subset: `checkMarkdownSubset` with the archive's own
+ *   `photos/…` paths listed as `relativeImages` (a relative path is the point of an export). Any
+ *   finding fails the export.
  * - Results carry ids and reasons only, never page text.
  */
 
@@ -25,7 +24,6 @@ import {
   checkMarkdownSubset,
   renderMarkdown,
   type ImageContentType,
-  type MarkdownViolation,
   type PublishedAsset,
   type PublishedDoc,
 } from "@niho/editor-publish-contract";
@@ -78,11 +76,6 @@ export interface ExportArchive {
 
 export type ExportArchiveResult = ExportArchive | ExportArchiveFailure;
 
-const PHOTO_LINE = new RegExp(
-  `^!\\[(?:[^\\]\\\\]|\\\\.)*\\]\\((${PHOTO_DIRECTORY}/[0-9a-f]{64}\\.(?:${Object.values(PHOTO_EXTENSIONS).join("|")}))(?: "(?:[^"\\\\]|\\\\.)*")?\\)$`,
-  "u",
-);
-
 function isPhotoContentType(value: unknown): value is ImageContentType {
   return typeof value === "string" && (IMAGE_CONTENT_TYPES as readonly string[]).includes(value);
 }
@@ -132,16 +125,6 @@ function frontMatter(doc: ExportDoc): string {
     "---",
     "",
   ].join("\n");
-}
-
-/** Subset findings that are not the archive's own relative photo sources. */
-function subsetViolations(markdown: string, photoPaths: ReadonlySet<string>): readonly MarkdownViolation[] {
-  const lines = markdown.split("\n");
-  return checkMarkdownSubset(markdown).filter((violation) => {
-    if (violation.reason !== "unsafe-image") return true;
-    const source = PHOTO_LINE.exec(lines[violation.line - 1] ?? "")?.[1];
-    return source === undefined || !photoPaths.has(source);
-  });
 }
 
 /** `{slug}.md`, then `{slug}-2.md`, `{slug}-3.md` … for later pages with the same slug (never overwritten). */
@@ -216,7 +199,7 @@ export async function buildExportArchive(input: ExportInput): Promise<ExportArch
     } catch {
       return { ok: false, reason: "markdown_invalid", pageId: doc.id };
     }
-    if (subsetViolations(markdown, photoPaths).length > 0) return { ok: false, reason: "markdown_invalid", pageId: doc.id };
+    if (checkMarkdownSubset(markdown, { relativeImages: photoPaths }).length > 0) return { ok: false, reason: "markdown_invalid", pageId: doc.id };
     const text = markdown === "" ? frontMatter(doc) : `${frontMatter(doc)}\n${markdown}`;
     entries.push({ name: names[index] as string, data: utf8(text), modifiedAt: doc.updatedAt });
   }
