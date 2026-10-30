@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { API_CSP } from "./src/security/csp";
 
 /**
  * editor.niho.life は全ページ・全 API の応答を索引に載せない（設計 §2）。
@@ -12,6 +13,8 @@ const securityHeaders = [
   { key: "Referrer-Policy", value: "same-origin" },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
+  // 常に https で開く（http で来た要求は Cloud Run の手前で https に回される）。サブドメインは他の用途があるので preload はしない
+  { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
 ];
 
 /**
@@ -38,9 +41,12 @@ const nextConfig: NextConfig = {
     extensionAlias: { ".js": [".ts", ".tsx", ".js"] },
   },
   async headers() {
-    // `/:path*` は `/` も含む全ての path（ページ・API・404・robots.txt・静的ファイル）
+    // `/:path*` は `/` も含む全ての path（ページ・API・404・robots.txt・静的ファイル）。
+    // ページの CSP は nonce が要るので src/proxy.ts が付ける。API は何も読み込まないので固定の CSP。
     return [
       { source: "/:path*", headers: [...ROBOTS_HEADERS, ...securityHeaders] },
+      { source: "/api/:path*", headers: [{ key: "Content-Security-Policy", value: API_CSP }] },
+      // 共有リンクのページ（#34）。private・no-store・no-referrer。全体の規則のあとに置いて、同じ key（Referrer-Policy）を上書きする
       { source: "/s/:token*", headers: SHARED_PAGE_HEADERS },
     ];
   },

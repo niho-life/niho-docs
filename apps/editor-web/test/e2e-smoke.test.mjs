@@ -140,8 +140,10 @@ describe("editor-web e2e (stub, next dev)", () => {
     }
 
     // 画面: 同じ 404 の画面と同じ header。`next dev` の HTML は要求ごとの開発用の値（stack・時刻）を含むので、本文は中身で比べる
-    // （`next dev` は CSS の Link header に読み込みごとの `?v=時刻` を付けるので、その値だけは外して比べる）
-    const devStable = (headers) => headers.map(([name, value]) => [name, value.replace(/\?v=\d+/g, "?v=")]);
+    // （`next dev` は CSS の Link header に読み込みごとの `?v=時刻` を付けるので、その値だけは外して比べる。
+    // CSP の nonce も要求ごとに変わる乱数で、ページの存在を漏らさないので、値だけ外して比べる）
+    const devStable = (headers) =>
+      headers.map(([name, value]) => [name, value.replace(/\?v=\d+/g, "?v=").replace(/'nonce-[^']*'/g, "'nonce-'")]);
     const pages = [];
     for (const id of ids) pages.push(await snapshot(await fetch(`${base}/p/${id}`)));
     for (const result of pages) {
