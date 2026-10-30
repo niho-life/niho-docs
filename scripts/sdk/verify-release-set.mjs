@@ -6,7 +6,7 @@ import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REPOSITORIES = new Set(["niho-coliving/niho-docs", "niho-life/niho-docs"]);
+const REPOSITORIES = new Set(["niho-coliving/niho-docs", "niho-life/niho-docs", "niho-life/niho-editor"]);
 const COMMIT = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;

@@ -111,6 +111,6 @@
 
 ## Epic
 
-- このリポジトリ：[#30 editor.niho.life：ページを書く工房に再編し、リポジトリを niho-editor にする](https://github.com/niho-life/niho-docs/issues/30)
+- このリポジトリ：[#30 editor.niho.life：ページを書く工房に再編し、リポジトリを niho-editor にする](https://github.com/niho-life/niho-editor/issues/30)
 - niho-experience：[#251 記事の正本を editor.niho.life に移し、experience.niho.life は発信先になる](https://github.com/niho-life/niho-experience/issues/251)
 - niho-app：[#19477 editor.niho.life 向けの役割・接続・NIHO アプリのカード表示](https://github.com/niho-coliving/niho-app/issues/19477)
