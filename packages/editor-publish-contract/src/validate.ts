@@ -108,14 +108,17 @@ const SAFE_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 class Issues {
   readonly list: ValidationIssue[] = [];
+  /** Every issue seen. `list` stops at MAX_VALIDATION_ISSUES, but callers compare `count` before and after a parse. */
+  private seen = 0;
 
   add(path: string, reason: ValidationReason): undefined {
+    this.seen += 1;
     if (this.list.length < MAX_VALIDATION_ISSUES) this.list.push({ path, reason });
     return undefined;
   }
 
   get count(): number {
-    return this.list.length;
+    return this.seen;
   }
 }
 

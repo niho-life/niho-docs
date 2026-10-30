@@ -151,24 +151,52 @@ class Converter {
 
   inlines(nodes: readonly unknown[]): Inline[] {
     const out: Inline[] = [];
-    for (const node of nodes) this.inline(node, out);
+    let index = 0;
+    while (index < nodes.length) {
+      if (typeOf(nodes[index]) !== "text") {
+        this.inline(nodes[index], out);
+        index += 1;
+        continue;
+      }
+      let end = index;
+      while (end < nodes.length && typeOf(nodes[end]) === "text") end += 1;
+      this.textRun(nodes.slice(index, end), out);
+      index = end;
+    }
     return mergeInlines(out);
+  }
+
+  /**
+   * Adjacent text nodes are read as one string, so a `[CONFIRM: …]` that formatting split across nodes
+   * (`[CONFIRM: `, bold `hours`, `]`) is still found. Text outside a marker keeps its own node's marks.
+   */
+  private textRun(nodes: readonly unknown[], out: Inline[]): void {
+    const runs: { start: number; text: string; marks: Mark[] }[] = [];
+    let full = "";
+    for (const node of nodes) {
+      const raw = fieldsOf(node)?.text;
+      const text = typeof raw === "string" ? cleanText(raw) : "";
+      if (text === "") continue;
+      runs.push({ start: full.length, text, marks: this.marks(fieldsOf(node)?.marks) });
+      full += text;
+    }
+    for (const piece of splitConfirm(full)) {
+      if (piece.confirm) {
+        out.push({ type: "confirm", text: piece.text });
+        continue;
+      }
+      for (const run of runs) {
+        const from = Math.max(piece.start, run.start);
+        const to = Math.min(piece.end, run.start + run.text.length);
+        if (from >= to) continue;
+        const text = full.slice(from, to);
+        out.push(run.marks.length > 0 ? { type: "text", text, marks: run.marks } : { type: "text", text });
+      }
+    }
   }
 
   private inline(node: unknown, out: Inline[]): void {
     const type = typeOf(node);
-    if (type === "text") {
-      const raw = fieldsOf(node)?.text;
-      const text = typeof raw === "string" ? cleanText(raw) : "";
-      if (text === "") return;
-      const marks = this.marks(fieldsOf(node)?.marks);
-      for (const piece of splitConfirm(text)) {
-        if (piece.confirm) out.push({ type: "confirm", text: piece.text });
-        else if (marks.length > 0) out.push({ type: "text", text: piece.text, marks });
-        else out.push({ type: "text", text: piece.text });
-      }
-      return;
-    }
     if (type === "hardBreak") {
       out.push({ type: "text", text: " " });
       return;
@@ -388,16 +416,18 @@ function confirmText(node: unknown): string {
   return fromContent ?? BLANK_CONFIRM;
 }
 
-function splitConfirm(text: string): { confirm: boolean; text: string }[] {
-  const pieces: { confirm: boolean; text: string }[] = [];
+/** `start` / `end` are offsets into `text`; a confirm piece's `text` is the note inside the marker. */
+function splitConfirm(text: string): { confirm: boolean; text: string; start: number; end: number }[] {
+  const pieces: { confirm: boolean; text: string; start: number; end: number }[] = [];
   let index = 0;
   for (const match of text.matchAll(CONFIRM_MARKER)) {
     const start = match.index;
-    if (start > index) pieces.push({ confirm: false, text: text.slice(index, start) });
-    pieces.push({ confirm: true, text: (match[1] ?? "").trim() || BLANK_CONFIRM });
-    index = start + match[0].length;
+    if (start > index) pieces.push({ confirm: false, text: text.slice(index, start), start: index, end: start });
+    const end = start + match[0].length;
+    pieces.push({ confirm: true, text: (match[1] ?? "").trim() || BLANK_CONFIRM, start, end });
+    index = end;
   }
-  if (index < text.length) pieces.push({ confirm: false, text: text.slice(index) });
+  if (index < text.length) pieces.push({ confirm: false, text: text.slice(index), start: index, end: text.length });
   return pieces;
 }
 

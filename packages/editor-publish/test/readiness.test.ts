@@ -54,6 +54,7 @@ describe("evaluateReadiness: NIHO Experience", () => {
     ["lead over 200 characters", { lead: "あ".repeat(201) }, {}, ["lead"]],
     ["no heading", { content: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Only text." }] }] } }, {}, ["headings"]],
     ["CONFIRM in the body", { content: bodyWith({ type: "paragraph", content: [{ type: "text", text: "Hours [CONFIRM: winter]" }] }) }, {}, ["no-confirm"]],
+    ["CONFIRM split across formatted text nodes", { content: bodyWith({ type: "paragraph", content: [{ type: "text", text: "Hours [CONFIRM: " }, { type: "text", text: "winter", marks: [{ type: "bold" }] }, { type: "text", text: "]" }] }) }, {}, ["no-confirm"]],
     ["confirm node in the body", { content: bodyWith({ type: "paragraph", content: [{ type: "confirm", attrs: { text: "price" } }] }) }, {}, ["no-confirm"]],
     ["CONFIRM in the title", { title: "Walk [CONFIRM: name]" }, {}, ["no-confirm"]],
     ["CONFIRM in the lead", { lead: "Start [CONFIRM: time]" }, {}, ["no-confirm"]],
