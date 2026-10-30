@@ -5,9 +5,9 @@ import { IDBFactory } from "fake-indexeddb";
 import { act, version as reactVersion } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createIndexedDbDraftStorage, type DraftStorage, type PageDraft } from "@/lib/drafts";
+import { NEW_PAGE_DRAFT_KEY, createIndexedDbDraftStorage, type DraftStorage, type PageDraft } from "@/lib/drafts";
 import { MAX_TITLE_CHARS } from "@/lib/page-limits";
-import { PageEditor, type EditablePage } from "./PageEditor";
+import { PageEditor, type EditablePage, type PageEditorEvents } from "./PageEditor";
 
 const appRequire = createRequire(import.meta.url);
 
@@ -626,5 +626,255 @@ describe("PageEditor drafts on this device (IndexedDB)", () => {
     } finally {
       delete (document as { visibilityState?: string }).visibilityState;
     }
+  });
+});
+
+describe("a new page (id null)", () => {
+  const CREATED = "00000000-0000-4000-8000-0000000000aa";
+  const wait = (ms: number) => act(async () => new Promise((resolve) => setTimeout(resolve, ms)));
+
+  it("is created by the first save after composition ends, then PATCHed by id with the created revision, without remounting the editor", async () => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        calls.push({ url, method: String(init.method), body });
+        // 作ったページは revision 1。PATCH の応答は baseRevision の次
+        return init.method === "POST" ? json(201, { page: { id: CREATED, revision: 1 } }) : json(200, { page: { id: CREATED, revision: (body.baseRevision as number) + 1 } });
+      }),
+    );
+    try {
+      const onCreated = vi.fn();
+      const onSaved = vi.fn();
+      const onTitleChange = vi.fn();
+      container = document.createElement("div");
+      document.body.append(container);
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(<PageEditor page={{ id: null, title: "", blocks: [], revision: null }} onCreated={onCreated} onSaved={onSaved} onTitleChange={onTitleChange} />);
+      });
+      await wait(0);
+      const body = container.querySelector(".ProseMirror");
+      const title = container.querySelector<HTMLTextAreaElement>("textarea.page-title")!;
+      expect(body).not.toBeNull();
+      const set = (value: string) => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(title, value);
+        title.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+
+      // 変換中は作らない
+      await act(async () => {
+        title.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        set("ごうせい");
+      });
+      expect(onTitleChange).toHaveBeenLastCalledWith("ごうせい");
+      await wait(1200);
+      expect(calls).toEqual([]);
+
+      await act(async () => {
+        set("合成の題名");
+        title.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      });
+      await wait(1200);
+      expect(calls).toEqual([{ url: "/api/pages", method: "POST", body: { title: "合成の題名" } }]);
+      expect(onCreated).toHaveBeenCalledTimes(1);
+      expect(onCreated).toHaveBeenCalledWith(CREATED);
+
+      await act(async () => set("合成の題名 2"));
+      await wait(1200);
+      await act(async () => set("合成の題名 3"));
+      await wait(1200);
+      expect(calls.slice(1)).toEqual([
+        { url: `/api/pages/${CREATED}`, method: "PATCH", body: { title: "合成の題名 2", baseRevision: 1 } },
+        { url: `/api/pages/${CREATED}`, method: "PATCH", body: { title: "合成の題名 3", baseRevision: 2 } },
+      ]);
+      expect(onCreated).toHaveBeenCalledTimes(1);
+      expect(onSaved).toHaveBeenCalledTimes(3);
+      expect(container.querySelector(".ProseMirror")).toBe(body);
+      expect(container.querySelector("textarea.page-title")).toBe(title);
+      expect(title.value).toBe("合成の題名 3");
+      expect(container.querySelector('[role="status"]')?.textContent).toBe("保存済み");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("stops autosave and shows the band when another screen saved the created page first (409 on the PATCH after the POST)", async () => {
+    const calls: { url: string; method: string; body: Record<string, unknown> }[] = [];
+    const otherUpdatedAt = "2026-10-31T00:00:00.000Z";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        calls.push({ url, method: String(init.method), body });
+        if (init.method === "POST") return json(201, { page: { id: CREATED, revision: 1 } });
+        // 上書きだけは受ける
+        return body.overwrite === true
+          ? json(200, { page: { id: CREATED, revision: (body.baseRevision as number) + 1 } })
+          : json(409, { error: "conflict", page: { id: CREATED, title: "別の画面", blocks: [], revision: 2, updatedAt: otherUpdatedAt } });
+      }),
+    );
+    const onSaved = vi.fn();
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<PageEditor page={{ id: null, title: "", blocks: [], revision: null }} onSaved={onSaved} />);
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await act(async () => typeTitle("作った"));
+    await waitForAutosave();
+    await act(async () => typeTitle("作ったあと"));
+    await waitForAutosave();
+    expect(calls).toEqual([
+      { url: "/api/pages", method: "POST", body: { title: "作った" } },
+      { url: `/api/pages/${CREATED}`, method: "PATCH", body: { title: "作ったあと", baseRevision: 1 } },
+    ]);
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(alertBand()?.querySelector("p")?.textContent).toBe(`${clock(otherUpdatedAt)} に別の画面で保存されました`);
+    expect(status()?.textContent).toBe("保存を止めています");
+
+    await act(async () => typeTitle("作ったあとの続き"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(calls).toHaveLength(2);
+
+    // 上書きは作ったページへ、競合の応答の revision の上に送る
+    await act(async () => {
+      button("この内容で上書き").click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(calls[2]).toMatchObject({ url: `/api/pages/${CREATED}`, method: "PATCH", body: { title: "作ったあとの続き", baseRevision: 2, overwrite: true } });
+    expect(container.querySelector("[data-conflict-band]")).toBeNull();
+    expect(onSaved).toHaveBeenCalledTimes(2);
+  });
+
+  describe("drafts on this device before the page exists", () => {
+    const NEW_DRAFT: PageDraft = { baseRevision: 0, title: "閉じる前の題", blocks: paragraph("閉じる前の本文"), savedAt: "2026-10-31T00:00:00.000Z" };
+
+    async function renderNewPage(drafts: DraftStorage, events: PageEditorEvents = {}) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      container = document.createElement("div");
+      document.body.append(container);
+      root = createRoot(container);
+      await act(async () => {
+        root!.render(<PageEditor page={{ id: null, title: "", blocks: [], revision: null }} drafts={drafts} {...events} />);
+      });
+      for (let index = 0; index < 100; index++) {
+        if (container.querySelector(".ProseMirror")?.getAttribute("contenteditable") === "true") break;
+        await settleIdb();
+      }
+      expect(container.querySelector(".ProseMirror")?.getAttribute("contenteditable")).toBe("true");
+    }
+
+    /** POST で作り、PATCH で revision を 1 つ進める fetch。`hold` なら応答を `release` まで待たせる。`failPatch` なら PATCH は届かない。 */
+    function creatingFetch(options: { hold?: boolean; failPatch?: boolean } = {}) {
+      const calls: { url: string; method: string; body: Record<string, unknown> }[] = [];
+      const waiting: Array<() => void> = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit) => {
+          const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+          calls.push({ url, method: String(init.method), body });
+          if (options.hold) await new Promise<void>((resolve) => waiting.push(resolve));
+          if (init.method === "POST") return json(201, { page: { id: CREATED, revision: 1 } });
+          if (options.failPatch) throw new TypeError("Failed to fetch");
+          return json(200, { page: { id: CREATED, revision: (body.baseRevision as number) + 1 } });
+        }),
+      );
+      const release = async () => {
+        await act(async () => {
+          waiting.shift()?.();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+      };
+      return { calls, release };
+    }
+
+    it("keeps the text on this device before the page exists, and drops it once the page is created with it", async () => {
+      const { calls } = creatingFetch();
+      const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
+      await renderNewPage(drafts);
+      await act(async () => {
+        bodyEditor().commands.insertContent("端末の本文");
+      });
+      await act(async () => typeTitle("作る前"));
+      await advance(300);
+      await settleIdb();
+      expect(await drafts.get(NEW_PAGE_DRAFT_KEY)).toMatchObject({ baseRevision: 0, title: "作る前", blocks: paragraph("端末の本文") });
+      expect(status()?.getAttribute("data-drafts")).toBe("kept");
+
+      await advance(700);
+      await settleIdb();
+      expect(calls).toEqual([{ url: "/api/pages", method: "POST", body: { title: "作る前", blocks: paragraph("端末の本文") } }]);
+      expect(status()?.textContent).toBe("保存済み");
+      expect(await drafts.get(NEW_PAGE_DRAFT_KEY)).toBeNull();
+      expect(await drafts.get(CREATED)).toBeNull();
+    });
+
+    it("restores the text kept before a page existed, and creates the page with it", async () => {
+      const { calls } = creatingFetch();
+      const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
+      await drafts.put(NEW_PAGE_DRAFT_KEY, NEW_DRAFT);
+      const onCreated = vi.fn();
+      const onTitleChange = vi.fn();
+      await renderNewPage(drafts, { onCreated, onTitleChange });
+      expect(container!.querySelector<HTMLTextAreaElement>("textarea.page-title")?.value).toBe("閉じる前の題");
+      expect(bodyEditor().getText()).toBe("閉じる前の本文");
+      expect(onTitleChange).toHaveBeenCalledWith("閉じる前の題");
+      expect(container!.querySelector("[data-conflict-band]")).toBeNull();
+
+      await waitForAutosave();
+      await settleIdb();
+      expect(calls).toEqual([{ url: "/api/pages", method: "POST", body: { title: "閉じる前の題", blocks: paragraph("閉じる前の本文") } }]);
+      expect(onCreated).toHaveBeenCalledWith(CREATED);
+      expect(await drafts.get(NEW_PAGE_DRAFT_KEY)).toBeNull();
+      expect(await drafts.get(CREATED)).toBeNull();
+    });
+
+    it("moves input made while the page is being created to the created page's draft, on the created revision", async () => {
+      const { calls, release } = creatingFetch({ hold: true });
+      const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
+      await renderNewPage(drafts);
+      await act(async () => typeTitle("一"));
+      await waitForAutosave();
+      expect(calls).toHaveLength(1);
+      await act(async () => typeTitle("一二"));
+      await release();
+      await advance(300);
+      await settleIdb();
+      expect(await drafts.get(NEW_PAGE_DRAFT_KEY)).toBeNull();
+      expect(await drafts.get(CREATED)).toMatchObject({ baseRevision: 1, title: "一二" });
+
+      await waitForAutosave();
+      await release();
+      await settleIdb();
+      expect(calls.at(-1)).toEqual({ url: `/api/pages/${CREATED}`, method: "PATCH", body: { title: "一二", baseRevision: 1 } });
+      expect(await drafts.get(CREATED)).toBeNull();
+    });
+
+    it("keeps unsent text under the created page when the screen closes while the page is being created", async () => {
+      const { calls, release } = creatingFetch({ hold: true, failPatch: true });
+      const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
+      await renderNewPage(drafts);
+      await act(async () => typeTitle("一"));
+      await waitForAutosave();
+      await act(async () => typeTitle("一二"));
+      await act(async () => root!.unmount());
+      root = null;
+      await settleIdb();
+      expect(await drafts.get(NEW_PAGE_DRAFT_KEY)).toMatchObject({ baseRevision: 0, title: "一二" });
+
+      // 作れた。閉じたあとの送り直し（PATCH）は届かない
+      await release();
+      await release();
+      await settleIdb();
+      expect(calls.map((call) => call.method)).toEqual(["POST", "PATCH"]);
+      expect(await drafts.get(NEW_PAGE_DRAFT_KEY)).toBeNull();
+      // 作った内容より新しいかは分からないので、もとの revision のまま（次に開いたときに帯で比べる）
+      expect(await drafts.get(CREATED)).toMatchObject({ baseRevision: 0, title: "一二" });
+    });
   });
 });

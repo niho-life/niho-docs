@@ -676,4 +676,56 @@ describe("PageEditor with the chrome", () => {
     expect(bodies.at(-1)).toEqual({ blocks: [{ type: "heading", attrs: { level: 2 } }, { type: "paragraph" }], baseRevision: 1 });
     expect(validateBlocks(bodies.at(-1)!.blocks).ok).toBe(true);
   });
+
+  it("works on a new page before it exists: the block the 「＋」 list makes creates the page, and the format bar then PATCHes it", async () => {
+    fakeTimersWithFrames();
+    const created = "00000000-0000-4000-8000-0000000000c1";
+    const calls: Array<{ url: string; method: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        calls.push({ url, method: String(init.method), body });
+        const creating = init.method === "POST";
+        const page = { id: created, revision: creating ? 1 : (body.baseRevision as number) + 1 };
+        return new Response(JSON.stringify({ page }), { status: creating ? 201 : 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+    const onCreated = vi.fn();
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<PageEditor page={{ id: null, title: "", blocks: [], revision: null }} drafts={null} onCreated={onCreated} />);
+    });
+    await flush();
+
+    const editor = bodyEditor();
+    await cursorAt(editor, 1);
+    await click(chrome().querySelector<HTMLButtonElement>('button[aria-label="ブロックを追加"]')!);
+    await click(menuItem(menu("ブロックを足す"), "見出し 2"));
+    await type(editor, "合成の見出し");
+    await advance(1000);
+    const heading = { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "合成の見出し" }] };
+    expect(calls).toEqual([{ url: "/api/pages", method: "POST", body: { blocks: [heading, { type: "paragraph" }] } }]);
+    expect(onCreated).toHaveBeenCalledWith(created);
+
+    // 作ったあとも同じエディタのまま。帯の太字は、作ったページへの PATCH（作ったときの revision から）に乗る
+    expect(bodyEditor()).toBe(editor);
+    await select(editor, 1, 3);
+    await click(labelled("太字")!);
+    await advance(1000);
+    expect(calls.at(-1)).toEqual({
+      url: `/api/pages/${created}`,
+      method: "PATCH",
+      body: {
+        blocks: [
+          { ...heading, content: [{ type: "text", text: "合成", marks: [{ type: "bold" }] }, { type: "text", text: "の見出し" }] },
+          { type: "paragraph" },
+        ],
+        baseRevision: 1,
+      },
+    });
+    expect(calls).toHaveLength(2);
+  });
 });

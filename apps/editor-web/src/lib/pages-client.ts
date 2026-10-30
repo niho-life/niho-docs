@@ -1,5 +1,8 @@
 /** ブラウザから `/api/pages` を呼ぶ（同じ origin。cookie・token は扱わない）。 */
 
+import type { PageChunk } from "@niho/editor-store";
+import { PAGE_CHUNK } from "./page-limits";
+
 export type PageBody = {
   title?: string;
   blocks?: unknown[];
@@ -85,12 +88,19 @@ async function send(path: string, method: "POST" | "PATCH", body: unknown, optio
   return response.json();
 }
 
-/** 新しい空のページを作り、その id を返す。 */
-export async function createPageRequest(): Promise<string> {
-  const data = (await send("/api/pages", "POST", {})) as { page?: { id?: unknown } };
+/** 保存先のページ（id と、次の保存で `baseRevision` に使う revision）。 */
+export type SavedPage = { id: string; revision: number };
+
+/**
+ * 新しいページを作り（題名・本文を渡せば、それで作る）、その id と revision を返す。
+ * `keepalive` は保存（PATCH）と同じく、タブを閉じる・隠れる瞬間の作成。
+ */
+export async function createPageRequest(body: PageBody = {}, options: { keepalive?: boolean } = {}): Promise<SavedPage> {
+  const data = (await send("/api/pages", "POST", body, { keepalive: options.keepalive })) as { page?: { id?: unknown; revision?: unknown } };
   const id = data.page?.id;
-  if (typeof id !== "string" || !UUID_PATTERN.test(id)) throw new PageRequestError(500);
-  return id;
+  const revision = data.page?.revision;
+  if (typeof id !== "string" || !UUID_PATTERN.test(id) || !isRevision(revision)) throw new PageRequestError(500);
+  return { id, revision };
 }
 
 /**
@@ -103,4 +113,13 @@ export async function savePageRequest(id: string, body: PageBody, options: SaveR
   const revision = data.page?.revision;
   if (!isRevision(revision)) throw new PageRequestError(500);
   return revision;
+}
+
+/** 一覧の続き（cursor は前の応答の next）。 */
+export async function listPagesRequest(cursor: string): Promise<PageChunk> {
+  const response = await fetch(`/api/pages?limit=${PAGE_CHUNK}&cursor=${encodeURIComponent(cursor)}`, { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) throw new PageRequestError(response.status);
+  const data = (await response.json()) as { pages?: unknown; next?: unknown };
+  if (!Array.isArray(data.pages) || (data.next !== null && typeof data.next !== "string")) throw new PageRequestError(500);
+  return { pages: data.pages as PageChunk["pages"], next: data.next };
 }

@@ -7,11 +7,25 @@
  * - 今のページが、応答を受け取れなかった前の保存（届いたかどうか分からないもの）の内容と同じ。
  *   → その保存が届いていた。revision を採り直し、その上に今の変更を 1 回だけ送り直す。
  * 内容の比較は限定 AST の canonical な形（src/ast/blocks.ts）で、object のキーの順によらない。
+ *
+ * まだ作っていない新しいページ（pageId が null）は、最初の保存で POST して作り、以後はその id へ、
+ * 作ったときの revision の上に PATCH する（作る前の revision は `UNCREATED_REVISION`）。
  */
 
 import { validateBlocks } from "@/ast/blocks";
 import type { SaveContext, SaveFailure } from "./autosave";
-import { PageConflictError, PageRequestError, savePageRequest, type ConflictPage, type PageBody } from "./pages-client";
+import {
+  PageConflictError,
+  PageRequestError,
+  createPageRequest,
+  savePageRequest,
+  type ConflictPage,
+  type PageBody,
+  type SavedPage,
+} from "./pages-client";
+
+/** まだ作っていない新しいページの revision（サーバーの revision は 1 から）。端末の下書きの `baseRevision` にも使う。 */
+export const UNCREATED_REVISION = 0;
 
 export type PageContent = { title: string; blocks: unknown[] };
 
@@ -69,7 +83,9 @@ function outcomeUnknown(error: unknown): boolean {
 const MAX_UNCERTAIN = 32;
 
 export type PageSaver = {
-  /** 次の保存で `baseRevision` として送る revision（今の本文がもとにしている revision）。 */
+  /** 保存先のページの id（新しいページは、作るまで null）。 */
+  readonly pageId: string | null;
+  /** 次の保存で `baseRevision` として送る revision（今の本文がもとにしている revision。作る前は `UNCREATED_REVISION`）。 */
   readonly revision: number;
   save: (patch: PageBody, context: SaveContext) => Promise<void>;
   /** 「この内容で上書き」: 次の保存を、競合の応答のページの revision の上に `overwrite: true` で送る。 */
@@ -79,13 +95,19 @@ export type PageSaver = {
 };
 
 export function createPageSaver(options: {
-  pageId: string;
-  /** 読み込んだときの revision と、そのときの題名・本文。 */
+  /** 保存先のページ。null は新しいページ（最初の保存で作る）。 */
+  pageId: string | null;
+  /** 読み込んだときの revision と、そのときの題名・本文（新しいページは `UNCREATED_REVISION` と空の題名・本文）。 */
   revision: number;
   content: PageContent;
   request?: typeof savePageRequest;
+  create?: typeof createPageRequest;
+  /** 新しいページを作った（1 回だけ。作った保存の中で、応答を受けた直後に呼ぶ）。 */
+  onCreated?: (page: SavedPage) => void;
 }): PageSaver {
   const request = options.request ?? savePageRequest;
+  const create = options.create ?? createPageRequest;
+  let pageId = options.pageId;
   let revision = options.revision;
   // サーバーが `revision` のときに持っている題名・本文（部分更新を足した「送ったあとの内容」を作るため）
   let server: PageContent = options.content;
@@ -107,15 +129,27 @@ export function createPageSaver(options: {
   };
 
   return {
+    get pageId() {
+      return pageId;
+    },
     get revision() {
       return revision;
     },
     async save(patch, context) {
       let intended = apply(patch);
+      if (pageId === null) {
+        // 作る（409 は起きない）。応答を受け取れなかった作成の送り直しは、もう一度作る（ページが 2 つになりうる。本文は失わない）
+        const created = await create(patch, { keepalive: context.keepalive });
+        pageId = created.id;
+        settle(created.revision, intended);
+        options.onCreated?.(created);
+        return;
+      }
+      const id = pageId;
       let adopted = false;
       for (;;) {
         try {
-          const next = await request(options.pageId, patch, { baseRevision: revision, overwrite, keepalive: context.keepalive });
+          const next = await request(id, patch, { baseRevision: revision, overwrite, keepalive: context.keepalive });
           settle(next, intended);
           return;
         } catch (error) {

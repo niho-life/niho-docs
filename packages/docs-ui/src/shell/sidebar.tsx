@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import { Icon } from "./icons";
 import { ShellMenu } from "./menu";
 import { NewPageMenu, type NewPageKind } from "./new-page-menu";
@@ -12,6 +12,8 @@ export type ShellSidebarProps = {
   onCollapse?: () => void;
   newMenu?: { open: boolean; onToggle: () => void; onClose: () => void; onPick: (kind: NewPageKind) => void };
   search?: { open: boolean; value: string; onOpen: () => void; onClose: () => void; onChange: (value: string) => void };
+  /** 一覧の末尾（<ul> の直後、<nav> の中）に置くもの。段階読み込みの目印など。 */
+  listEnd?: ReactNode;
   me: {
     name: string;
     caption: string;
@@ -43,7 +45,7 @@ export function shellAccountItems(pendingInvites = 0, current?: string): ShellMe
  * 左の一覧。上は検索アイコンと＋（新しいページ）だけ。絞り込み（すべて／公開中／録音）は持たない。
  * 1行は題名と時刻。2行目は公開先・録音・作成中のときだけ。下は本人の行ひとつ。
  */
-export function ShellSidebar({ items, currentId, onSelect, onCollapse, newMenu, search, me }: ShellSidebarProps) {
+export function ShellSidebar({ items, currentId, onSelect, onCollapse, newMenu, search, listEnd, me }: ShellSidebarProps) {
   const newButton = useRef<HTMLButtonElement | null>(null);
   const meButton = useRef<HTMLButtonElement | null>(null);
   return (
@@ -121,6 +123,7 @@ export function ShellSidebar({ items, currentId, onSelect, onCollapse, newMenu, 
             </li>
           ))}
         </ul>
+        {listEnd}
       </nav>
       <div className="es-sb-foot">
         <button

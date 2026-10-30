@@ -4,12 +4,19 @@
  * 入力のたびに（300ms のまとめ。変換中は書かない）書き、サーバーへの保存がその内容で成功したら消す。
  * IndexedDB が使えない・容量を超えた・例外のときは、画面を壊さず「端末への保持なし」として続ける（`onResult` で知らせる）。
  * 容量の管理・「この端末で作業する」の選択・同期は持たない（#50）。
+ *
+ * まだ作っていない新しいページ（`/p/new`）は key が `NEW_PAGE_DRAFT_KEY`・`baseRevision` が `UNCREATED_REVISION` の
+ * 1 つの枠に書き、次に `/p/new` を開いたときに載せ直す（作る前に閉じた・送れなかった本文を失わない）。
+ * 作ったら `DraftKeeper.rekey` で、以後はそのページの id に書く（枠の下書きはこの画面が書いた分だけ消す）。
  */
 
-import { sameContent } from "./page-save";
+import { UNCREATED_REVISION, sameContent } from "./page-save";
+
+/** まだ作っていない新しいページの下書きの key（ページの id は UUID なので重ならない）。 */
+export const NEW_PAGE_DRAFT_KEY = "new";
 
 export type PageDraft = {
-  /** この題名・本文がもとにしているサーバーの revision。 */
+  /** この題名・本文がもとにしているサーバーの revision（作る前の新しいページは `UNCREATED_REVISION`）。 */
   baseRevision: number;
   title: string;
   blocks: unknown[];
@@ -38,7 +45,7 @@ function isPageDraft(value: unknown): value is PageDraft {
   return (
     typeof draft.baseRevision === "number" &&
     Number.isSafeInteger(draft.baseRevision) &&
-    draft.baseRevision > 0 &&
+    draft.baseRevision >= UNCREATED_REVISION &&
     typeof draft.title === "string" &&
     Array.isArray(draft.blocks) &&
     typeof draft.savedAt === "string"
@@ -175,6 +182,13 @@ export type DraftKeeper = {
   writeNow: (force?: boolean) => void;
   /** 開いたときに載せた下書きを、この画面が書いたものとして扱う（保存できたら消す）。 */
   adopt: (draft: PageDraft) => void;
+  /**
+   * 新しいページを作った: 以後は `pageId` に書く。それまでの key にこの画面が書いた（載せた）下書きは消す。
+   * `carry` は、作った内容のあとの変更がまだサーバーに無い（保存の最中に入力があった）。そのときは消す前に、
+   * 最後に書いた下書きをそのままの `baseRevision` で新しい key へ写し、次の書き込み（touch・writeNow）で今の内容に書き直す
+   * （画面を閉じたあとは書き直せない。写した下書きは作った内容より古いかもしれないので、次に開いたときに帯で比べる）。
+   */
+  rekey: (pageId: string, carry: boolean) => void;
   /** 変換が確定した（変換中で先へ送った書き込みを、すぐ書く）。 */
   compositionEnded: () => void;
   /**
@@ -192,6 +206,7 @@ export type DraftKeeper = {
 
 export function createDraftKeeper(options: {
   storage: DraftStorage;
+  /** 書く key（ページの id。作る前の新しいページは `NEW_PAGE_DRAFT_KEY`）。 */
   pageId: string;
   /** 今の題名・本文・もとにしている revision（書く直前にだけ呼ぶ）。 */
   read: () => Omit<PageDraft, "savedAt">;
@@ -201,6 +216,7 @@ export function createDraftKeeper(options: {
   delayMs?: number;
 }): DraftKeeper {
   const delay = options.delayMs ?? DRAFT_DELAY_MS;
+  let key = options.pageId;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let dirty = false;
   let disabled = false;
@@ -208,6 +224,8 @@ export function createDraftKeeper(options: {
   let last: Promise<void> = Promise.resolve();
   // この画面が書いた・載せた下書きの印（savedAt）
   const mine = new Set<string>();
+  // この画面が最後に書いた（載せた）下書き。消したら null（rekey で新しい key へ持っていく）
+  let lastWritten: PageDraft | null = null;
 
   const clear = () => {
     if (timer !== null) clearTimeout(timer);
@@ -249,9 +267,11 @@ export function createDraftKeeper(options: {
       return;
     }
     mine.add(draft.savedAt);
+    lastWritten = draft;
+    const target = key;
     // 書けなかったら、次の機会（writeNow・次の入力）にもう一度書く
     track(
-      () => options.storage.put(options.pageId, draft),
+      () => options.storage.put(target, draft),
       () => {
         dirty = true;
       },
@@ -280,6 +300,28 @@ export function createDraftKeeper(options: {
     },
     adopt(draft) {
       mine.add(draft.savedAt);
+      lastWritten = draft;
+    },
+    rekey(pageId, carry) {
+      const previous = key;
+      key = pageId;
+      if (disabled || previous === pageId) return;
+      const written = new Set(mine);
+      const carried = carry ? lastWritten : null;
+      if (carry) {
+        // 今の内容は次の書き込み（touch・writeNow）で新しい key に書く。それまでは最後に書いた下書きで守る
+        dirty = true;
+        if (carried) {
+          track(
+            () => options.storage.put(pageId, carried),
+            () => {
+              dirty = true;
+            },
+          );
+        }
+      }
+      // 前の key の下書きは、この画面が書いた分だけ消す（新しい key へ書いてから）
+      if (written.size > 0) track(() => options.storage.delete(previous, (stored) => written.has(stored.savedAt)));
     },
     compositionEnded() {
       if (dirty && timer !== null) later(0);
@@ -287,10 +329,12 @@ export function createDraftKeeper(options: {
     discard() {
       clear();
       dirty = false;
+      lastWritten = null;
       if (disabled || mine.size === 0) return;
       const written = new Set(mine);
+      const target = key;
       track(
-        () => options.storage.delete(options.pageId, (stored) => written.has(stored.savedAt)),
+        () => options.storage.delete(target, (stored) => written.has(stored.savedAt)),
         undefined,
         // 消し終えたら、それまでの印は要らない
         () => written.forEach((savedAt) => mine.delete(savedAt)),

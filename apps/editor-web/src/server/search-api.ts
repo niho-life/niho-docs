@@ -1,6 +1,6 @@
 import { QueryTooLongError, SEARCH_LIMIT_MAX, normalizeSearchQuery, type OwnerId, type SearchHit, type SearchOptions } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
-import { errorResponse, jsonResponse } from "./http";
+import { errorResponse, guarded, jsonResponse } from "./http";
 
 /** 本人のページを探す関数（packages/editor-store の searchPages に Pool を渡したもの）。 */
 export type SearchFn = (owner: OwnerId, query: string, options: SearchOptions) => Promise<SearchHit[]>;
@@ -13,21 +13,6 @@ export type SearchApiDeps = {
 };
 
 const LIMIT_PATTERN = /^[1-9]\d{0,2}$/;
-
-/**
- * 想定外の失敗は 500 の汎用エラー（内部の情報は応答に出さず、ログにも名前と code だけを書く）。
- * pages-api.ts の guarded と同じ（#33 と並行して触らないよう、ここに置いている）。
- */
-async function guarded(route: string, handler: () => Promise<Response>): Promise<Response> {
-  try {
-    return await handler();
-  } catch (error) {
-    const name = error instanceof Error ? error.name : "unknown";
-    const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : undefined;
-    console.error("editor-web: request failed", { route, name, code });
-    return errorResponse("internal");
-  }
-}
 
 type ParsedParams = { ok: true; query: string; limit: number | undefined } | { ok: false };
 

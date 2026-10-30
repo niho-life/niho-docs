@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DRAFT_DB_NAME,
   DRAFT_STORE,
+  NEW_PAGE_DRAFT_KEY,
   createDraftKeeper,
   createIndexedDbDraftStorage,
   decideRestore,
@@ -10,6 +11,7 @@ import {
   type DraftStorage,
   type PageDraft,
 } from "./drafts";
+import { UNCREATED_REVISION } from "./page-save";
 
 const PAGE_ID = "00000000-0000-4000-8000-000000000001";
 const paragraph = (text: string) => [{ type: "paragraph", content: [{ type: "text", text }] }];
@@ -55,6 +57,15 @@ describe("createIndexedDbDraftStorage", () => {
     await expect(storage.delete(PAGE_ID, () => true)).resolves.toBeUndefined();
   });
 
+  it("keeps a new page's draft (not created yet) under its own key", async () => {
+    const storage = createIndexedDbDraftStorage(new IDBFactory())!;
+    await storage.put(NEW_PAGE_DRAFT_KEY, draftOf("作る前", "作る前", UNCREATED_REVISION));
+    expect(await storage.get(NEW_PAGE_DRAFT_KEY)).toEqual(draftOf("作る前", "作る前", UNCREATED_REVISION));
+    expect(await storage.get(PAGE_ID)).toBeNull();
+    await storage.put(NEW_PAGE_DRAFT_KEY, draftOf("負", "負", -1));
+    expect(await storage.get(NEW_PAGE_DRAFT_KEY)).toBeNull();
+  });
+
   it("ignores a stored value that is not a draft", async () => {
     const factory = new IDBFactory();
     const storage = createIndexedDbDraftStorage(factory)!;
@@ -95,6 +106,17 @@ describe("decideRestore", () => {
     expect(decideRestore(draftOf("題", "下書き", 3), server)).toEqual({ action: "load", draft: draftOf("題", "下書き", 3) });
     expect(decideRestore(draftOf("題", "下書き", 2), server)).toEqual({ action: "conflict", draft: draftOf("題", "下書き", 2) });
   });
+
+  it("loads a new page's draft against the empty page, and drops an empty one", () => {
+    const empty = { title: "", blocks: [], revision: UNCREATED_REVISION };
+    expect(decideRestore(draftOf("作る前", "作る前", UNCREATED_REVISION), empty)).toEqual({
+      action: "load",
+      draft: draftOf("作る前", "作る前", UNCREATED_REVISION),
+    });
+    expect(decideRestore({ baseRevision: UNCREATED_REVISION, title: "", blocks: [{ type: "paragraph" }], savedAt: "2026-10-31T00:00:00.000Z" }, empty)).toEqual({
+      action: "discard",
+    });
+  });
 });
 
 describe("readDraft", () => {
@@ -117,14 +139,14 @@ describe("readDraft", () => {
 describe("createDraftKeeper", () => {
   afterEach(() => vi.useRealTimers());
 
-  function setup(options: { storage?: DraftStorage; composing?: () => boolean } = {}) {
+  function setup(options: { storage?: DraftStorage; composing?: () => boolean; pageId?: string; baseRevision?: number } = {}) {
     const storage = options.storage ?? createIndexedDbDraftStorage(new IDBFactory())!;
-    let content = { baseRevision: 3, title: "題", blocks: paragraph("一") };
+    let content = { baseRevision: options.baseRevision ?? 3, title: "題", blocks: paragraph("一") };
     const results: boolean[] = [];
     const read = vi.fn(() => content);
     const keeper = createDraftKeeper({
       storage,
-      pageId: PAGE_ID,
+      pageId: options.pageId ?? PAGE_ID,
       read,
       isComposing: options.composing ?? (() => false),
       onResult: (ok) => results.push(ok),
@@ -273,6 +295,57 @@ describe("createDraftKeeper", () => {
     keeper.discard();
     await keeper.settled();
     expect(read).not.toHaveBeenCalled();
+    expect(await storage.get(PAGE_ID)).toBeNull();
+  });
+
+  it("moves to the created page's id: deletes only what it wrote under the new page's key, and writes later changes under the id", async () => {
+    const { storage, keeper, set } = setup({ pageId: NEW_PAGE_DRAFT_KEY, baseRevision: UNCREATED_REVISION });
+    keeper.touch();
+    keeper.writeNow();
+    await keeper.settled();
+    expect(await storage.get(NEW_PAGE_DRAFT_KEY)).toMatchObject({ baseRevision: UNCREATED_REVISION, title: "題" });
+
+    // 作った内容が全てサーバーにある（carry なし）
+    keeper.rekey(PAGE_ID, false);
+    await keeper.settled();
+    expect(await storage.get(NEW_PAGE_DRAFT_KEY)).toBeNull();
+    expect(await storage.get(PAGE_ID)).toBeNull();
+
+    set({ baseRevision: 1, title: "作ったあと", blocks: paragraph("二") });
+    keeper.touch();
+    keeper.writeNow();
+    await keeper.settled();
+    expect(await storage.get(PAGE_ID)).toMatchObject({ baseRevision: 1, title: "作ったあと" });
+    expect(await storage.get(NEW_PAGE_DRAFT_KEY)).toBeNull();
+  });
+
+  it("leaves another tab's new-page draft alone when it moves to the created page's id", async () => {
+    const { storage, keeper } = setup({ pageId: NEW_PAGE_DRAFT_KEY, baseRevision: UNCREATED_REVISION });
+    keeper.touch();
+    keeper.writeNow();
+    await keeper.settled();
+    await storage.put(NEW_PAGE_DRAFT_KEY, draftOf("別のタブ", "別のタブ", UNCREATED_REVISION));
+    keeper.rekey(PAGE_ID, false);
+    await keeper.settled();
+    expect(await storage.get(NEW_PAGE_DRAFT_KEY)).toEqual(draftOf("別のタブ", "別のタブ", UNCREATED_REVISION));
+  });
+
+  it("carries the last draft to the created page's id when changes are not on the server yet, even after the screen closed", async () => {
+    const { storage, keeper, read } = setup({ pageId: NEW_PAGE_DRAFT_KEY, baseRevision: UNCREATED_REVISION });
+    keeper.touch();
+    keeper.writeNow();
+    await keeper.settled();
+    keeper.dispose();
+    keeper.rekey(PAGE_ID, true);
+    await keeper.settled();
+    // 閉じたあとは今の内容を読まない。最後に書いた下書きを、そのままの baseRevision で（次に開いたときに帯で比べる）
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(await storage.get(NEW_PAGE_DRAFT_KEY)).toBeNull();
+    expect(await storage.get(PAGE_ID)).toMatchObject({ baseRevision: UNCREATED_REVISION, title: "題", blocks: paragraph("一") });
+
+    // そのあとの保存が届いたら消す
+    keeper.discard();
+    await keeper.settled();
     expect(await storage.get(PAGE_ID)).toBeNull();
   });
 });

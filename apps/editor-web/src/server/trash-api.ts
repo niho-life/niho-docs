@@ -1,5 +1,5 @@
-import { errorResponse, isSameOriginRequest, jsonResponse, noContentResponse, notFoundResponse } from "./http";
-import { guarded, sessionOf, type PagesApiDeps } from "./pages-api";
+import { errorResponse, guarded, isSameOriginRequest, jsonResponse, noContentResponse, notFoundResponse } from "./http";
+import { sessionOf, type PagesApiDeps } from "./pages-api";
 
 /** GET /api/trash — 自分のゴミ箱（削除の新しい順・最大 500・本文は含めない）。 */
 export function listTrash(request: Request, deps: PagesApiDeps): Promise<Response> {
