@@ -42,7 +42,7 @@ describe("niho-docs-ui on React 19", () => {
     expect(createRequire(resolveFromDocsUi("react"))("./package.json").version).toBe(reactVersion);
   });
 
-  it("renders the docs-ui BlockEditor with the stored blocks and no invalid hook call", async () => {
+  it("renders the page editor with the stored blocks and no invalid hook call", async () => {
     const errors = vi.spyOn(console, "error");
     container = document.createElement("div");
     document.body.append(container);
