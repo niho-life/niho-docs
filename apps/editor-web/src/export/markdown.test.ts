@@ -634,3 +634,17 @@ describe("markdownLinkHref", () => {
     }
   });
 });
+
+describe("exportMarkdown: a large but valid body", () => {
+  it("exports a list item whose paragraph is far longer than V8's argument limit (parseBlocks accepts ~1 MiB)", () => {
+    const long = "あ".repeat(130_000);
+    const item = (content: unknown[]) => ({ type: "listItem", content });
+    const body = [
+      { type: "bulletList", content: [item([{ type: "paragraph", content: [{ type: "text", text: long }] }])] },
+      { type: "orderedList", content: [item([{ type: "text", text: long }])] },
+    ];
+    const out = exportMarkdown(body);
+    expect(out.startsWith("- あ")).toBe(true);
+    expect(out.length).toBeGreaterThan(260_000);
+  });
+});

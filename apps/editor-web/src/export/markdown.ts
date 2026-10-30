@@ -109,11 +109,16 @@ function inlineOf(node: JsonNode, depth: number): Char[] {
   return out;
 }
 
+/** 配列の末尾へ順に足す。引数に展開する push は、引数の数が V8 の上限を超える長さ（約 13 万字）で RangeError になるので使わない。 */
+function appendAll(target: Char[], part: readonly Char[]): void {
+  for (const char of part) target.push(char);
+}
+
 /** 項目の文字に足す（前に文字があれば空白でつなぐ）。 */
 function appendPart(text: Char[], part: Char[]): void {
   if (part.length === 0) return;
   if (text.length > 0) text.push({ ch: " ", marks: 0, href: null });
-  text.push(...part);
+  appendAll(text, part);
 }
 
 /** リストの項目を 1 段に平坦化する（入れ子のリストの項目は親の項目の後ろに並べる）。 */
@@ -137,7 +142,7 @@ function collectItem(nodes: unknown[], depth: number, text: Char[], nested: Char
     } else if (node.type === "text" || node.type === "hardBreak") {
       const part: Char[] = [];
       collectInline([node], depth, part);
-      text.push(...part);
+      appendAll(text, part);
     } else if (node.type === "paragraph" || node.type === "heading" || hasInlineChild(node)) {
       appendPart(text, inlineOf(node, depth));
     } else {
