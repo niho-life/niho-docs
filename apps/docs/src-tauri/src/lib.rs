@@ -74,7 +74,7 @@ const DATA_DIR_ENV: &str = "NIHO_DOCS_DATA_DIR";
 /// 開発・試験の起動の保存先の既定（~/Documents の下。本番は「NIHO docs」）。
 const DEV_DOCS_ROOT_NAME: &str = "NIHO docs dev";
 /// 開発・試験の起動の窓の題名（本番の窓と取り違えないため）。
-const DEV_WINDOW_TITLE: &str = "NIHO docs（開発版）";
+const DEV_WINDOW_TITLE: &str = "NIHO editor（開発版）";
 const MAX_SYSTEM_PROMPT_BYTES: usize = 400_000;
 const MAX_USER_PROMPT_BYTES: usize = 8 * 1024 * 1024;
 /// CLI の会話ごとの workspace を残す時間（続きの `--resume` に要る間だけ）。

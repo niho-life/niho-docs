@@ -47,8 +47,8 @@ export function DesktopShell(props: { children: ReactNode; icon?: string; browse
       <div className="window-titlebar" data-tauri-drag-region={props.browser ? undefined : true}>
         <div className="lead" data-tauri-drag-region={props.browser ? undefined : true}>
           {home
-            ? <button type="button" className="tb-home" aria-label="NIHO docs ホームへ" onClick={home}>{props.icon && <img src={props.icon} alt="" draggable={false} />}<span>NIHO docs</span></button>
-            : <>{props.icon && <img src={props.icon} alt="" draggable={false} />}<span data-tauri-drag-region={props.browser ? undefined : true}>NIHO docs</span></>}
+            ? <button type="button" className="tb-home" aria-label="NIHO editor ホームへ" onClick={home}>{props.icon && <img src={props.icon} alt="" draggable={false} />}<span>NIHO editor</span></button>
+            : <>{props.icon && <img src={props.icon} alt="" draggable={false} />}<span data-tauri-drag-region={props.browser ? undefined : true}>NIHO editor</span></>}
           <div className="rail-acts" ref={setRailHost} />
         </div>
         <div className="acts" ref={setHost} />
