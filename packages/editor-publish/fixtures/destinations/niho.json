@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "niho",
+  "label": "NIHO",
+  "host": "niho.example.com",
+  "path": "article",
+  "ranges": ["live", "unlisted"],
+  "extras": ["app", "news"],
+  "accepts": {
+    "blocks": ["paragraph", "heading", "list", "quote", "figure", "divider", "note"],
+    "marks": ["bold", "italic", "strike", "code", "link"]
+  },
+  "requires": [
+    { "id": "cover", "kind": "cover", "consent": false, "message": "カバー写真を選んでください", "fix": "cover" },
+    { "id": "lead", "kind": "lead", "message": "リードを書いてください", "fix": "lead" },
+    { "id": "category", "kind": "category", "message": "カテゴリを選んでください", "fix": "category" }
+  ]
+}
