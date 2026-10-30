@@ -33,11 +33,12 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
   it("applies every migration to an empty schema once and creates exactly the four tables without rows", async () => {
     const client = await pool.connect();
     try {
+      const names = (await readMigrations()).map((file) => file.name);
       const first = await applyMigrations(client);
-      assert.deepEqual(first.applied, ["0001_editor_store.sql"]);
+      assert.deepEqual(first.applied, names);
       const second = await applyMigrations(client);
       assert.deepEqual(second.applied, []);
-      assert.deepEqual(second.skipped, ["0001_editor_store.sql"]);
+      assert.deepEqual(second.skipped, names);
     } finally {
       client.release();
     }
