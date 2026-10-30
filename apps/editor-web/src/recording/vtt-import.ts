@@ -85,8 +85,23 @@ function decodeEntities(text: string): string {
   return text.replace(/&(amp|lt|gt|lrm|rlm|nbsp);/g, (entity) => ENTITIES[entity] ?? entity);
 }
 
-/** タグ（`<…>`）。そのうち voice の開始タグは docs-core の parseVtt と同じ形（`<v 名前>`・`<v.class 名前>`）。 */
-const TAG = /<([^>]*)>/g;
+/**
+ * タグ（`<…>`）を前から 1 回の走査で見つける（`/<([^>]*)>/g` と同じ範囲。最初の `>` までが 1 つのタグ）。
+ * 正規表現だと、`>` で閉じない `<` が大量にある cue（80,000 文字で約 5.5 秒）で、各 `<` から末尾まで走査し直して二次時間になる。
+ * ここでは、`>` が見つからなければ、それ以降に閉じるタグは無いのでそこで終える。
+ */
+function* tagsOf(text: string): Generator<{ index: number; length: number; inner: string }> {
+  let from = 0;
+  for (;;) {
+    const open = text.indexOf("<", from);
+    if (open === -1) return;
+    const close = text.indexOf(">", open + 1);
+    if (close === -1) return;
+    yield { index: open, length: close - open + 1, inner: text.slice(open + 1, close) };
+    from = close + 1;
+  }
+}
+/** voice の開始タグは docs-core の parseVtt と同じ形（`<v 名前>`・`<v.class 名前>`）。 */
 const VOICE = /^v(?:\.[^\s>]*)?(?:[ \t]+([^>]*))?$/i;
 
 type Run = { voice: string | null; text: string };
@@ -95,11 +110,11 @@ type Run = { voice: string | null; text: string };
 export function splitCueByVoice(text: string): Run[] {
   const runs: Run[] = [{ voice: null, text: "" }];
   let last = 0;
-  for (const match of text.matchAll(TAG)) {
+  for (const tag of tagsOf(text)) {
     const current = runs[runs.length - 1]!;
-    current.text += text.slice(last, match.index);
-    last = match.index + match[0].length;
-    const voice = VOICE.exec(match[1] ?? "");
+    current.text += text.slice(last, tag.index);
+    last = tag.index + tag.length;
+    const voice = VOICE.exec(tag.inner);
     if (!voice) continue;
     const name = decodeEntities(voice[1] ?? "").trim() || null;
     if (name === current.voice) continue;

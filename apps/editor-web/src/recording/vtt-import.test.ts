@@ -180,3 +180,19 @@ describe("importVtt", () => {
     expect(importVtt({ name: "n".repeat(1025), vtt: source, lang: "ja" })).toEqual({ ok: false, reason: "name" });
   });
 });
+
+describe("splitCueByVoice: unterminated tags", () => {
+  it("scans a cue of 80,000 unterminated `<` in linear time (no quadratic rescan) and keeps the text", () => {
+    const cue = "<".repeat(80_000);
+    const started = performance.now();
+    const runs = splitCueByVoice(cue);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(runs).toEqual([{ voice: null, text: cue }]);
+  });
+
+  it("treats everything up to the first `>` as one tag, like the old regex (`a<b<c>d`)", () => {
+    expect(splitCueByVoice("a<b<c>d")).toEqual([{ voice: null, text: "ad" }]);
+    expect(splitCueByVoice("<v Alpha>x<y")).toEqual([{ voice: "Alpha", text: "x<y" }]);
+    expect(splitCueByVoice("x < y > z")).toEqual([{ voice: null, text: "x  z" }]);
+  });
+});
