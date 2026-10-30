@@ -62,6 +62,15 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
   const frame = useEditorFrame();
   const createdRef = useRef<string | null>(null);
   const titleRef = useRef("");
+  // この下書きのエディタがまだ画面にあるか。保存（POST）が終わる前に「録音から」へ移った・別の下書きへ戻ったときは、
+  // URL が `/p/new` のままでも、その URL を作ったページの ID へ替えない（pathname だけでは別の画面と区別できない）
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
   return (
     <PageEditor
       page={{ id: null, title: "", blocks: [] }}
@@ -74,7 +83,7 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
         props.onCreated(id);
         frame.pageCreated(id, titleRef.current);
         // 保存が終わる前に別の画面へ移っていたら、その画面の URL は替えない
-        if (window.location.pathname !== "/p/new") return;
+        if (!aliveRef.current || window.location.pathname !== "/p/new") return;
         window.history.replaceState(null, "", `/p/${id}`);
         rememberLastPage(id);
       }}
