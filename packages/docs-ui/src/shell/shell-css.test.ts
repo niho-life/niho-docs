@@ -126,6 +126,52 @@ describe("shell.css（モック v6 の枠のスタイル）", () => {
     expect(bodyOf(".es-rail")).toContain("flex-direction:column");
   });
 
+  it("--ed-ink-faint は文字に使わない（装飾の矢印 ▾ と「＋」のアイコンだけ。非テキストの 3:1。#43）", () => {
+    const users = rules.filter((rule) => rule.nodes.some((node) => node.type === "decl" && node.value.includes("--ed-ink-faint")));
+    expect(users.length).toBeGreaterThan(0);
+    for (const rule of users) {
+      for (const selector of rule.selectors) expect(selector, selector).toMatch(/ \.es-cv$| \.es-addrow button$/);
+    }
+    // プレースホルダー（data-ph の ::before）は文字なので 4.5:1 の --ed-ink-mute
+    const placeholder = rules.find((rule) => rule.selectors.includes(`${PREFIX}.es-root .es-tt:empty::before`));
+    expect(placeholder?.toString()).toContain("color:var(--ed-ink-mute)");
+    // 入力欄のプレースホルダーも同じ色に揃える（ブラウザの既定は Safari の darkgray のように 4.5:1 に届かないものがある）
+    expect(bodyOf(".es-root ::placeholder")).toBe("color:var(--ed-ink-mute);opacity:1");
+  });
+
+  it("橙の文字は --ed-amber-ink。--ed-amber（--niho-orange）は面・点だけ（#43）", () => {
+    for (const rule of rules) {
+      for (const node of rule.nodes) {
+        if (node.type !== "decl" || !/var\(--ed-amber\)/.test(node.value)) continue;
+        expect(node.prop, `${rule.selector} { ${node.prop}: ${node.value} }`).toMatch(/^background/);
+      }
+    }
+    for (const selector of [".es-bd mark", ".es-upnote", ".es-sh-note.es-sh-left"]) expect(bodyOf(selector), selector).toContain("color:var(--ed-amber-ink)");
+  });
+
+  it("文字を opacity で薄めない（AA を割るので、薄めるのは押せない状態と飾りの面だけ。#43）", () => {
+    const faded = rules.flatMap((rule) =>
+      rule.nodes
+        .filter((node): node is Declaration => node.type === "decl" && node.prop === "opacity" && Number(node.value) > 0 && Number(node.value) < 1)
+        .map(() => rule.selectors),
+    );
+    expect(faded.length).toBeGreaterThan(0);
+    for (const selectors of faded) for (const selector of selectors) expect(selector, selector).toMatch(/:disabled$|--off$|>i$/);
+    // 済んだ提案の段落は、opacity ではなく --ed-ink-mute の文字で沈める
+    expect(bodyOf(".es-blk--done")).toBe("color:var(--ed-ink-mute)");
+  });
+
+  it("本文へ移動（skip link）: フォーカスするまで切り抜いて見せず、900px 未満で一覧・レールが全画面のときは出さない", () => {
+    expect(bodyOf(".es-skip")).toContain("position:absolute");
+    expect(bodyOf(".es-skip:not(:focus)")).toBe("clip-path:inset(50%)");
+    // 移動先の main（tabindex=-1）には枠を出さない
+    expect(bodyOf(".es-canvas:focus")).toBe("outline:none");
+    const media = root.nodes.find((node): node is AtRule => node.type === "atrule" && node.name === "media" && node.params === "(max-width:900px)")!;
+    const hide = media.nodes?.find((node): node is Rule => node.type === "rule" && node.selectors.includes(`${PREFIX}.es-root[data-view="list"] .es-skip`));
+    expect(hide?.selectors).toContain(`${PREFIX}.es-root[data-view="rail"] .es-skip`);
+    expect(hide?.toString()).toContain("display:none");
+  });
+
   it("900px 未満: 一覧とレールは全画面、道具は下端の帯、ヘッダーに題名", () => {
     const media = root.nodes.filter((node): node is AtRule => node.type === "atrule" && node.name === "media" && node.params === "(max-width:900px)");
     expect(media).toHaveLength(1);
@@ -142,5 +188,35 @@ describe("shell.css（モック v6 の枠のスタイル）", () => {
     expect(inside(".es-ttl")).toContain("display:block");
     expect(inside('.es-root[data-rail="open"] .es-mtb')).toContain("display:none");
     expect(bodyOf(".es-mtb")).toContain("display:none");
+  });
+});
+
+describe("文字の最小は 12px（#43）", () => {
+  /** px の font-size（font の省略形も）を集める。em・% などの相対値は数えない。 */
+  const pxSizes = (source: string) => {
+    const sizes: { selector: string; px: number }[] = [];
+    postcss.parse(source).walkDecls((decl) => {
+      const value = decl.prop === "font-size" ? decl.value : decl.prop === "font" ? (/^(?:[\w-]+\s+)*?([\d.]+px)/.exec(decl.value)?.[1] ?? "") : "";
+      const px = /^([\d.]+)px\b/.exec(value.trim());
+      if (px) sizes.push({ selector: (decl.parent as Rule).selector, px: Number(px[1]) });
+    });
+    return sizes;
+  };
+
+  it("shell.css に 12px 未満の font-size の宣言が無い", () => {
+    const sizes = pxSizes(css);
+    expect(sizes.length).toBeGreaterThan(100);
+    expect(sizes.filter((size) => size.px < 12)).toEqual([]);
+  });
+
+  it("editor.css（BlockEditor）の font-size も 12px 以上（もとの 10.5px・11px・11.5px は 12px にした）", () => {
+    const editor = readFileSync(new URL("../styles/editor.css", import.meta.url), "utf8");
+    const sizes = pxSizes(editor);
+    expect(sizes.length).toBeGreaterThan(5);
+    expect(sizes.filter((size) => size.px < 12)).toEqual([]);
+    // その 3 つ（時刻の印・ブロックの一覧の小見出しと右のヒント）が 12px であること
+    for (const selector of [".doc.timestamps-on p > .transcript-timestamp", ".be-slash .h", ".be-slash .hint"]) {
+      expect(sizes.find((size) => size.selector.endsWith(selector))?.px, selector).toBe(12);
+    }
   });
 });

@@ -143,6 +143,65 @@ describe("公開のシート（dialog・Esc・フォーカス）", () => {
   });
 });
 
+describe("公開のシート（外を inert にする。#43）", () => {
+  const inertOf = (host: HTMLElement) => [...host.querySelectorAll("[inert]")].map((el) => el.className || el.tagName.toLowerCase());
+
+  it("開いているあいだ、シートの外（.es-root の中の兄弟: 本文へ移動・枠）は inert。シート自身は inert でない", () => {
+    const host = mount(<Opener />);
+    expect(inertOf(host)).toEqual([]);
+    click(byText(host, "button", "公開"));
+    const root = host.querySelector(".es-root")!;
+    const veil = host.querySelector<HTMLElement>(".es-veil")!;
+    expect(veil.parentElement).toBe(root);
+    // .es-root の子のうち、幕（veil）以外がすべて inert
+    for (const child of root.children) expect(child.hasAttribute("inert"), child.className).toBe(child !== veil);
+    expect(inertOf(host)).toEqual(["es-skip", "es-ws"]);
+    expect(veil.closest("[inert]")).toBeNull();
+    expect(host.querySelector('[role="dialog"]')!.closest("[inert]")).toBeNull();
+  });
+
+  it("閉じると inert を外し、そのあとで開いた公開ボタンへフォーカスを戻す", () => {
+    const host = mount(<Opener />);
+    const opener = byText(host, "button", "公開")!;
+    act(() => opener.focus());
+    click(opener);
+    expect(opener.closest("[inert]")).not.toBeNull();
+    key(document.activeElement!, "Escape");
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(inertOf(host)).toEqual([]);
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("開く前から inert・aria-hidden だった要素は、閉じても元のまま（付けた分だけを外す）", () => {
+    const host = mount(<Opener />);
+    const ws = host.querySelector(".es-ws")!;
+    const skip = host.querySelector(".es-skip")!;
+    ws.setAttribute("inert", "");
+    skip.setAttribute("aria-hidden", "true");
+    click(byText(host, "button", "公開"));
+    expect(ws.hasAttribute("inert")).toBe(true);
+    expect(skip.hasAttribute("inert")).toBe(true);
+    act(() => {
+      host.querySelector(".es-veil")!.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    // もとから inert だった枠は inert のまま、付けた「本文へ移動」の inert は外れ、aria-hidden には触らない
+    expect(ws.hasAttribute("inert")).toBe(true);
+    expect(skip.hasAttribute("inert")).toBe(false);
+    expect(skip.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it(".es-root の外（同じページの別の要素）には触らない", () => {
+    const outside = document.createElement("div");
+    outside.className = "outside";
+    document.body.append(outside);
+    const host = mount(<Opener />);
+    click(byText(host, "button", "公開"));
+    expect(outside.hasAttribute("inert")).toBe(false);
+    expect(host.hasAttribute("inert")).toBe(false);
+  });
+});
+
 describe("公開のシート（選ぶ・直す・公開）", () => {
   it("発信先を選ぶと条件と範囲が出て、radio の aria-checked が替わる", () => {
     const host = mount(<Opener />);

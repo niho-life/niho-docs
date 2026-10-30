@@ -1,4 +1,7 @@
-import type { ReactNode } from "react";
+import { useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+
+/** 本文（main）の id。skip link の移動先。 */
+const SHELL_MAIN_ID = "es-main";
 
 export type EditorShellProps = {
   /** 左の一覧（ShellSidebar）。 */
@@ -25,17 +28,29 @@ export type EditorShellProps = {
  * editor の枠。ws グリッド（一覧｜ヘッダー＋ページ＋レール）。<900px では、一覧・ページ・レールのどれかひとつを全画面で出す。
  * 状態はすべて props（呼ぶ側が持つ）。DocsHost・通信・保存は持たない。
  * 祖先に data-docs-app-root と data-docs-shared-ui が要る（shell.css は共通 UI の root の中だけに効く）。
+ * 最初のフォーカス先は「本文へ移動」（skip link。普段は見えず、フォーカスで現れる）。押すと本文（main）へフォーカスを移す。
+ * URL の # は変えない（呼ぶ側の hash の route を壊さない）。
  */
 export function EditorShell({ sidebar, header, rail, toolbar, sidebarOpen, railOpen, overlay, children }: EditorShellProps) {
   const view = sidebarOpen ? "list" : railOpen && rail ? "rail" : "page";
+  const main = useRef<HTMLElement | null>(null);
+  const skip = (event: ReactMouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    main.current?.focus();
+  };
   return (
     <div className="es-root" data-editor-shell data-sidebar={sidebarOpen ? "open" : "closed"} data-rail={railOpen && rail ? "open" : "closed"} data-view={view}>
+      <a className="es-skip" href={`#${SHELL_MAIN_ID}`} onClick={skip}>
+        本文へ移動
+      </a>
       <div className="es-ws">
         {sidebar}
         <div className="es-doc">
           {header}
           <div className="es-dbody">
-            <main className="es-canvas">{children}</main>
+            <main ref={main} id={SHELL_MAIN_ID} className="es-canvas" tabIndex={-1}>
+              {children}
+            </main>
             {railOpen && rail}
           </div>
           {toolbar}
