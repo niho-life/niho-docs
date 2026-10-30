@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/editor-web-ci.yml"
+      - "scripts/editor-deploy/**"
       - "apps/editor-web/**"
       - "packages/editor-store/**"
       - "packages/docs-ui/**"
@@ -14,6 +15,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/editor-web-ci.yml"
+      - "scripts/editor-deploy/**"
       - "apps/editor-web/**"
       - "packages/editor-store/**"
       - "packages/docs-ui/**"
@@ -110,3 +112,19 @@ jobs:
         run: npm -C apps/editor-web run test:startup
       - name: Create, write, reload (EDITOR_AUTH_MODE=stub, next dev)
         run: npm -C apps/editor-web run test:e2e
+
+  # 配備の道具（docs/ops/editor-deploy.md）。本番には触れない: 構文と image の build だけを確かめる。
+  editor-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -x scripts/editor-deploy/lib.sh scripts/editor-deploy/gcp-bootstrap.sh scripts/editor-deploy/deploy.sh
+      - name: The example env file sets every variable the scripts require
+        run: |
+          set -euo pipefail
+          cp scripts/editor-deploy/deploy.env.example "$RUNNER_TEMP/deploy.env"
+          DEPLOY_ENV="$RUNNER_TEMP/deploy.env" bash -c 'source scripts/editor-deploy/lib.sh && load_deploy_env && test "$DB_NAME" = niho_editor'
+      - name: Build the migrate image
+        run: DOCKER_BUILDKIT=1 docker build -f scripts/editor-deploy/Dockerfile.migrate -t editor-migrate-ci .

@@ -1,0 +1,32 @@
+# web と migrate の 2 つの image を 1 回のビルドで作る。scripts/editor-deploy/deploy.sh が呼ぶ:
+#   gcloud builds submit --config scripts/editor-deploy/cloudbuild.yaml --substitutions=_IMAGE=…,_TAG=… .
+steps:
+  - id: web
+    name: gcr.io/cloud-builders/docker
+    env: ["DOCKER_BUILDKIT=1"]
+    args:
+      - build
+      - --file=apps/editor-web/Dockerfile
+      - --tag=${_IMAGE}:${_TAG}
+      - --tag=${_IMAGE}:latest
+      - .
+  - id: migrate
+    name: gcr.io/cloud-builders/docker
+    env: ["DOCKER_BUILDKIT=1"]
+    args:
+      - build
+      - --file=scripts/editor-deploy/Dockerfile.migrate
+      - --tag=${_IMAGE}-migrate:${_TAG}
+      - --tag=${_IMAGE}-migrate:latest
+      - .
+images:
+  - ${_IMAGE}:${_TAG}
+  - ${_IMAGE}:latest
+  - ${_IMAGE}-migrate:${_TAG}
+  - ${_IMAGE}-migrate:latest
+substitutions:
+  _IMAGE: unset
+  _TAG: dev
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1800s
