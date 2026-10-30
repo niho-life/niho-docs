@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { act, version as reactVersion } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { MAX_TITLE_CHARS } from "@/lib/page-limits";
 import { PageEditor } from "./PageEditor";
 
 const appRequire = createRequire(import.meta.url);
@@ -62,5 +63,27 @@ describe("niho-docs-ui on React 19", () => {
     expect(body?.textContent).toContain("合成の本文");
     expect(container.querySelector<HTMLTextAreaElement>("textarea.page-title")?.value).toBe("合成の題名");
     expect(container.querySelector('[role="status"]')?.textContent).toBe("保存済み");
+  });
+
+  it("caps the title at the server limit so an over-long title never enters autosave", async () => {
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<PageEditor page={{ id: "00000000-0000-4000-8000-000000000001", title: "合成の題名", blocks: [] }} />);
+    });
+    const title = container.querySelector<HTMLTextAreaElement>("textarea.page-title")!;
+    const set = (value: string) => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(title, value);
+      title.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+
+    await act(async () => set("あ".repeat(MAX_TITLE_CHARS + 1)));
+    expect(Array.from(title.value)).toHaveLength(MAX_TITLE_CHARS);
+    expect(container.textContent).toContain(`題名は ${MAX_TITLE_CHARS} 字までです。`);
+
+    await act(async () => set("あ".repeat(MAX_TITLE_CHARS - 1)));
+    expect(Array.from(title.value)).toHaveLength(MAX_TITLE_CHARS - 1);
+    expect(container.textContent).not.toContain("字までです");
   });
 });

@@ -1,8 +1,9 @@
 import { isLanguage } from "@niho/docs-core";
 import { PAGE_KINDS, type Block, type CreatePageInput, type PageKind, type PagePatch } from "@niho/editor-store";
 
-/** 題名の上限（文字数。DB の CHECK と同じ）。 */
-export const MAX_TITLE_CHARS = 500;
+import { MAX_TITLE_CHARS } from "../lib/page-limits";
+
+export { MAX_TITLE_CHARS };
 /** 本文（blocks の JSON）の上限。要求の本文の上限（1 MiB）の内側に収まる値にする。 */
 export const MAX_BLOCKS_BYTES = 1000 * 1024;
 /** 本文の入れ子の深さの上限（深すぎる JSON で DB・描画を詰まらせない）。 */

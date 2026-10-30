@@ -9,6 +9,7 @@ import { useEditor, type Editor } from "@tiptap/react";
 import { BlockEditor, PageTitle } from "niho-docs-ui/components/BlockEditor";
 import { ENABLED_INPUT_RULES, buildBlockEditorExtensions } from "niho-docs-ui/lib/block-editor/index";
 import { createAutosave, type Autosave, type SaveState } from "@/lib/autosave";
+import { MAX_TITLE_CHARS } from "@/lib/page-limits";
 import { savePageRequest, type PageBody } from "@/lib/pages-client";
 
 export type EditablePage = {
@@ -37,6 +38,7 @@ export function PageEditor(props: { page: EditablePage }) {
   const [title, setTitle] = useState(page.title);
   const [state, setState] = useState<SaveState>("saved");
   const [unreadable, setUnreadable] = useState(false);
+  const [titleClamped, setTitleClamped] = useState(false);
   const unreadableRef = useRef(false);
   const composingRef = useRef(false);
 
@@ -101,11 +103,16 @@ export function PageEditor(props: { page: EditablePage }) {
       <PageTitle
         value={title}
         editor={editor}
-        onChange={(value) => {
+        onChange={(input) => {
+          // サーバーが受けない長さの題名を自動保存に載せない（失敗した変更は残って本文の保存も止めるため）。上限で止めて知らせる
+          const chars = Array.from(input);
+          const value = chars.length > MAX_TITLE_CHARS ? chars.slice(0, MAX_TITLE_CHARS).join("") : input;
+          setTitleClamped(value !== input);
           setTitle(value);
           autosaveRef.current?.change({ title: value });
         }}
       />
+      {titleClamped && <p role="status">題名は {MAX_TITLE_CHARS} 字までです。</p>}
       {unreadable && <p role="alert">本文を読み込めませんでした。この画面では本文を変更しません。</p>}
       <BlockEditor editor={editor} />
     </div>
