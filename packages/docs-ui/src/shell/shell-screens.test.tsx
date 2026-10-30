@@ -66,6 +66,8 @@ describe("LoginScreen", () => {
     for (const text of ["書く", "NIHO アカウントで続けます。", "NIHOでログイン", "アカウントを作る", "ヘルプ", "© NIHO", "niho.life"]) expect(html).toContain(text);
     expect(html).not.toMatch(/<input|type="password"/);
     expect(html).toContain('<main class="es-split-box">');
+    // 名前（ロゴ）も header（banner）に入れ、ランドマークの外に中身を置かない（#43）
+    expect(html).toContain('<header class="es-lg-brand">');
     expect(html).toContain('class="es-root es-root--scroll"');
     expect(unlabeledButtons(html)).toEqual([]);
   });
@@ -122,10 +124,16 @@ describe("PublishSheet（publish）", () => {
     expect(html).toMatch(/aria-disabled="true" class="es-chk es-chk--on es-chk--off"/);
   });
 
-  it("接続していない発信先は選べず「接続する ›」", () => {
+  it("接続していない発信先は選べず「接続する ›」。名前は見えている文字そのもの（aria-label で置き換えない。WCAG 2.5.3・#43）", () => {
     const html = form({ dests: DESTS.map((dest) => (dest.id === "site" ? { ...dest, connected: false } : dest)) });
-    expect(html).toContain("接続する ›");
-    expect(html).toContain('aria-label="自分のサイト に接続する"');
+    // 矢印（›）だけは読み上げない
+    expect(html).toContain('<span class="es-tag-no">接続する<span aria-hidden="true"> ›</span></span>');
+    const button = /<button type="button" class="es-dst es-dst--site"([^>]*)>([\s\S]*?)<\/button>/.exec(html);
+    expect(button).not.toBeNull();
+    // aria-label を持たず、見えている発信先・説明・URL・「接続する」が名前になる
+    expect(button![1]).not.toContain("aria-label");
+    const name = button![2]!.replace(/<span aria-hidden="true">[^<]*<\/span>/g, "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    expect(name).toBe("自分のサイト 本人のサイト mika-sato.example/posts/x 接続する");
     expect([...html.matchAll(/role="radio"/g)]).toHaveLength(2);
   });
 

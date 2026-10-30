@@ -2,7 +2,7 @@
  * NIHO editor の面の token（モック v6。#48 / Epic #30）。
  *
  * niho-ui/styles/tokens.css（web の globals.css の写し）を先に読み込む。緑と役割色は、そこにある --niho-* を指す（値を写さない）。
- * ここで値を持つのは、tokens.css に無い「editor の面の中立色」と、白地に載せる緑の文字色 --ed-accent-ink だけ。
+ * ここで値を持つのは、tokens.css に無い「editor の面の中立色」と、白地に載せる文字色 --ed-accent-ink（緑）・--ed-amber-ink（橙）だけ。
  * tokens.css は web が正で別リポの検査が照らすので、この PR では動かさない。既存の --niho-* の値も上書きしない。
  *
  * 使い方の決まり（color-style-guide §3.1a と同じ）:
@@ -11,13 +11,22 @@
  *  - 選択チップは淡色面 --ed-accent-soft ＋ --ed-accent-ink の文字。
  *  - 切り替え（サブタブ）に緑を使わない。沈めたトラック --ed-track ＋ 白いピル。
  *  - 緑の生の hex を増やさない。必要な緑は --niho-* を --ed-* に束ねて引く。
+ *
+ * コントラスト（WCAG AA。#43）:
+ *  - 文字の token（--ed-ink・-sub・-mute・--ed-accent-ink・--ed-amber-ink・--ed-track-ink）は、editor の淡い面の token
+ *    （white・canvas・shell・sand・sand-2・accent-soft・track・amber-soft・red-soft）のどれに載せても 4.5:1 以上。
+ *    editor-tokens.test.ts が計算して固定する。
+ *  - --ed-ink-faint は文字に使わない（プレースホルダーにも使わない）。装飾の矢印・アイコンだけで、非テキストの 3:1 を満たす。
  */
 :root {
   /* ── 文字 ── */
   --ed-ink: #2a2a26;
   --ed-ink-sub: #54544d;
-  --ed-ink-mute: #8e8e86;
-  --ed-ink-faint: #bdbdb7;
+  /* 補助の文字（時刻・説明・小見出し・プレースホルダー）。モック v6 の #8e8e86（白で 3.3:1）を WCAG AA 4.5:1 に合わせて暗くした。#43。
+   * #706f68 では --ed-track・--ed-red-soft の上で 4.39:1 と足りないので、さらに少しだけ暗くした（白 5.20・canvas 5.12・track 4.52） */
+  --ed-ink-mute: #6e6d66;
+  /* 装飾の矢印（▾）と「＋」のアイコンだけ（文字には使わない）。#bdbdb7（白で 1.9:1）を非テキストの 3:1 に合わせて暗くした。#43（白 3.56・最も淡い面の track で 3.10） */
+  --ed-ink-faint: #898880;
 
   /* ── 地・面・線 ── */
   --ed-white: #fff;
@@ -46,6 +55,10 @@
   /* ── 役割色（既存の --niho-* を引く。値は同じ） ── */
   --ed-amber: var(--niho-orange);
   --ed-amber-soft: var(--niho-orange-pale);
+  /* 橙の文字（「あと 2 つ」・更新の注意・CONFIRM の印）。--niho-orange（#c8713a）は白で 3.57:1 と小さい文字に足りないので、
+   * 文字にだけこちらを使う（面・点・線は --ed-amber のまま。--niho-orange は変えない）。WCAG AA 4.5:1。#43。
+   * #a85a28 では --ed-amber-soft の上（CONFIRM の印）で 4.49:1 と足りないので、さらに少しだけ暗くした（白 5.22・amber-soft 4.64） */
+  --ed-amber-ink: #a55827;
   --ed-blue: var(--niho-info);
   --ed-blue-soft: var(--niho-info-soft);
   --ed-red: var(--niho-danger);

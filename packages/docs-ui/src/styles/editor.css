@@ -51,7 +51,7 @@
   overflow: hidden;
   color: var(--niho-text-sub);
   font-family: var(--font-family-mono);
-  font-size: 10.5px;
+  font-size: 12px; /* 文字の最小は 12px（#43。もとは 10.5px） */
   font-variant-numeric: tabular-nums;
   line-height: 2.2;
   letter-spacing: 0;
@@ -236,7 +236,7 @@
   padding: 6px;
 }
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be-slash .h {
-  font-size: 11px;
+  font-size: 12px; /* 文字の最小は 12px（#43。もとは 11px） */
   font-weight: 800;
   color: var(--niho-text-muted);
   letter-spacing: 0.06em;
@@ -272,7 +272,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .be-slash .hint {
   margin-left: auto;
   font-family: var(--font-family-mono);
-  font-size: 11.5px;
+  font-size: 12px; /* 文字の最小は 12px（#43。もとは 11.5px） */
   color: var(--niho-text-muted);
 }
 /* ページの操作（「録音のページ」）の枠の中のアイコン */

@@ -129,6 +129,7 @@ Webの操作controllerは固定ID・操作内容を決め、commit送信前の`o
 - 色は `niho-ui/styles/editor-tokens.css` の `--ed-*`（`niho-ui/styles/tokens.css` を先に読む）。主ボタンは `--ed-primary-bg` と `--ed-primary-ink` をセットで当てる。`--ed-accent-ink` は文字用で、面に使わない。
 - スタイルは `niho-docs-ui/styles/shell.css`。全セレクタが `.es-root` 配下で、`isolation.test.ts` の規則どおり先頭に `:where([data-docs-app-root]):where([data-docs-shared-ui])` を持つ。呼ぶ側は `data-docs-app-root` と `data-docs-shared-ui` を持つ祖先の中に `EditorShell` を置く。
 - 画面幅は 1440 / 390 / 375 / 320px で確認する（900px 未満で一覧・ページ・レール・シートを全画面／下からのシートに切り替える）。確認用ギャラリーは配布物に入らない `gallery/`。
+- アクセシビリティの決まり（#43）: 文字は `--ed-ink-mute` より淡くしない（`--ed-ink-faint` は装飾の矢印・アイコンだけ。プレースホルダーも文字）。橙の文字は `--ed-amber-ink`（`--ed-amber` は面・点）。文字を opacity で薄めない。文字は 12px 以上。`role="toolbar"` は `useRovingFocus`（Tab の停止点 1 つ、← → Home End）。`ShellSheet` は開いているあいだ外を `inert` にする。`EditorShell` の先頭は「本文へ移動」。見出しはページの `h1` → レールの節・設定の節 `h2` → その中 `h3`。
 
 ```sh
 cd packages/docs-ui
@@ -155,6 +156,6 @@ npm run typecheck:browser         # e2e の型検査（CI も実行）
 
 - 違反を直したら、`UPDATE_KNOWN=1 npx playwright test e2e/axe.spec.ts` でリストを作り直し、差分が「行が消えるだけ」であることを確認して commit する。`--grep` で一部の画面だけ更新もできる。
 - 新しい違反でテストが落ちたら、リストに足さずに直す。リストを足してよいのは、直す Issue を決めた違反を棚卸しするときだけで、その場合も手で書かず `UPDATE_KNOWN=1` の実行結果を使う。
-- 各行の `reason`（なぜ今は許容か）と `issue`（直す Issue）を保つ。#43 の受入は、リストが空になること。
+- 各行の `reason`（なぜ今は許容か）と `issue`（直す Issue）を保つ。#43 の受入は、リストが空になること（shell の修正で空になった。以後は新しい違反を持ち込まない）。
 - 5199 を別の gallery（別の worktree など）が使っていると、その画面を検査してしまう。落ちる理由が分からないときは止めてから実行する。
 - CI（ubuntu）と手元（macOS）はフォントが違う。レイアウトに依存する結果が食い違ったら、CI の結果（HTML レポート）を正とする。

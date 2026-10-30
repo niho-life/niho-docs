@@ -15,14 +15,15 @@ export function LoginScreen({ onLogin, onCreateAccount, onHelp }: LoginScreenPro
       <div className="es-split">
         <div className="es-split-ph" aria-hidden="true" />
         <div className="es-split-r">
-          <div className="es-lg-brand">
+          {/* 名前（ロゴ）も、どれかのランドマークに入れる（header = banner。main・footer と並ぶ） */}
+          <header className="es-lg-brand">
             <span className="es-lg-mark" aria-hidden="true">
               N
             </span>
             <span>
               NIHO <span>editor</span>
             </span>
-          </div>
+          </header>
           <main className="es-split-box">
             <h1>書く</h1>
             <p>NIHO アカウントで続けます。</p>

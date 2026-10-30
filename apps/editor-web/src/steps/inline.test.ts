@@ -1,0 +1,71 @@
+import { describe, expect, it, vi } from "vitest";
+import { createFakeExecutor } from "./executor";
+import { createInlineQueue, resolveStepsMode } from "./inline";
+import { MemoryStepRunStore } from "./memory-store";
+import { taskName } from "./queue";
+import { findRecipe } from "./recipes";
+
+const OWNER = "synthetic-owner-a";
+
+describe("resolveStepsMode", () => {
+  it("accepts inline outside production only, and nothing else", () => {
+    expect(resolveStepsMode({ EDITOR_STEPS_MODE: "inline" })).toBe("inline");
+    expect(resolveStepsMode({ EDITOR_STEPS_MODE: "inline", NODE_ENV: "development" })).toBe("inline");
+    expect(resolveStepsMode({ EDITOR_STEPS_MODE: "inline", NODE_ENV: "production" })).toBeNull();
+    for (const value of [undefined, "", "off", "Inline", "cloud-tasks"]) expect(resolveStepsMode({ EDITOR_STEPS_MODE: value })).toBeNull();
+  });
+});
+
+describe("createInlineQueue", () => {
+  it("runs a whole recipe in the same process without the caller awaiting it", async () => {
+    const store = new MemoryStepRunStore();
+    const executor = createFakeExecutor();
+    const queue = createInlineQueue({ store, executor });
+    const parent = store.addPage(OWNER, { kind: "rec", blocks: [{ type: "paragraph", content: [{ type: "text", text: "合成の会議の文字起こし" }] }] });
+    const created = await store.createRun(OWNER, parent, { recipe: findRecipe("tpl-2")! });
+    if (created.status !== "created") throw new Error(created.status);
+    const task = { name: taskName(created.run.id, 0, 0), runId: created.run.id, stepIndex: 0 };
+
+    expect(await queue.enqueue(task)).toEqual({ deduplicated: false });
+    // enqueue は実行を待たない（積んだ時点ではまだ始まっていない）
+    expect(executor.calls).toBe(0);
+    expect(await queue.enqueue(task)).toEqual({ deduplicated: true });
+
+    await vi.waitFor(async () => expect((await store.listRun(OWNER, parent))?.run?.state).toBe("succeeded"));
+    expect(executor.calls).toBe(2);
+    const run = (await store.listRun(OWNER, parent))?.run;
+    expect(run?.steps.map((step) => step.stepStatus)).toEqual(["done", "done"]);
+  });
+
+  it("retries after the delay and reports unexpected failures without details", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const store = new MemoryStepRunStore();
+      const executor = createFakeExecutor({ failures: 1 });
+      const onError = vi.fn();
+      const queue = createInlineQueue({ store, executor, onError, retryDelaySeconds: () => 5 });
+      const parent = store.addPage(OWNER, { kind: "rec" });
+      const created = await store.createRun(OWNER, parent, { recipe: findRecipe("tpl-3")! });
+      if (created.status !== "created") throw new Error(created.status);
+      await queue.enqueue({ name: taskName(created.run.id, 0, 0), runId: created.run.id, stepIndex: 0 });
+      await vi.waitFor(() => expect(store.runs.get(created.run.id)?.attempts[0]?.tries).toBe(1));
+      await vi.waitFor(() => expect(store.runs.get(created.run.id)?.attempts[0]?.state).toBe("queued"));
+      expect(executor.calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(() => expect(store.runs.get(created.run.id)?.state).toBe("succeeded"));
+      expect(executor.calls).toBe(2);
+      expect(onError).not.toHaveBeenCalled();
+
+      store.claimAttempt = async () => {
+        throw new Error("synthetic connection failure");
+      };
+      const other = store.addPage(OWNER, { kind: "rec" });
+      const again = await store.createRun(OWNER, other, { recipe: findRecipe("tpl-3")! });
+      if (again.status !== "created") throw new Error(again.status);
+      await queue.enqueue({ name: taskName(again.run.id, 0, 0), runId: again.run.id, stepIndex: 0 });
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

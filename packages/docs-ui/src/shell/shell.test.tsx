@@ -106,11 +106,32 @@ describe("EditorShell", () => {
     expect(unlabeledButtons(html)).toEqual([]);
   });
 
-  it("主な部品の landmark: aside・nav>ul・header・main", () => {
+  it("主な部品の landmark: aside・nav>ul・header・main（main は skip link の移動先なので id と tabindex=-1 を持つ）", () => {
     expect(html).toContain('<aside class="es-sb" aria-label="ページ">');
     expect(html).toMatch(/<nav class="es-sb-list" aria-label="ページの一覧"><ul>/);
     expect(html).toContain('<header class="es-dt">');
-    expect(html).toContain('<main class="es-canvas">');
+    expect(html).toContain('<main id="es-main" class="es-canvas" tabindex="-1">');
+    // 下端の道具の帯は、名前つきの region（ヘッダー・本文の外に出るので、ランドマークに入れる。#43）
+    expect(html).toContain('<div class="es-mtb" role="region" aria-label="道具の帯">');
+  });
+
+  it("最初のフォーカス先は「本文へ移動」（skip link。移動先は main）", () => {
+    const first = /<(a|button|input|textarea|select)\b[^>]*>/.exec(html);
+    expect(first?.[0]).toBe('<a class="es-skip" href="#es-main">');
+    expect(html.indexOf("本文へ移動")).toBeLessThan(html.indexOf('<div class="es-ws">'));
+  });
+
+  it("landmark の名前は重複しない（同じ役割のものが 2 つあるときは、名前で見分けられる）", () => {
+    const withRail = renderToStaticMarkup(
+      <EditorShell sidebar={sidebar()} header={header()} rail={<ShellRail>x</ShellRail>} toolbar={<ShellMobileToolbar />} sidebarOpen railOpen>
+        x
+      </EditorShell>,
+    );
+    const asides = [...withRail.matchAll(/<aside\b[^>]*aria-label="([^"]+)"/g)].map((m) => m[1]);
+    expect(asides).toEqual(["ページ", "このページの設定と AI"]);
+    expect(new Set(asides).size).toBe(asides.length);
+    expect([...withRail.matchAll(/<main\b/g)]).toHaveLength(1);
+    expect([...withRail.matchAll(/<header\b/g)]).toHaveLength(1);
   });
 });
 
@@ -172,8 +193,12 @@ describe("ShellHeader", () => {
   it("道具: ＋ テキスト B I リンク 見出し 箇条書き 画像 録音", () => {
     const html = renderToStaticMarkup(<ShellTools />);
     const labels = [...html.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1]);
-    expect(labels).toEqual(["書式とブロック", "ブロックを足す", "行の種類", "太字", "斜体", "リンク", "見出し", "箇条書き", "画像", "録音"]);
+    // 「行の種類」は見えている文字（いまの行の種類）から始める（WCAG 2.5.3。#43）
+    expect(labels).toEqual(["書式とブロック", "ブロックを足す", "テキスト、行の種類", "太字", "斜体", "リンク", "見出し", "箇条書き", "画像", "録音"]);
     expect(html).toContain('role="toolbar"');
+    // 行の種類が変わると、見える文字と名前の両方が変わる
+    const heading = renderToStaticMarkup(<ShellTools textType="見出し" />);
+    expect(heading).toContain('aria-label="見出し、行の種類" aria-haspopup="menu">見出し <span aria-hidden="true">▾</span>');
   });
 
   it("状態は丸ひとつ。吹き出しはキーボードのフォーカスでも読め、aria-live で伝わる", () => {
@@ -241,6 +266,23 @@ describe("ShellRail", () => {
     expect(html).not.toMatch(/aria-expanded="true"[^>]*>ページ設定[\s\S]*?自分だけ<\/span><span class="es-cv"/);
   });
 
+  it("節の見出しは h2（ページの h1 の次の段。h3 から始めない。#43）", () => {
+    expect([...html.matchAll(/<h(\d) class="es-ch-h">/g)].map((m) => m[1])).toEqual(["2", "2", "2"]);
+    expect(html).not.toMatch(/<h[34]\b/);
+  });
+
+  it("ページ設定の中の小見出しは h3（レールの節 h2 の下）", () => {
+    const settings = renderToStaticMarkup(
+      <ShellRailSection title="ページ設定" open onToggle={noop}>
+        <ShellPageSettings lang="ja" author={{ name: "Mika Sato", title: "ライター", initial: "M" }} info={[{ label: "作成", value: "昨日" }]} />
+      </ShellRailSection>,
+    );
+    const levels = [...settings.matchAll(/<h(\d)\b/g)].map((m) => Number(m[1]));
+    expect(levels[0]).toBe(2);
+    expect(levels.slice(1).length).toBeGreaterThan(0);
+    expect(levels.slice(1).every((level) => level === 3)).toBe(true);
+  });
+
   it("「AIと作る」は開閉せず残りの高さを使う（fill）", () => {
     expect(html).toContain("es-cd es-cd--open es-cd--fill");
     expect(html).toContain('<span class="es-ch es-ch--static">');
@@ -263,7 +305,11 @@ describe("ページの部品", () => {
         <ShellBody blocks={[{ type: "p", text: "Body" }, { type: "h2", text: "H" }, { type: "ul", items: ["a"] }]} />
       </ShellPage>,
     );
-    expect(article).toContain('role="img" aria-label="カバー写真（仮の面）"');
+    // 画像（role=img）と「変更」ボタンは兄弟。role=img の中にボタンを入れない（nested-interactive。#43）
+    expect(article).toContain(
+      '<div class="es-cover"><span class="es-cover-ph" role="img" aria-label="カバー写真（仮の面）"></span><button type="button" class="es-chg">変更</button></div>',
+    );
+    expect(article).not.toMatch(/role="img"[^>]*>(?:(?!<\/span>)[\s\S])*<button/);
     expect(article).toContain(">TRAVEL<");
     expect(article).toContain('class="es-ld" data-ph="Lead"');
     expect(article).not.toContain("url(");
@@ -271,6 +317,10 @@ describe("ページの部品", () => {
     expect(journal).toContain("es-tt es-ja es-tt--journal");
     expect(journal).not.toContain("es-ld");
     expect(journal).not.toContain("es-cover");
+    // 題名はページの h1。空のときは見えている「無題」を名前にする（空の見出しにしない）
+    expect(journal).toMatch(/<h1 class="es-tt es-ja es-tt--journal" data-ph="無題" spellcheck="false">10月30日（木）<\/h1>/);
+    const untitled = renderToStaticMarkup(<ShellPage kind="note" lang="ja" title="" />);
+    expect(untitled).toContain('<h1 class="es-tt es-ja" data-ph="無題" aria-label="無題"');
   });
 
   it("選んだ文字の上の書式の帯（静的）は toolbar で、ボタンに名前がある", () => {
@@ -374,6 +424,8 @@ describe("ページの部品", () => {
     expect(html).toContain('role="radiogroup"');
     expect(html).toContain('aria-checked="true"');
     expect(unlabeledButtons(html)).toEqual([]);
+    // 見出しは h1（録音から）→ h2（背景情報・登場人物・固有名詞・このあと）。h4 へ飛ばない（#43）
+    expect([...html.matchAll(/<h(\d)\b/g)].map((m) => m[1])).toEqual(["1", "2", "2", "2", "2"]);
     const file = renderToStaticMarkup(
       <RecordingStart how="file" onHow={noop} file={{ name: "dinner-1029.m4a", detail: "14:38 · 32 MB" }} background="" onBackground={noop} people={[]} terms="" next="none" onNext={noop} onStart={noop} />,
     );
