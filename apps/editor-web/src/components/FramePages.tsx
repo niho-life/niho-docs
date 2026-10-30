@@ -19,7 +19,10 @@ export function HomeRedirect({ lastPageId }: { lastPageId: string | null }) {
   return null;
 }
 
-/** `/p/{id}`。最後に開いたページとして覚え、題名と保存を一覧へ知らせる。revision は読み込んだときの値（保存の `baseRevision`）。 */
+/**
+ * `/p/{id}`。最後に開いたページとして覚え、題名と保存を一覧へ知らせる。revision は読み込んだときの値（保存の `baseRevision`）、
+ * 更新時刻は開いたときに端末の下書きと競合したら帯に出す値。
+ */
 export function OpenPage({ summary, blocks, revision }: { summary: PageSummary; blocks: unknown[]; revision: number }) {
   const frame = useEditorFrame();
   const { pageOpened } = frame;
@@ -30,7 +33,7 @@ export function OpenPage({ summary, blocks, revision }: { summary: PageSummary; 
   }, [summary, pageOpened]);
   return (
     <PageEditor
-      page={{ id, title: summary.title, blocks, revision }}
+      page={{ id, title: summary.title, blocks, revision, updatedAt: summary.updatedAt }}
       onTitleChange={(value) => frame.pageTitleChanged(id, value)}
       onSaved={() => frame.pageSaved(id)}
     />
