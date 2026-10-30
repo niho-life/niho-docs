@@ -5,23 +5,27 @@ import "niho-docs-ui/styles/tokens.css";
 import "niho-docs-ui/styles/editor.css";
 import { useEffect, useRef, useState } from "react";
 import type { JSONContent } from "@tiptap/core";
-import { useEditor, type Editor } from "@tiptap/react";
-import { BlockEditor, PageTitle } from "niho-docs-ui/components/BlockEditor";
-import { ENABLED_INPUT_RULES, buildBlockEditorExtensions } from "niho-docs-ui/lib/block-editor/index";
+import { EditorContent, useEditor, type Editor } from "@tiptap/react";
+import { PageTitle } from "niho-docs-ui/components/BlockEditor";
+import { buildPageExtensions } from "@/editor/page-extensions";
+import { normalizePastedHtml } from "@/editor/paste";
 import { createAutosave, type Autosave, type SaveState } from "@/lib/autosave";
 import { MAX_TITLE_CHARS } from "@/lib/page-limits";
-import { savePageRequest, type PageBody } from "@/lib/pages-client";
+import { PageConflictError, savePageRequest, type PageBody } from "@/lib/pages-client";
 
 export type EditablePage = {
   id: string;
   title: string;
   blocks: unknown[];
+  /** 読み込んだときの revision。保存のたびに `baseRevision` として送り、応答の値に進める。 */
+  revision: number;
 };
 
 const STATE_TEXT: Record<SaveState, string> = {
   saved: "保存済み",
   saving: "保存中",
   error: "保存に失敗",
+  stopped: "保存を止めています",
 };
 
 /** 保存されている blocks を TipTap の doc にする（空のページは空の段落 1 つ）。 */
@@ -30,8 +34,12 @@ export function docFromBlocks(blocks: unknown[]): JSONContent {
 }
 
 /**
- * ページの題名と本文。本文は niho-docs-ui の BlockEditor（TipTap）。blocks は TipTap の doc の content（ブロックの配列）をそのまま保存する。
- * 入力の 1 秒後に PATCH で自動保存し、状態を文字で読み上げる。
+ * ページの題名と本文。本文は TipTap で、作れるのは限定 AST（src/ast/blocks.ts）の範囲だけ（src/editor/page-extensions.ts）。
+ * blocks は TipTap の doc の content（ブロックの配列）をそのまま保存する。貼り付けた HTML は先に洗う（src/editor/paste.ts）。
+ * 入力の 1 秒後に PATCH で自動保存し、状態を文字で読み上げる。保存は revision を付けて 1 つずつ送り、
+ * 別の画面が先に保存していた（409）ら自動保存を止めて知らせる（本文の編集は止めない。帯の操作は次の PR）。
+ * 「/」のブロック一覧と書式のバーは、docs-ui の BlockEditor が Markdown 文書の schema（コード・チェック・取り消し線）を前提にしているため、
+ * ここでは付けていない。モック v6 の shell（#54）を本文に繋ぐときに、この schema に合わせて付ける。
  */
 export function PageEditor(props: { page: EditablePage }) {
   const { page } = props;
@@ -39,17 +47,27 @@ export function PageEditor(props: { page: EditablePage }) {
   const [state, setState] = useState<SaveState>("saved");
   const [unreadable, setUnreadable] = useState(false);
   const [titleClamped, setTitleClamped] = useState(false);
+  const [conflicted, setConflicted] = useState(false);
   const unreadableRef = useRef(false);
   const composingRef = useRef(false);
+  // 保存は直列（autosave）なので、次の保存は必ず前の保存の応答の revision を使う
+  const revisionRef = useRef(page.revision);
 
   const autosaveRef = useRef<Autosave<PageBody> | null>(null);
   const editorRef = useRef<Editor | null>(null);
 
   useEffect(() => {
     const autosave = createAutosave<PageBody>({
-      save: (patch) => savePageRequest(page.id, patch),
+      save: async (patch) => {
+        revisionRef.current = await savePageRequest(page.id, patch, { baseRevision: revisionRef.current });
+      },
       isComposing: () => composingRef.current || Boolean(editorRef.current?.view.composing),
-      onState: setState,
+      onState: (next) => {
+        setState(next);
+        if (next === "stopped") setConflicted(true);
+      },
+      // 別の画面の保存を黙って上書きしない
+      stopOn: (error) => error instanceof PageConflictError,
     });
     autosaveRef.current = autosave;
     return () => {
@@ -60,8 +78,7 @@ export function PageEditor(props: { page: EditablePage }) {
   }, [page.id]);
 
   const editor = useEditor({
-    extensions: buildBlockEditorExtensions(),
-    enableInputRules: ENABLED_INPUT_RULES,
+    extensions: buildPageExtensions(),
     content: docFromBlocks(page.blocks),
     // サーバーで描かずにブラウザで作る（hydration のずれを避ける）
     immediatelyRender: false,
@@ -71,7 +88,7 @@ export function PageEditor(props: { page: EditablePage }) {
       unreadableRef.current = true;
       setUnreadable(true);
     },
-    editorProps: { attributes: { class: "doc", "aria-label": "本文" } },
+    editorProps: { attributes: { class: "doc", "aria-label": "本文" }, transformPastedHTML: normalizePastedHtml },
     onUpdate: ({ editor: current }) => {
       if (unreadableRef.current) return;
       autosaveRef.current?.change({ blocks: current.getJSON().content ?? [] });
@@ -114,7 +131,10 @@ export function PageEditor(props: { page: EditablePage }) {
       />
       {titleClamped && <p role="status">題名は {MAX_TITLE_CHARS} 字までです。</p>}
       {unreadable && <p role="alert">本文を読み込めませんでした。この画面では本文を変更しません。</p>}
-      <BlockEditor editor={editor} />
+      {conflicted && <p role="alert">別の画面で保存されました。このページを開き直してください。</p>}
+      <div className="be">
+        <EditorContent editor={editor} />
+      </div>
     </div>
   );
 }

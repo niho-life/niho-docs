@@ -1,0 +1,22 @@
+{
+  "type": "doc",
+  "content": [
+    { "type": "paragraph", "content": [{ "type": "text", "text": "Before the code." }] },
+    { "type": "codeBlock", "attrs": { "language": "js" }, "content": [{ "type": "text", "text": "let x = 1;" }] },
+    { "type": "table", "content": [] },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Ask " },
+        { "type": "mention", "attrs": { "id": "someone" } }
+      ]
+    },
+    {
+      "type": "bulletList",
+      "content": [
+        { "type": "listItem", "content": [{ "type": "image", "attrs": { "assetId": "asset-figure-01", "alt": "x" } }] },
+        { "type": "taskItem", "content": [] }
+      ]
+    }
+  ]
+}

@@ -5,11 +5,15 @@ export const ROBOTS_HEADER_VALUE = "noindex, nofollow";
 /** 要求の本文の上限（1 MiB）。 */
 export const MAX_BODY_BYTES = 1024 * 1024;
 
-const JSON_HEADERS: Readonly<Record<string, string>> = Object.freeze({
-  "Content-Type": "application/json; charset=utf-8",
+const BASE_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   "Cache-Control": "private, no-store",
   "X-Content-Type-Options": "nosniff",
   "X-Robots-Tag": ROBOTS_HEADER_VALUE,
+});
+
+const JSON_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  "Content-Type": "application/json; charset=utf-8",
+  ...BASE_HEADERS,
 });
 
 export type ApiErrorCode =
@@ -17,7 +21,9 @@ export type ApiErrorCode =
   | "unauthorized"
   | "forbidden"
   | "not_found"
+  | "published"
   | "payload_too_large"
+  | "unrestorable"
   | "unavailable"
   | "internal";
 
@@ -26,7 +32,11 @@ const STATUS: Record<ApiErrorCode, number> = {
   unauthorized: 401,
   forbidden: 403,
   not_found: 404,
+  // 公開中のページは削除しない（先に公開をやめる。設計 §12）
+  published: 409,
   payload_too_large: 413,
+  // 今の形では保存できない古い版には戻さない
+  unrestorable: 422,
   unavailable: 503,
   internal: 500,
 };
@@ -44,6 +54,19 @@ export function errorResponse(code: ApiErrorCode): Response {
  */
 export function notFoundResponse(): Response {
   return errorResponse("not_found");
+}
+
+/**
+ * 保存の要求の `baseRevision` が今の revision と違った（別の画面・端末が先に保存した）。何も書いていない。
+ * 自分のページにだけ返す（それ以外は notFoundResponse）。今のページを全て付ける。
+ */
+export function conflictResponse(page: unknown): Response {
+  return jsonResponse(409, { error: "conflict", page });
+}
+
+/** 本文の無い成功（削除・ゴミ箱から戻す）。 */
+export function noContentResponse(): Response {
+  return new Response(null, { status: 204, headers: BASE_HEADERS });
 }
 
 export type BodyResult = { ok: true; value: unknown } | { ok: false; response: Response };

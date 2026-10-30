@@ -1,0 +1,787 @@
+{
+  "description": "Synthetic negative cases. Each applies one change to destinations/<base>.json; the whole declaration must be rejected with the expected issue.",
+  "cases": [
+    {
+      "name": "unknown condition kind",
+      "base": "exp",
+      "path": [
+        "requires",
+        0,
+        "kind"
+      ],
+      "value": "langs",
+      "expect": {
+        "path": "$.requires[0].kind",
+        "reason": "unknown-kind"
+      }
+    },
+    {
+      "name": "kind is case-sensitive",
+      "base": "exp",
+      "path": [
+        "requires",
+        5,
+        "kind"
+      ],
+      "value": "NoConfirm",
+      "expect": {
+        "path": "$.requires[5].kind",
+        "reason": "unknown-kind"
+      }
+    },
+    {
+      "name": "unknown top-level field",
+      "base": "exp",
+      "path": [
+        "theme"
+      ],
+      "value": "dark",
+      "expect": {
+        "path": "$.theme",
+        "reason": "unknown-field"
+      }
+    },
+    {
+      "name": "unknown condition field",
+      "base": "exp",
+      "path": [
+        "requires",
+        0,
+        "hint"
+      ],
+      "value": "x",
+      "expect": {
+        "path": "$.requires[0].hint",
+        "reason": "unknown-field"
+      }
+    },
+    {
+      "name": "argument of another kind",
+      "base": "exp",
+      "path": [
+        "requires",
+        0,
+        "min"
+      ],
+      "value": 1,
+      "expect": {
+        "path": "$.requires[0].min",
+        "reason": "unknown-field"
+      }
+    },
+    {
+      "name": "unknown accepts field",
+      "base": "exp",
+      "path": [
+        "accepts",
+        "tables"
+      ],
+      "value": [],
+      "expect": {
+        "path": "$.accepts.tables",
+        "reason": "unknown-field"
+      }
+    },
+    {
+      "name": "schemaVersion as string",
+      "base": "exp",
+      "path": [
+        "schemaVersion"
+      ],
+      "value": "1",
+      "expect": {
+        "path": "$.schemaVersion",
+        "reason": "schema-version"
+      }
+    },
+    {
+      "name": "future schemaVersion",
+      "base": "exp",
+      "path": [
+        "schemaVersion"
+      ],
+      "value": 2,
+      "expect": {
+        "path": "$.schemaVersion",
+        "reason": "schema-version"
+      }
+    },
+    {
+      "name": "missing schemaVersion",
+      "base": "exp",
+      "path": [
+        "schemaVersion"
+      ],
+      "delete": true,
+      "expect": {
+        "path": "$.schemaVersion",
+        "reason": "required"
+      }
+    },
+    {
+      "name": "unknown destination id",
+      "base": "exp",
+      "path": [
+        "id"
+      ],
+      "value": "blog",
+      "expect": {
+        "path": "$.id",
+        "reason": "enum"
+      }
+    },
+    {
+      "name": "label of wrong type",
+      "base": "exp",
+      "path": [
+        "label"
+      ],
+      "value": 42,
+      "expect": {
+        "path": "$.label",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "blank label",
+      "base": "exp",
+      "path": [
+        "label"
+      ],
+      "value": "  ",
+      "expect": {
+        "path": "$.label",
+        "reason": "empty"
+      }
+    },
+    {
+      "name": "ranges not a list",
+      "base": "exp",
+      "path": [
+        "ranges"
+      ],
+      "value": "live",
+      "expect": {
+        "path": "$.ranges",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "no ranges",
+      "base": "exp",
+      "path": [
+        "ranges"
+      ],
+      "value": [],
+      "expect": {
+        "path": "$.ranges",
+        "reason": "empty"
+      }
+    },
+    {
+      "name": "duplicate range",
+      "base": "exp",
+      "path": [
+        "ranges"
+      ],
+      "value": [
+        "live",
+        "live"
+      ],
+      "expect": {
+        "path": "$.ranges[1]",
+        "reason": "duplicate"
+      }
+    },
+    {
+      "name": "unknown range",
+      "base": "exp",
+      "path": [
+        "ranges"
+      ],
+      "value": [
+        "public"
+      ],
+      "expect": {
+        "path": "$.ranges[0]",
+        "reason": "enum"
+      }
+    },
+    {
+      "name": "limited release on a site",
+      "base": "site",
+      "path": [
+        "ranges"
+      ],
+      "value": [
+        "live",
+        "unlisted"
+      ],
+      "expect": {
+        "path": "$.ranges",
+        "reason": "not-allowed"
+      }
+    },
+    {
+      "name": "xp extra outside NIHO Experience",
+      "base": "niho",
+      "path": [
+        "extras"
+      ],
+      "value": [
+        "app",
+        "xp"
+      ],
+      "expect": {
+        "path": "$.extras",
+        "reason": "not-allowed"
+      }
+    },
+    {
+      "name": "unknown extra",
+      "base": "exp",
+      "path": [
+        "extras"
+      ],
+      "value": [
+        "newsletter"
+      ],
+      "expect": {
+        "path": "$.extras[0]",
+        "reason": "enum"
+      }
+    },
+    {
+      "name": "block type outside the contract",
+      "base": "exp",
+      "path": [
+        "accepts",
+        "blocks"
+      ],
+      "value": [
+        "paragraph",
+        "table"
+      ],
+      "expect": {
+        "path": "$.accepts.blocks[1]",
+        "reason": "enum"
+      }
+    },
+    {
+      "name": "editor node name instead of block type",
+      "base": "niho",
+      "path": [
+        "accepts",
+        "blocks"
+      ],
+      "value": [
+        "paragraph",
+        "codeBlock"
+      ],
+      "expect": {
+        "path": "$.accepts.blocks[1]",
+        "reason": "enum"
+      }
+    },
+    {
+      "name": "mark type outside the contract",
+      "base": "exp",
+      "path": [
+        "accepts",
+        "marks"
+      ],
+      "value": [
+        "bold",
+        "underline"
+      ],
+      "expect": {
+        "path": "$.accepts.marks[1]",
+        "reason": "enum"
+      }
+    },
+    {
+      "name": "accepts.blocks not a list",
+      "base": "exp",
+      "path": [
+        "accepts",
+        "blocks"
+      ],
+      "value": "paragraph",
+      "expect": {
+        "path": "$.accepts.blocks",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "accepts without marks",
+      "base": "exp",
+      "path": [
+        "accepts",
+        "marks"
+      ],
+      "delete": true,
+      "expect": {
+        "path": "$.accepts.marks",
+        "reason": "required"
+      }
+    },
+    {
+      "name": "missing requires",
+      "base": "exp",
+      "path": [
+        "requires"
+      ],
+      "delete": true,
+      "expect": {
+        "path": "$.requires",
+        "reason": "required"
+      }
+    },
+    {
+      "name": "requires not a list",
+      "base": "exp",
+      "path": [
+        "requires"
+      ],
+      "value": {
+        "lang": "en"
+      },
+      "expect": {
+        "path": "$.requires",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "condition not an object",
+      "base": "exp",
+      "path": [
+        "requires",
+        0
+      ],
+      "value": "lang",
+      "expect": {
+        "path": "$.requires[0]",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "condition without kind",
+      "base": "exp",
+      "path": [
+        "requires",
+        0,
+        "kind"
+      ],
+      "delete": true,
+      "expect": {
+        "path": "$.requires[0].kind",
+        "reason": "required"
+      }
+    },
+    {
+      "name": "unknown language",
+      "base": "exp",
+      "path": [
+        "requires",
+        0,
+        "equals"
+      ],
+      "value": "fr",
+      "expect": {
+        "path": "$.requires[0].equals",
+        "reason": "enum"
+      }
+    },
+    {
+      "name": "consent of wrong type",
+      "base": "exp",
+      "path": [
+        "requires",
+        1,
+        "consent"
+      ],
+      "value": "yes",
+      "expect": {
+        "path": "$.requires[1].consent",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "cover without consent",
+      "base": "exp",
+      "path": [
+        "requires",
+        1,
+        "consent"
+      ],
+      "delete": true,
+      "expect": {
+        "path": "$.requires[1].consent",
+        "reason": "required"
+      }
+    },
+    {
+      "name": "lead max zero",
+      "base": "exp",
+      "path": [
+        "requires",
+        2,
+        "max"
+      ],
+      "value": 0,
+      "expect": {
+        "path": "$.requires[2].max",
+        "reason": "range"
+      }
+    },
+    {
+      "name": "lead max fractional",
+      "base": "exp",
+      "path": [
+        "requires",
+        2,
+        "max"
+      ],
+      "value": 1.5,
+      "expect": {
+        "path": "$.requires[2].max",
+        "reason": "range"
+      }
+    },
+    {
+      "name": "lead max as string",
+      "base": "exp",
+      "path": [
+        "requires",
+        2,
+        "max"
+      ],
+      "value": "200",
+      "expect": {
+        "path": "$.requires[2].max",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "empty category list",
+      "base": "exp",
+      "path": [
+        "requires",
+        3,
+        "oneOf"
+      ],
+      "value": [],
+      "expect": {
+        "path": "$.requires[3].oneOf",
+        "reason": "empty"
+      }
+    },
+    {
+      "name": "duplicate category",
+      "base": "exp",
+      "path": [
+        "requires",
+        3,
+        "oneOf"
+      ],
+      "value": [
+        "walks",
+        "walks"
+      ],
+      "expect": {
+        "path": "$.requires[3].oneOf[1]",
+        "reason": "duplicate"
+      }
+    },
+    {
+      "name": "headings without min",
+      "base": "exp",
+      "path": [
+        "requires",
+        4,
+        "min"
+      ],
+      "delete": true,
+      "expect": {
+        "path": "$.requires[4].min",
+        "reason": "required"
+      }
+    },
+    {
+      "name": "headings min of wrong type",
+      "base": "exp",
+      "path": [
+        "requires",
+        4,
+        "min"
+      ],
+      "value": true,
+      "expect": {
+        "path": "$.requires[4].min",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "unknown fix",
+      "base": "exp",
+      "path": [
+        "requires",
+        0,
+        "fix"
+      ],
+      "value": "title",
+      "expect": {
+        "path": "$.requires[0].fix",
+        "reason": "enum"
+      }
+    },
+    {
+      "name": "condition without message",
+      "base": "exp",
+      "path": [
+        "requires",
+        0,
+        "message"
+      ],
+      "delete": true,
+      "expect": {
+        "path": "$.requires[0].message",
+        "reason": "required"
+      }
+    },
+    {
+      "name": "control character in message",
+      "base": "exp",
+      "path": [
+        "requires",
+        0,
+        "message"
+      ],
+      "value": "bell\u0007",
+      "expect": {
+        "path": "$.requires[0].message",
+        "reason": "control-character"
+      }
+    },
+    {
+      "name": "duplicate condition id",
+      "base": "exp",
+      "path": [
+        "requires",
+        1,
+        "id"
+      ],
+      "value": "lang-en",
+      "expect": {
+        "path": "$.requires[1].id",
+        "reason": "duplicate"
+      }
+    },
+    {
+      "name": "condition id with spaces",
+      "base": "exp",
+      "path": [
+        "requires",
+        0,
+        "id"
+      ],
+      "value": "Lang EN",
+      "expect": {
+        "path": "$.requires[0].id",
+        "reason": "format"
+      }
+    },
+    {
+      "name": "host with scheme",
+      "base": "exp",
+      "path": [
+        "host"
+      ],
+      "value": "https://exp.example.com",
+      "expect": {
+        "path": "$.host",
+        "reason": "format"
+      }
+    },
+    {
+      "name": "host in uppercase",
+      "base": "exp",
+      "path": [
+        "host"
+      ],
+      "value": "EXP.example.com",
+      "expect": {
+        "path": "$.host",
+        "reason": "format"
+      }
+    },
+    {
+      "name": "host with port",
+      "base": "exp",
+      "path": [
+        "host"
+      ],
+      "value": "exp.example.com:8443",
+      "expect": {
+        "path": "$.host",
+        "reason": "format"
+      }
+    },
+    {
+      "name": "host as IP literal",
+      "base": "exp",
+      "path": [
+        "host"
+      ],
+      "value": "192.0.2.10",
+      "expect": {
+        "path": "$.host",
+        "reason": "format"
+      }
+    },
+    {
+      "name": "single-label host",
+      "base": "exp",
+      "path": [
+        "host"
+      ],
+      "value": "localhost",
+      "expect": {
+        "path": "$.host",
+        "reason": "format"
+      }
+    },
+    {
+      "name": "host with underscore",
+      "base": "exp",
+      "path": [
+        "host"
+      ],
+      "value": "exp_site.example.com",
+      "expect": {
+        "path": "$.host",
+        "reason": "format"
+      }
+    },
+    {
+      "name": "IDN host",
+      "base": "exp",
+      "path": [
+        "host"
+      ],
+      "value": "xn--n8j.example.com",
+      "expect": {
+        "path": "$.host",
+        "reason": "format"
+      }
+    },
+    {
+      "name": "host with trailing dot",
+      "base": "exp",
+      "path": [
+        "host"
+      ],
+      "value": "exp.example.com.",
+      "expect": {
+        "path": "$.host",
+        "reason": "format"
+      }
+    },
+    {
+      "name": "host with credentials",
+      "base": "exp",
+      "path": [
+        "host"
+      ],
+      "value": "user@example.com",
+      "expect": {
+        "path": "$.host",
+        "reason": "format"
+      }
+    },
+    {
+      "name": "host of wrong type",
+      "base": "exp",
+      "path": [
+        "host"
+      ],
+      "value": [
+        "exp.example.com"
+      ],
+      "expect": {
+        "path": "$.host",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "path with slash",
+      "base": "exp",
+      "path": [
+        "path"
+      ],
+      "value": "guides/ja",
+      "expect": {
+        "path": "$.path",
+        "reason": "format"
+      }
+    },
+    {
+      "name": "path with leading slash",
+      "base": "exp",
+      "path": [
+        "path"
+      ],
+      "value": "/guides",
+      "expect": {
+        "path": "$.path",
+        "reason": "format"
+      }
+    },
+    {
+      "name": "path in uppercase",
+      "base": "exp",
+      "path": [
+        "path"
+      ],
+      "value": "Guides",
+      "expect": {
+        "path": "$.path",
+        "reason": "format"
+      }
+    }
+  ],
+  "documents": [
+    {
+      "name": "not JSON",
+      "text": "{\"schemaVersion\": 1,",
+      "expect": {
+        "path": "$",
+        "reason": "not-json"
+      }
+    },
+    {
+      "name": "JSON array",
+      "text": "[]",
+      "expect": {
+        "path": "$",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "JSON null",
+      "text": "null",
+      "expect": {
+        "path": "$",
+        "reason": "type"
+      }
+    },
+    {
+      "name": "JSON string",
+      "text": "\"exp\"",
+      "expect": {
+        "path": "$",
+        "reason": "type"
+      }
+    }
+  ]
+}

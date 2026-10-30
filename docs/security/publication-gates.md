@@ -57,6 +57,33 @@ contract の更新には次を必須にする。
 
 contract は認証 context、resource owner / tenant / workspace、upload / download / share / revoke / list、capability の scope / expiry / 再利用条件、idempotency、content 検証、error 分類を含める。秘密、実データ、内部 topology、正確な abuse 閾値は含めない。現在の version 1 は [`cloud-contract-v1.md`](cloud-contract-v1.md) を参照する。
 
+## editor.niho.life（NIHO editor）の API
+
+`apps/editor-web`（[設計](../architecture/editor-niho-life-design.md)、[配備](../ops/editor-deploy.md)）は、ページを書く Web と、その保存の API を持つ。Docs / Photo のクラウド contract とは別の面で、ここに範囲を決める。
+
+**公開リポジトリに置くもの**
+- Web のクライアントと、`/api/pages`（一覧・作成・取得・保存）の実装。owner で絞った保存と読み戻しだけで、秘密・実データ・最終権限を含まない。
+- ページの正本の migration（`packages/editor-store/migrations`）。実レコードを含まない。
+- 公開 API（NIHO Experience・NIHO・本人のサイトへ公開した版を渡す API、[設計 §9](../architecture/editor-niho-life-design.md)）の**契約**と、合成データでの contract test。鍵・プレビュー用トークンの実値は契約に含めない。
+- セキュリティヘッダー（CSP・HSTS・`noindex`）と、その検証。
+
+**非公開に残すもの**
+- 本番の `DATABASE_URL`・DB の中身・資産バケットの中身・署名の資格情報（Secret Manager と実行 ID の権限）。
+- 配備の設定（プロジェクト ID・バケット名など、本番を特定する値）と本番配備の実行権限。公開 CI から本番へは配備しない（[editor-deploy.md §7](../ops/editor-deploy.md)）。
+- NIHO ログインの最終判定（セッションの検証・役割の読み取り）。`niho` モードの実装は非公開の niho-app の契約に従い、それまでは fail-closed（いつも未認証）。
+- 公開 API の鍵・プレビュー用トークンの実値、実ユーザーのページ・音声・文字起こし。
+
+**サーバーが毎 request で強制すること**（クライアントを信用しない）
+- 全てのクエリを `owner` と `deleted_at IS NULL` で絞る。別の人のページ・存在しない id・UUID として不正な id は、本文もヘッダーも同じ 404 にして、存在を推測させない。
+- 本番は `EDITOR_AUTH_MODE=niho` でなければ起動しない（開発用の `stub` に落ちない）。未認証は 401。
+- 更新系は同一 origin の要求だけ受ける。本文は上限（1 MiB）と深さで拒む。エラーの本文は短い code だけで、内部構成を漏らさない。
+- アプリ用の DB ロールは DML だけで、スキーマの変更と migration の記録の書き換えはできない。
+- 全ての応答に `X-Robots-Tag: noindex, nofollow`。ページは nonce ベースの CSP で、`/api` は何も読み込まない CSP。
+
+## editor 公開 API contract
+
+editor.niho.life の公開版を発信先（NIHO Experience、NIHO、本人のサイト）が読む API の正本は [`packages/editor-publish-contract`](../../packages/editor-publish-contract/) で、外部 observable behavior は [`editor-publish-api-v1.md`](editor-publish-api-v1.md) に置く。型・検証器・Markdown の投影・参照モデル・負例を同じ version の下で管理し、認可の最終判断と鍵の保管はサーバー側で行う。互換性を壊す変更は新しい major version とする。
+
 ## CI と成果物
 
 公開 CI は標準 GitHub-hosted runner で動かし、fork の PR に secrets を渡さない。`pull_request_target` で未信頼コードを実行しない。permissions は必要最小限にし、契約の負例を合成データで検証する。

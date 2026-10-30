@@ -1,0 +1,9 @@
+# Dockerfile.migrate 専用の除外。image に入れるのは editor-store の src と migrations だけ。
+*
+!packages/editor-store/package.json
+!packages/editor-store/package-lock.json
+!packages/editor-store/src
+!packages/editor-store/migrations
+**/node_modules
+**/.env*
+**/.DS_Store
