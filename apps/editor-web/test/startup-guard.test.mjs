@@ -139,6 +139,46 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
       child.kill("SIGTERM");
     }
   });
+
+  it("serves the manifest, icons, service worker and offline page, all noindex (#49)", async () => {
+    const port = await freePort();
+    const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env: childEnv(port, "niho"), stdio: "ignore" });
+    try {
+      await waitForHttp(port);
+      const get = (path) => fetch(`http://127.0.0.1:${port}${path}`);
+      const manifestResponse = await get("/manifest.webmanifest");
+      assert.equal(manifestResponse.status, 200);
+      assert.match(manifestResponse.headers.get("content-type") ?? "", /json/);
+      assert.equal(manifestResponse.headers.get("x-robots-tag"), "noindex, nofollow");
+      const manifest = await manifestResponse.json();
+      assert.equal(manifest.display, "standalone");
+      assert.equal(manifest.start_url, "/");
+      for (const icon of manifest.icons) {
+        const response = await get(icon.src);
+        assert.equal(response.status, 200, icon.src);
+        assert.equal(response.headers.get("content-type"), "image/png", icon.src);
+      }
+
+      const worker = await get("/sw.js");
+      assert.equal(worker.status, 200);
+      assert.match(worker.headers.get("content-type") ?? "", /javascript/);
+      assert.equal(worker.headers.get("cache-control"), "no-cache, must-revalidate");
+      assert.equal(worker.headers.get("x-robots-tag"), "noindex, nofollow");
+      assert.match(await worker.text(), /niho-editor-shell-/);
+
+      const offline = await get("/offline.html");
+      assert.equal(offline.status, 200);
+      assert.equal(offline.headers.get("x-robots-tag"), "noindex, nofollow");
+      assert.match(await offline.text(), /つながっていません/);
+
+      const html = await (await get("/")).text();
+      assert.match(html, /<link rel="manifest" href="\/manifest\.webmanifest"/);
+      assert.match(html, /rel="apple-touch-icon"/);
+      assert.match(html, /<meta name="robots" content="noindex, nofollow"\/>/);
+    } finally {
+      child.kill("SIGTERM");
+    }
+  });
 });
 
 describe("production start without the entry (defence in depth)", () => {
