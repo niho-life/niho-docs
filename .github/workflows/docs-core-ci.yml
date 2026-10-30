@@ -78,6 +78,30 @@ jobs:
       - run: npm -C packages/docs-ui run lint
       - run: npm -C packages/docs-ui test
 
+  # 実ブラウザ（chromium）で gallery を開き、横スクロールと axe（serious 以上）を検査する（Issue #43）。
+  # 許容リスト（packages/docs-ui/e2e/known-violations.json）と一致しないと落ちる。手順は packages/docs-ui/README.md。
+  docs-ui-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/docs-ui/package-lock.json
+      - run: npm -C packages/docs-ui ci
+      - run: npm -C packages/docs-ui run typecheck:browser
+      - run: npm -C packages/docs-ui exec -- playwright install --with-deps chromium
+      - run: npm -C packages/docs-ui run test:browser
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: docs-ui-playwright-report
+          path: packages/docs-ui/node_modules/.cache/niho-docs-ui-e2e/playwright-report
+          include-hidden-files: true
+          retention-days: 7
+
   desktop-account:
     runs-on: ubuntu-latest
     timeout-minutes: 30
