@@ -211,6 +211,17 @@ function DocsWorkspace(props: { bridge: Bridge; account: NihoAccount }) {
     toastTimer.current = null;
     setToast(null);
   }, [setToast, toastTimer]);
+  // 画面が閉じたら、トーストを消すタイマーと、実行の逐次表示を間引くタイマーも止める。閉じたあとに発火して setToast・setActiveRun を呼ばない
+  // （テストでは jsdom の破棄後に window が無く、React の setState が `window is not defined` を投げて、全テスト通過でも終了コード 1 になる）
+  useEffect(
+    () => () => {
+      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+      toastTimer.current = null;
+      if (flushTimer.current !== null) window.clearTimeout(flushTimer.current);
+      flushTimer.current = null;
+    },
+    [toastTimer, flushTimer],
+  );
 
   /** 失敗と理由をページの帯に残す（消えない。次の成功・ページの移動・「閉じる」で消す）。行動があれば帯に出す。 */
   const showFailure = useCallback((text: string, action?: FailureAction) => {
