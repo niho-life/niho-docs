@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { MAX_BLOCK_DEPTH, MAX_TITLE_CHARS, parseBlocks, parseCreatePage, parsePagePatch } from "./page-input";
+import {
+  MAX_BLOCK_DEPTH,
+  MAX_TITLE_CHARS,
+  parseBlocks,
+  parseCreatePage,
+  parsePagePatch,
+  parsePageSave,
+  parseRestoreBody,
+  parseVersionNumber,
+} from "./page-input";
 
 const paragraph = (text: string) => ({ type: "paragraph", content: [{ type: "text", text }] });
 
@@ -25,6 +34,53 @@ describe("parsePagePatch", () => {
   it("needs at least one field", () => {
     expect(parsePagePatch({})).toEqual({ ok: false });
     expect(parsePagePatch({ title: "" })).toEqual({ ok: true, value: { title: "" } });
+  });
+});
+
+describe("parsePageSave", () => {
+  it("needs a positive integer baseRevision and at least one field, and takes an optional boolean overwrite", () => {
+    expect(parsePageSave({ title: "題名", baseRevision: 3 })).toEqual({ ok: true, value: { patch: { title: "題名" }, baseRevision: 3, overwrite: false } });
+    expect(parsePageSave({ blocks: [], baseRevision: 1, overwrite: true })).toEqual({ ok: true, value: { patch: { blocks: [] }, baseRevision: 1, overwrite: true } });
+    expect(parsePageSave({ title: "", baseRevision: 1, overwrite: false })).toEqual({ ok: true, value: { patch: { title: "" }, baseRevision: 1, overwrite: false } });
+    for (const body of [
+      null,
+      [],
+      { title: "x" },
+      { baseRevision: 1 },
+      { baseRevision: 1, overwrite: true },
+      { title: "x", baseRevision: 0 },
+      { title: "x", baseRevision: -2 },
+      { title: "x", baseRevision: 1.5 },
+      { title: "x", baseRevision: "1" },
+      { title: "x", baseRevision: null },
+      { title: "x", baseRevision: 2 ** 31 },
+      { title: "x", baseRevision: Number.MAX_SAFE_INTEGER + 1 },
+      { title: "x", baseRevision: 1, overwrite: "true" },
+      { title: "x", baseRevision: 1, overwrite: null },
+      { title: "x", baseRevision: 1, revision: 2 },
+      { title: "x", baseRevision: 1, owner: "someone-else" },
+    ]) {
+      expect(parsePageSave(body), JSON.stringify(body)).toEqual({ ok: false });
+    }
+  });
+});
+
+describe("parseRestoreBody", () => {
+  it("takes only a positive integer baseRevision", () => {
+    expect(parseRestoreBody({ baseRevision: 4 })).toEqual({ ok: true, value: { baseRevision: 4 } });
+    for (const body of [null, [], {}, { baseRevision: 0 }, { baseRevision: "4" }, { baseRevision: 4, overwrite: true }, { baseRevision: 4, blocks: [] }]) {
+      expect(parseRestoreBody(body), JSON.stringify(body)).toEqual({ ok: false });
+    }
+  });
+});
+
+describe("parseVersionNumber", () => {
+  it("accepts plain positive decimal integers that fit the database integer", () => {
+    expect(parseVersionNumber("1")).toBe(1);
+    expect(parseVersionNumber("2147483647")).toBe(2147483647);
+    for (const value of ["", "0", "-1", "01", "+1", "1.0", "1e3", " 1", "1 ", "0x10", "abc", "2147483648", "99999999999"]) {
+      expect(parseVersionNumber(value), value).toBeNull();
+    }
   });
 });
 
