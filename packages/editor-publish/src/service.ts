@@ -79,6 +79,13 @@ export interface RedirectRecord extends Redirect {
 /** One transaction. Every method may throw; the store then rolls the whole transaction back. */
 export interface PublishTx {
   getPage(pageId: string): Promise<DraftPage | null>;
+  /**
+   * Whether `actorId` still has a live connection to the site with this handle, read inside the
+   * transaction. A store that keeps connections must implement it (and lock the row on a database):
+   * the check before the transaction (`ConnectionSource`) cannot see a `disconnect` that lands in
+   * between. Stores without connections may leave it out.
+   */
+  connectionLive?(actorId: string, handle: string): Promise<boolean>;
   listAssets(pageId: string): Promise<readonly AssetRecord[]>;
   getPublication(pageId: string): Promise<PublicationRecord | null>;
   /**
@@ -372,6 +379,9 @@ export class PublishService {
     const { mode, actorId, pageId, handle, dest, declaration } = context;
     const page = await tx.getPage(pageId);
     if (!page || page.ownerId !== actorId) return NOT_FOUND;
+    if (!isFaceDest(dest) && tx.connectionLive !== undefined && !(await tx.connectionLive(actorId, handle))) {
+      return forbidden("connection");
+    }
     const current = await tx.getPublication(pageId);
     const live = current !== null && current.stoppedAt === null;
     const sameHandle = current !== null && current.handle === handle;

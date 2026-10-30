@@ -29,12 +29,12 @@ export function ShellPageSettings({ destination, category, related, lang, onLang
     <div className="es-ps">
       {destination && (
         <section>
-          <h4>
+          <h3>
             発信先
             <button type="button" onClick={destination.onChange}>
               変更
             </button>
-          </h4>
+          </h3>
           <div className={`es-pubcard es-pubcard--${destination.dest}${destination.planned ? " es-pubcard--planned" : ""}`}>
             <i aria-hidden="true" />
             <div>
@@ -61,7 +61,7 @@ export function ShellPageSettings({ destination, category, related, lang, onLang
       )}
       {category && (
         <section>
-          <h4>カテゴリ</h4>
+          <h3>カテゴリ</h3>
           <div className="es-pills">
             {category.options.map((option) => (
               <button key={option} type="button" className={option === category.value ? "es-on" : undefined} aria-pressed={option === category.value} onClick={() => category.onPick(option)}>
@@ -73,12 +73,12 @@ export function ShellPageSettings({ destination, category, related, lang, onLang
       )}
       {related && (
         <section>
-          <h4>
+          <h3>
             関連する体験
             <span>
               {related.items.length}/{related.max ?? 3}
             </span>
-          </h4>
+          </h3>
           <ul className="es-xps">
             {related.items.map((item) => (
               <li key={item.id} className="es-xp">
@@ -100,7 +100,7 @@ export function ShellPageSettings({ destination, category, related, lang, onLang
         </section>
       )}
       <section>
-        <h4>言語</h4>
+        <h3>言語</h3>
         <div className="es-pills">
           <button type="button" className={lang === "ja" ? "es-on" : undefined} aria-pressed={lang === "ja"} onClick={() => onLang?.("ja")}>
             日本語
@@ -111,7 +111,7 @@ export function ShellPageSettings({ destination, category, related, lang, onLang
         </div>
       </section>
       <section>
-        <h4>著者</h4>
+        <h3>著者</h3>
         <div className="es-me">
           <span className="es-av" aria-hidden="true">
             {author.initial}
@@ -123,7 +123,7 @@ export function ShellPageSettings({ destination, category, related, lang, onLang
         </div>
       </section>
       <section>
-        <h4>ページ</h4>
+        <h3>ページ</h3>
         <dl className="es-kv">
           {info.map((row) => (
             <div key={row.label}>
@@ -134,7 +134,7 @@ export function ShellPageSettings({ destination, category, related, lang, onLang
         </dl>
       </section>
       <section>
-        <h4>書き出し</h4>
+        <h3>書き出し</h3>
         <button type="button" className="es-linkrow">
           <Icon name="doc" />
           Markdown

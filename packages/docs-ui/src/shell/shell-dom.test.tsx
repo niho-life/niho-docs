@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ShellAddRow, ShellBubbleMenu, ShellHeader, ShellSidebar, ShellTools, StatusDot, shellAccountItems, shellMoreItems } from "./index";
+import { EditorShell, ShellAddRow, ShellBubbleMenu, ShellHeader, ShellMobileToolbar, ShellSidebar, ShellTools, StatusDot, shellAccountItems, shellMoreItems } from "./index";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -25,10 +25,20 @@ function mount(node: React.ReactNode): HTMLElement {
   return host;
 }
 
-const key = (target: Element | Document, name: string) =>
+const key = (target: Element | Document, name: string, init: KeyboardEventInit = {}) =>
   act(() => {
-    target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true }));
+    target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true, ...init }));
   });
+
+/**
+ * Tab で順に止まる要素（jsdom は Tab でフォーカスを動かさないので、ブラウザの順序を写して数える）。
+ * tabindex が 0 以上で、押せる（disabled でない）ものを DOM の順に。tabindex>0 は shell では使わない。
+ */
+const tabStops = (root: ParentNode = document) =>
+  [...root.querySelectorAll<HTMLElement>("a[href], button, input, textarea, select, [tabindex]")].filter(
+    (el) => el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled && !el.closest("[inert]"),
+  );
+const nameOf = (el: Element | null | undefined) => el?.getAttribute("aria-label") ?? el?.textContent?.trim() ?? "";
 
 describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
   function Sidebar({ onPick = vi.fn() }: { onPick?: (kind: string) => void }) {
@@ -140,6 +150,121 @@ describe("道具の帯", () => {
       act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!.click());
     }
     expect(onAction.mock.calls.map(([action]) => action)).toEqual(["add-block", "bold", "italic", "link", "heading", "list", "image", "record"]);
+  });
+});
+
+describe("道具の帯のキーボード（WAI-ARIA の toolbar・roving tabindex。#43）", () => {
+  const ORDER = ["ブロックを足す", "テキスト、行の種類", "太字", "斜体", "リンク", "見出し", "箇条書き", "画像", "録音"];
+  /** 帯の前後にボタンを置き、Tab の出入りを見られるようにする。 */
+  const around = (toolbar: React.ReactNode) =>
+    mount(
+      <>
+        <button type="button">前</button>
+        {toolbar}
+        <button type="button">後</button>
+      </>,
+    );
+  const toolbarOf = (host: HTMLElement) => host.querySelector<HTMLElement>('[role="toolbar"]')!;
+  const buttonsOf = (host: HTMLElement) => [...toolbarOf(host).querySelectorAll<HTMLButtonElement>("button")];
+
+  it("Tab の停止点は帯の中で 1 つ（はじめは先頭）。前 → 帯 → 後 の 3 つで止まる", () => {
+    const host = around(<ShellTools />);
+    expect(buttonsOf(host).map((button) => nameOf(button))).toEqual(ORDER);
+    expect(buttonsOf(host).map((button) => button.tabIndex)).toEqual([0, -1, -1, -1, -1, -1, -1, -1, -1]);
+    expect(tabStops(host).map((el) => nameOf(el))).toEqual(["前", "ブロックを足す", "後"]);
+  });
+
+  it("→ ← で隣へ（端では反対の端へ回る）、Home・End で先頭・最後へ。停止点も一緒に動く", () => {
+    const host = around(<ShellTools />);
+    const buttons = buttonsOf(host);
+    act(() => buttons[0]!.focus());
+    key(document.activeElement!, "ArrowRight");
+    expect(nameOf(document.activeElement)).toBe("テキスト、行の種類");
+    key(document.activeElement!, "ArrowRight");
+    expect(nameOf(document.activeElement)).toBe("太字");
+    key(document.activeElement!, "ArrowLeft");
+    expect(nameOf(document.activeElement)).toBe("テキスト、行の種類");
+    key(document.activeElement!, "End");
+    expect(nameOf(document.activeElement)).toBe("録音");
+    key(document.activeElement!, "ArrowRight");
+    expect(nameOf(document.activeElement)).toBe("ブロックを足す");
+    key(document.activeElement!, "ArrowLeft");
+    expect(nameOf(document.activeElement)).toBe("録音");
+    key(document.activeElement!, "Home");
+    expect(nameOf(document.activeElement)).toBe("ブロックを足す");
+    key(document.activeElement!, "ArrowRight");
+    key(document.activeElement!, "ArrowRight");
+    // 帯を出て戻ると、最後にいた項目に入る（停止点は動いた先の 1 つだけ）
+    expect(tabStops(host).map((el) => nameOf(el))).toEqual(["前", "太字", "後"]);
+    expect(buttons.filter((button) => button.tabIndex === 0)).toHaveLength(1);
+  });
+
+  it("矢印キーは既定の動き（スクロール）を止める。修飾キーつき・↑↓・Esc は帯では扱わない", () => {
+    const host = around(<ShellTools />);
+    const first = buttonsOf(host)[0]!;
+    act(() => first.focus());
+    const arrow = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+    act(() => {
+      first.dispatchEvent(arrow);
+    });
+    expect(arrow.defaultPrevented).toBe(true);
+    const at = document.activeElement;
+    for (const [name, init] of [["ArrowRight", { metaKey: true }], ["ArrowDown", {}], ["ArrowUp", {}], ["Escape", {}]] as const) {
+      key(document.activeElement!, name, init);
+      expect(document.activeElement).toBe(at);
+    }
+  });
+
+  it("クリック（フォーカス）した項目が次の停止点になる", () => {
+    const host = around(<ShellTools />);
+    const image = buttonsOf(host).find((button) => nameOf(button) === "画像")!;
+    act(() => image.focus());
+    expect(image.tabIndex).toBe(0);
+    expect(tabStops(host).map((el) => nameOf(el))).toEqual(["前", "画像", "後"]);
+  });
+
+  it("描き直しても停止点は 1 つのまま（行の種類が変わっても、いた項目を保つ）", () => {
+    function Tools() {
+      const [type, setType] = useState("テキスト");
+      return <ShellTools textType={type} onAction={(action) => action === "text-type" && setType("見出し")} />;
+    }
+    const host = around(<Tools />);
+    const textType = buttonsOf(host)[1]!;
+    act(() => textType.focus());
+    act(() => textType.click());
+    expect(nameOf(textType)).toBe("見出し、行の種類");
+    expect(textType.textContent).toBe("見出し ▾");
+    expect(buttonsOf(host).map((button) => button.tabIndex)).toEqual([-1, 0, -1, -1, -1, -1, -1, -1, -1]);
+  });
+
+  it("下端の帯（ShellMobileToolbar）も同じ動き", () => {
+    const host = around(<ShellMobileToolbar />);
+    expect(host.querySelector(".es-mtb")!.getAttribute("role")).toBe("region");
+    expect(tabStops(host).map((el) => nameOf(el))).toEqual(["前", "ブロックを足す", "後"]);
+    act(() => buttonsOf(host)[0]!.focus());
+    key(document.activeElement!, "End");
+    expect(nameOf(document.activeElement)).toBe("録音");
+    expect(tabStops(host).map((el) => nameOf(el))).toEqual(["前", "録音", "後"]);
+  });
+});
+
+describe("本文へ移動（skip link。#43）", () => {
+  it("EditorShell の最初の停止点で、押すと本文（main）へフォーカスが移る。URL の # は変えない", () => {
+    const before = window.location.hash;
+    const host = mount(
+      <EditorShell sidebar={<aside aria-label="ページ"><button type="button">一覧の項目</button></aside>} header={<header><button type="button">一覧を出す</button></header>} sidebarOpen railOpen={false}>
+        <p>本文</p>
+      </EditorShell>,
+    );
+    const stops = tabStops(host);
+    expect(nameOf(stops[0])).toBe("本文へ移動");
+    const main = host.querySelector<HTMLElement>("main")!;
+    expect(stops[0]!.getAttribute("href")).toBe(`#${main.id}`);
+    // main は Tab の停止点に入れない（skip link からだけ入る）
+    expect(main.tabIndex).toBe(-1);
+    act(() => (stops[0] as HTMLAnchorElement).click());
+    expect(document.activeElement).toBe(main);
+    expect(window.location.hash).toBe(before);
   });
 });
 

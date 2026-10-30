@@ -1,21 +1,22 @@
-import type { EditorStore } from "@niho/editor-store";
+import { InvalidPageCursorError, type EditorStore } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
 import {
   conflictResponse,
   errorResponse,
+  guarded,
   isSameOriginRequest,
   jsonResponse,
   noContentResponse,
   notFoundResponse,
   readJsonBody,
 } from "./http";
-import { parseCreatePage, parsePageSave } from "./page-input";
+import { parseCreatePage, parseListQuery, parsePageSave } from "./page-input";
 
 /** API の route が使う store の操作。 */
 export type PagesStore = Pick<
   EditorStore,
   | "createPage"
-  | "listPages"
+  | "listPageChunk"
   | "getPage"
   | "savePage"
   | "deletePage"
@@ -33,30 +34,29 @@ export type PagesApiDeps = {
   env?: Readonly<Record<string, string | undefined>>;
 };
 
-/** 想定外の失敗は 500 の汎用エラー（内部の情報は応答に出さず、ログにも名前と code だけを書く）。 */
-export async function guarded(route: string, handler: () => Promise<Response>): Promise<Response> {
-  try {
-    return await handler();
-  } catch (error) {
-    const name = error instanceof Error ? error.name : "unknown";
-    const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : undefined;
-    console.error("editor-web: request failed", { route, name, code });
-    return errorResponse("internal");
-  }
-}
-
+/** route の要求の session（無ければ null）。versions-api・trash-api も使う。 */
 export async function sessionOf(request: Request, deps: PagesApiDeps) {
   return deps.auth().getSession(request);
 }
 
-/** GET /api/pages — 自分のページの一覧（更新順）。 */
+/**
+ * GET /api/pages?limit=&cursor= — 自分のページの一覧（更新順）を limit 件（既定 100）ずつ。
+ * 応答は `{ pages, next }`。続きは next を cursor に渡して読む（無ければ null）。limit・cursor が読めなければ 400。
+ */
 export function listPages(request: Request, deps: PagesApiDeps): Promise<Response> {
   return guarded("GET /api/pages", async () => {
     const session = await sessionOf(request, deps);
     if (!session) return errorResponse("unauthorized");
     const store = deps.store();
     if (!store) return errorResponse("unavailable");
-    return jsonResponse(200, { pages: await store.listPages(session.userId) });
+    const query = parseListQuery(new URL(request.url).searchParams);
+    if (!query.ok) return errorResponse("bad_request");
+    try {
+      return jsonResponse(200, await store.listPageChunk(session.userId, query.value));
+    } catch (error) {
+      if (error instanceof InvalidPageCursorError) return errorResponse("bad_request");
+      throw error;
+    }
   });
 }
 

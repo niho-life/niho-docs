@@ -6,6 +6,8 @@ import {
   type DeleteResult,
   type OwnerId,
   type Page,
+  type PageChunk,
+  type PageChunkOptions,
   type PageKind,
   type PageLang,
   type PagePatch,
@@ -25,7 +27,7 @@ import {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 一覧で返す上限（段階読み込み・仮想化は #32）。 */
+/** 一覧で一度に返す上限。 */
 export const PAGE_LIST_LIMIT = 500;
 /** 版の一覧で返す上限（新しい順）。 */
 export const VERSION_LIST_LIMIT = 100;
@@ -40,6 +42,23 @@ export const TRASH_RETENTION_DAYS = 30;
 
 /** PostgreSQL の integer の上限（revision・版の番号の列）。 */
 const MAX_INTEGER = 2_147_483_647;
+
+/** listPageChunk の limit の既定。 */
+const PAGE_CHUNK_DEFAULT = 100;
+
+/**
+ * 一覧の続きの位置（`<updated_at>_<id>`）。updated_at は PostgreSQL が出した UTC の文字列のまま持つ
+ * （JavaScript の Date はマイクロ秒を落とすので、同じ時刻の行の境目がずれる）。
+ */
+const CURSOR_PATTERN = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z)_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+/** cursor として読めない値（API は 400 にする）。 */
+export class InvalidPageCursorError extends Error {
+  override readonly name = "InvalidPageCursorError";
+  constructor() {
+    super("editor-store: invalid page list cursor");
+  }
+}
 
 /** UUID の文字列として正しいか（正しくない id は DB に渡さず「無い」と同じに扱う）。 */
 export function isPageId(value: string): boolean {
@@ -72,7 +91,12 @@ type PageRow = {
   updated_at: Date;
 };
 
-type SummaryRow = Pick<PageRow, "id" | "kind" | "title" | "lang" | "created_at" | "updated_at">;
+type SummaryRow = Pick<PageRow, "id" | "kind" | "title" | "lang" | "parent" | "step_status" | "created_at" | "updated_at">;
+
+const SUMMARY_COLUMNS = "id, kind, title, lang, parent, step_status, created_at, updated_at";
+
+/** 一覧の区切りの行。cursor_time は updated_at の UTC の文字列（マイクロ秒まで）。 */
+type ChunkRow = SummaryRow & { cursor_time: string };
 
 type VersionRow = { version: number; reason: VersionReason; created_at: Date; block_count: number };
 
@@ -102,9 +126,22 @@ function toSummary(row: SummaryRow): PageSummary {
     kind: row.kind,
     title: row.title,
     lang: row.lang,
+    parent: row.parent,
+    stepStatus: row.step_status,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+function parseCursor(cursor: string): { time: string; id: string } {
+  const match = CURSOR_PATTERN.exec(cursor);
+  if (!match) throw new InvalidPageCursorError();
+  return { time: match[1]!, id: match[2]! };
+}
+
+function isInvalidDatetime(error: unknown): boolean {
+  const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: unknown }).code : undefined;
+  return code === "22007" || code === "22008";
 }
 
 function toVersionSummary(row: VersionRow): PageVersionSummary {
@@ -178,7 +215,7 @@ export class EditorStore {
     assertOwner(owner);
     const limit = Math.max(1, Math.min(options.limit ?? PAGE_LIST_LIMIT, PAGE_LIST_LIMIT));
     const result = await this.#db.query<SummaryRow>(
-      `SELECT id, kind, title, lang, created_at, updated_at
+      `SELECT ${SUMMARY_COLUMNS}
          FROM pages
         WHERE owner = $1 AND deleted_at IS NULL
         ORDER BY updated_at DESC, id
@@ -186,6 +223,43 @@ export class EditorStore {
       [owner, limit],
     );
     return result.rows.map(toSummary);
+  }
+
+  /**
+   * 一覧を limit 件ずつ（更新順。同じ時刻は id の降順）。cursor は前の区切りの next。
+   * 読めない cursor は InvalidPageCursorError。
+   */
+  async listPageChunk(owner: OwnerId, options: PageChunkOptions = {}): Promise<PageChunk> {
+    assertOwner(owner);
+    const requested = options.limit !== undefined && Number.isFinite(options.limit) ? Math.trunc(options.limit) : PAGE_CHUNK_DEFAULT;
+    const limit = Math.max(1, Math.min(requested, PAGE_LIST_LIMIT));
+    const after = options.cursor === undefined || options.cursor === null ? null : parseCursor(options.cursor);
+    // 1 件多く読んで、続きがあるかを知る
+    const params: unknown[] = [owner, limit + 1];
+    if (after) params.push(after.time, after.id);
+    let rows: ChunkRow[];
+    try {
+      const result = await this.#db.query<ChunkRow>(
+        `SELECT ${SUMMARY_COLUMNS},
+                to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_time
+           FROM pages
+          WHERE owner = $1 AND deleted_at IS NULL${after ? " AND (updated_at, id) < ($3::timestamptz, $4::uuid)" : ""}
+          ORDER BY updated_at DESC, id DESC
+          LIMIT $2`,
+        params,
+      );
+      rows = result.rows;
+    } catch (error) {
+      // 形は合っていても日付として無い値（2 月 30 日など）
+      if (after && isInvalidDatetime(error)) throw new InvalidPageCursorError();
+      throw error;
+    }
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      pages: page.map(toSummary),
+      next: rows.length > limit && last ? `${last.cursor_time}_${last.id}` : null,
+    };
   }
 
   async getPage(owner: OwnerId, id: string): Promise<Page | null> {

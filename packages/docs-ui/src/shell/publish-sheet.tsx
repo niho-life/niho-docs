@@ -124,15 +124,16 @@ function PublishForm(props: PublishFormProps) {
                   <span className="es-tag-ok">{dest.role}</span>
                 </button>
               ) : (
-                <button key={dest.id} type="button" className={`es-dst es-dst--${dest.id}`} aria-label={`${dest.label} に接続する`} onClick={() => props.onConnect?.(dest.id)}>
+                // 名前は見えている文字そのもの（発信先・説明・URL・「接続する」）。aria-label で別の文に置き換えない（WCAG 2.5.3。#43）
+                <button key={dest.id} type="button" className={`es-dst es-dst--${dest.id}`} onClick={() => props.onConnect?.(dest.id)}>
                   <i aria-hidden="true" />
                   <span>
                     <b>{dest.label}</b>
                     <small>{dest.who}</small>
                     <small>{dest.url}</small>
                   </span>
-                  <span className="es-tag-no" aria-hidden="true">
-                    接続する ›
+                  <span className="es-tag-no">
+                    接続する<span aria-hidden="true"> ›</span>
                   </span>
                 </button>
               ),

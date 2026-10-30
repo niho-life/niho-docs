@@ -12,8 +12,19 @@ const ORIGIN = "http://editor.test";
 const INLINE = { EDITOR_STEPS_MODE: "inline" };
 const transcript = [{ type: "paragraph", content: [{ type: "text", text: "合成の文字起こし" }] }];
 
+/** 手順の API が呼ぶのは getSession だけ。ログインの経路（AuthProvider の残り）は使わない。 */
+const notUsed = async (): Promise<Response> => {
+  throw new Error("the steps API never calls the login routes");
+};
+
 function authAs(userId: string | null): AuthProvider {
-  return { mode: "stub", getSession: async () => (userId ? { userId, mode: "stub" } : null) };
+  return {
+    mode: "stub",
+    getSession: async () => (userId ? { userId, mode: "stub" } : null),
+    beginLogin: notUsed,
+    completeLogin: notUsed,
+    logout: notUsed,
+  };
 }
 
 function deps(

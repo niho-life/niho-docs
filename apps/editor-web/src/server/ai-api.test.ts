@@ -114,8 +114,19 @@ function stubBackend(respond: (request: AiRequest) => unknown, report: Partial<A
 
 const fake = (): AiBackend | null => resolveAiBackend({ EDITOR_AI_MODE: "fake", NODE_ENV: "test" });
 
+/** AI の API が呼ぶのは getSession だけ。ログインの経路（AuthProvider の残り）は使わない。 */
+const notUsed = async (): Promise<Response> => {
+  throw new Error("the AI API never calls the login routes");
+};
+
 function authAs(userId: string | null): AuthProvider {
-  return { mode: "stub", getSession: async () => (userId ? { userId, mode: "stub" } : null) };
+  return {
+    mode: "stub",
+    getSession: async () => (userId ? { userId, mode: "stub" } : null),
+    beginLogin: notUsed,
+    completeLogin: notUsed,
+    logout: notUsed,
+  };
 }
 
 type Options = { usage?: MemoryUsage | null; ai?: () => AiBackend | null; limitUsd?: number | null };

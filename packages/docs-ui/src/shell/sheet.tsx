@@ -2,6 +2,28 @@ import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type React
 
 const FOCUSABLE = 'button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
+/**
+ * シートの外を inert にする（支援技術から隠し、フォーカス・クリックも届かなくする）。#43。
+ * veil から .es-root（無ければ body）までの各段で、自分以外の兄弟に inert を付ける。
+ * 開く前から inert だった要素には触らない（返す関数は、ここで付けた分だけを外す）。aria-hidden も触らない。
+ * React 18 は inert を props で扱えないので、属性を直に付け外しする。
+ */
+function inertOutside(veil: HTMLElement): () => void {
+  const marked: Element[] = [];
+  for (let node: HTMLElement = veil; node.parentElement; node = node.parentElement) {
+    const parent = node.parentElement;
+    for (const sibling of parent.children) {
+      if (sibling === node || sibling.hasAttribute("inert")) continue;
+      sibling.setAttribute("inert", "");
+      marked.push(sibling);
+    }
+    if (parent.classList.contains("es-root") || parent === document.body) break;
+  }
+  return () => {
+    for (const element of marked) element.removeAttribute("inert");
+  };
+}
+
 export type ShellSheetProps = {
   /** ダイアログの名前（aria-label）。中身を替えるとき（公開 → 公開しました）はこれも替えると、フォーカスが中へ移り直す。 */
   label: string;
@@ -13,18 +35,21 @@ export type ShellSheetProps = {
  * 公開のシートの枠。デスクトップでは中央、900px 未満では下からのシート（スタイル側）。
  * role="dialog" aria-modal。開いたら中（data-autofocus の要素、なければダイアログ自身）へフォーカスし、
  * Esc・外（幕）の押下で閉じ、Tab は中で回り、閉じたら開く前の要素へフォーカスを戻す。
+ * 開いているあいだ、シートの外（.es-root の中の兄弟）は inert（閉じたら元に戻す）。
  * EditorShell の overlay に渡す（.es-root の中に出すため）。
  */
 export function ShellSheet({ label, onClose, children }: ShellSheetProps) {
+  const veil = useRef<HTMLDivElement | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
   const closeRef = useRef(onClose);
   useEffect(() => {
     closeRef.current = onClose;
   }, [onClose]);
 
-  // 開く前にフォーカスしていた要素を覚え、Esc で閉じ、閉じたら戻す
+  // 開く前にフォーカスしていた要素を覚え、外を inert にし、Esc で閉じ、閉じたら inert を外してから戻す
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const restoreInert = veil.current ? inertOutside(veil.current) : () => undefined;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.stopPropagation();
@@ -33,6 +58,8 @@ export function ShellSheet({ label, onClose, children }: ShellSheetProps) {
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
+      // inert の要素にはフォーカスできないので、先に外す
+      restoreInert();
       if (opener?.isConnected) opener.focus();
     };
   }, []);
@@ -66,6 +93,7 @@ export function ShellSheet({ label, onClose, children }: ShellSheetProps) {
 
   return (
     <div
+      ref={veil}
       className="es-veil"
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onClose();
