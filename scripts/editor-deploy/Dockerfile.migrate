@@ -1,0 +1,14 @@
+# editor.niho.life の migrate ジョブ（Cloud Run ジョブ）の image。
+# 配備のたびに packages/editor-store の migration を適用し、アプリ用ロールの作成と権限付与をする。
+# build context はリポジトリのルート: docker build -f scripts/editor-deploy/Dockerfile.migrate .
+ARG NODE_IMAGE=node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
+
+FROM ${NODE_IMAGE}
+WORKDIR /app
+ENV NODE_ENV=production
+COPY packages/editor-store/package.json packages/editor-store/package-lock.json packages/editor-store/
+RUN npm -C packages/editor-store ci --omit=dev --no-audit --no-fund
+COPY packages/editor-store/src packages/editor-store/src
+COPY packages/editor-store/migrations packages/editor-store/migrations
+USER node
+CMD ["node", "packages/editor-store/src/deploy-cli.ts"]

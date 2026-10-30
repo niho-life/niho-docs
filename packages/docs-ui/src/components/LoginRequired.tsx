@@ -24,7 +24,7 @@ export function LoginRequired({ account, updateNotice, failure, onDismissFailure
         <p className="msg">
           {reopeningPending
             ? "保存先の変更が途中です。ログインしてこの Mac の内容を照合し、移行を完了してください。"
-            : "NIHO docs のページと音声を使うには、アカウントでログインしてください。"}
+            : "NIHO editor のページと音声を使うには、アカウントでログインしてください。"}
         </p>
         <p className="help">
           {reopeningPending

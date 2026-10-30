@@ -75,10 +75,10 @@ impl RecordingError {
       RecordingError::NotFound => crate::speech::SpeechError::NotFound.message(),
       RecordingError::Busy => "ほかの録音が動いています。止めてから、もう一度押してください。",
       RecordingError::NoDevice => "マイクが見つかりません。マイクをつないでから、もう一度押してください。",
-      RecordingError::Permission => "マイクの使用が許可されていません。システム設定で NIHO docs を許可してください。",
+      RecordingError::Permission => "マイクの使用が許可されていません。システム設定で NIHO editor を許可してください。",
       RecordingError::Empty => "音が届かず、録音できませんでした。マイクを確かめてから、もう一度押してください。",
       RecordingError::Missing => "録音が見つかりません。",
-      RecordingError::InUse => "ほかの NIHO docs が録音しています。録音を止めてから、もう一度捨ててください。",
+      RecordingError::InUse => "ほかの NIHO editor が録音しています。録音を止めてから、もう一度捨ててください。",
       RecordingError::DiscardFailed => {
         "録音のファイルを消せませんでした。ファイルの権限を確かめてから、もう一度捨ててください。"
       }

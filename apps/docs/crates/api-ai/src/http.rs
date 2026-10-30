@@ -18,7 +18,7 @@ pub(crate) fn client() -> Result<reqwest::Client, ApiError> {
     .build()
     .map_err(|_| ApiError {
       reason: Reason::TransientFailure,
-      message: "通信の準備ができませんでした。NIHO docs を開き直してから、もう一度お試しください。".into(),
+      message: "通信の準備ができませんでした。NIHO editor を開き直してから、もう一度お試しください。".into(),
     })
 }
 
