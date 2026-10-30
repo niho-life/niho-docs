@@ -302,7 +302,11 @@ describe("editor-web e2e (stub, next dev)", () => {
     // 止めた・作り直す前・形の違う・知らない token はどれも同じ 404（header・画面とも）
     const snapshot = async (response) => ({
       status: response.status,
-      headers: [...response.headers.entries()].filter(([name]) => name !== "date").map(([name, value]) => [name, value.replace(/\?v=\d+/g, "?v=")]).sort(),
+      // CSP の nonce は要求ごとに変わる乱数で、ページの存在を漏らさないので、値だけ外して比べる（#61）
+      headers: [...response.headers.entries()]
+        .filter(([name]) => name !== "date")
+        .map(([name, value]) => [name, value.replace(/\?v=\d+/g, "?v=").replace(/'nonce-[^']*'/g, "'nonce-'")])
+        .sort(),
       body: await response.text(),
     });
     const missing = [];
