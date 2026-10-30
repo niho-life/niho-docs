@@ -336,7 +336,8 @@ describe("editor-web e2e (stub, next dev)", () => {
     const page = (await (await write("POST", "/api/pages", {})).json()).page;
     createdIds.push(page.id);
     const blocks = [{ type: "bulletList", content: [{ type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: `本文の ${token} の行` }] }] }] }];
-    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { title: "合成の検索 e2e", blocks })).status, 200);
+    // 本文を保存するには、読んだ revision を baseRevision で送る（#58 の競合検知）
+    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { title: "合成の検索 e2e", blocks, baseRevision: page.revision })).status, 200);
     const other = await pool.query("INSERT INTO pages (owner, title, blocks) VALUES ($1, $2, $3::jsonb) RETURNING id", [
       OTHER_OWNER,
       `他人の ${token}`,
