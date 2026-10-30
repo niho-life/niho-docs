@@ -8,6 +8,7 @@ const scanRoots = [
   ".github/workflows",
   "apps/docs/dist",
   "packages/niho-cloud-contract/v1",
+  "packages/editor-publish-contract/v1",
 ];
 const textExtensions = new Set([
   ".css", ".html", ".js", ".json", ".log", ".map", ".md", ".mjs", ".svg", ".txt", ".ts", ".xml", ".yaml", ".yml",

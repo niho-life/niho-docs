@@ -12,6 +12,7 @@ on:
       - "packages/desktop-account/**"
       - "packages/desktop-vault/**"
       - "packages/niho-cloud-contract/**"
+      - "packages/editor-publish-contract/**"
       - "docs/security/**"
       - "CONTRIBUTING.md"
       - "ASSET_LICENSE.md"
@@ -45,6 +46,19 @@ jobs:
           cache-dependency-path: packages/docs-core/package-lock.json
       - run: npm -C packages/docs-core ci
       - run: npm -C packages/docs-core run check
+
+  editor-publish-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/editor-publish-contract/package-lock.json
+      - run: npm -C packages/editor-publish-contract ci
+      - run: npm -C packages/editor-publish-contract run check
 
   ui:
     runs-on: ubuntu-latest
