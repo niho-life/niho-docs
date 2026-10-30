@@ -1,7 +1,3 @@
-# 公開前・公開後とも、変更の所有者を明示する。承認必須化は GitHub ruleset で別途設定する。
-* @takuyatakahama3
-
-# fork PR から秘密値を扱わせないため、CI と配布経路は所有者が確認する。
-/.github/workflows/ @takuyatakahama3
-/apps/docs/scripts/ @takuyatakahama3
-/docs/security/ @takuyatakahama3
+# 所有者の指定は置かない（どの PR にもレビュー依頼を自動では出さない）。
+# 秘密値や配布経路（.github/workflows、apps/docs/scripts、docs/security）の変更を承認必須にする場合は、
+# GitHub の ruleset で別途設定する。

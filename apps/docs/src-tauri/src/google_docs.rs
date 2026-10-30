@@ -180,7 +180,7 @@ fn api_error(response: &HttpResponse) -> CommandError {
       "NIHO への接続は今、一時停止しています。再開すると、ログインし直さずにもう一度お試しいただけます。",
     ),
     (401, _) => error("signed_out", "NIHO へのログインをやり直してください。"),
-    (403, Some("niho_docs_app_required")) => error("docs_app_required", "NIHO docs から、もう一度お試しください。"),
+    (403, Some("niho_docs_app_required")) => error("docs_app_required", "NIHO editor から、もう一度お試しください。"),
     (404, Some("export_not_found")) => error("export_not_found", "この書き出しはまだ受け付けられていません。"),
     (409, Some("drive_not_connected")) => error("drive_not_connected", "Google ドキュメントへ再接続してください。"),
     (409, Some("export_payload_conflict")) => error(

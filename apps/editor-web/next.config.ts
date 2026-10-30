@@ -1,0 +1,43 @@
+import type { NextConfig } from "next";
+import { API_CSP } from "./src/security/csp";
+
+/**
+ * editor.niho.life は全ページ・全 API の応答を索引に載せない（設計 §2）。
+ * header は build のときに固まるので、環境ごとに変わる値（認証の方式・DB）はここに置かず、要求のときに読む。
+ */
+export const ROBOTS_HEADERS = [{ key: "X-Robots-Tag", value: "noindex, nofollow" }];
+
+const securityHeaders = [
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  // 更新系の要求の Origin 検査のため same-origin（no-referrer だと Origin: null になる画面がある）
+  { key: "Referrer-Policy", value: "same-origin" },
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
+  // 常に https で開く（http で来た要求は Cloud Run の手前で https に回される）。サブドメインは他の用途があるので preload はしない
+  { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+];
+
+const nextConfig: NextConfig = {
+  // Cloud Run の container 用の自己完結の server（Dockerfile）
+  output: "standalone",
+  // packages/* は TypeScript のまま（install-links で node_modules に複製される）
+  transpilePackages: ["@niho/docs-core", "@niho/editor-store", "niho-docs-ui", "niho-ui"],
+  poweredByHeader: false,
+  reactStrictMode: true,
+  outputFileTracingRoot: process.cwd(),
+  experimental: {
+    // docs-core は TypeScript の NodeNext の書き方（`./types.js` で `./types.ts` を指す）。Turbopack は node_modules の中の
+    // この書き方を解決しないので、bundler は webpack にし（package.json の `--webpack`）、`.js` を `.ts` にも当てる。
+    extensionAlias: { ".js": [".ts", ".tsx", ".js"] },
+  },
+  async headers() {
+    // `/:path*` は `/` も含む全ての path（ページ・API・404・robots.txt・静的ファイル）。
+    // ページの CSP は nonce が要るので src/proxy.ts が付ける。API は何も読み込まないので固定の CSP。
+    return [
+      { source: "/:path*", headers: [...ROBOTS_HEADERS, ...securityHeaders] },
+      { source: "/api/:path*", headers: [{ key: "Content-Security-Policy", value: API_CSP }] },
+    ];
+  },
+};
+
+export default nextConfig;

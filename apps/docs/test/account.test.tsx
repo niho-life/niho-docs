@@ -86,7 +86,7 @@ it("未ログインでも案件を作成でき、設定の接続設定から共�
   await click(container.querySelector<HTMLButtonElement>(".window-titlebar .tb-new")!);
   expect(button(container, "ページ").disabled).toBe(false);
   expect(container.querySelector(".docs-account")?.closest(".card")?.querySelector("h2")?.textContent).toBe("接続設定");
-  expect(container.querySelector(".docs-account")?.textContent).toContain("NIHO docs はログインして使います");
+  expect(container.querySelector(".docs-account")?.textContent).toContain("NIHO editor はログインして使います");
   expect(container.querySelector('[data-account-popover="signedOut"]')).not.toBeNull();
   await click(button(container, "NIHO でログイン"));
   expect(container.textContent).toContain("ブラウザで続けています…");

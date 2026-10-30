@@ -1,0 +1,60 @@
+/*
+ * NIHO editor の面の token（モック v6。#48 / Epic #30）。
+ *
+ * niho-ui/styles/tokens.css（web の globals.css の写し）を先に読み込む。緑と役割色は、そこにある --niho-* を指す（値を写さない）。
+ * ここで値を持つのは、tokens.css に無い「editor の面の中立色」と、白地に載せる緑の文字色 --ed-accent-ink だけ。
+ * tokens.css は web が正で別リポの検査が照らすので、この PR では動かさない。既存の --niho-* の値も上書きしない。
+ *
+ * 使い方の決まり（color-style-guide §3.1a と同じ）:
+ *  - 主ボタンは --ed-primary-bg と --ed-primary-ink を必ずセットで当てる（黒ベタの主ボタンを作らない）。
+ *  - --ed-accent-ink は白地に載せる文字・アイコン・選択チップの文字の色。面には使わない（面に使うとオリーブに沈む）。
+ *  - 選択チップは淡色面 --ed-accent-soft ＋ --ed-accent-ink の文字。
+ *  - 切り替え（サブタブ）に緑を使わない。沈めたトラック --ed-track ＋ 白いピル。
+ *  - 緑の生の hex を増やさない。必要な緑は --niho-* を --ed-* に束ねて引く。
+ */
+:root {
+  /* ── 文字 ── */
+  --ed-ink: #2a2a26;
+  --ed-ink-sub: #54544d;
+  --ed-ink-mute: #8e8e86;
+  --ed-ink-faint: #bdbdb7;
+
+  /* ── 地・面・線 ── */
+  --ed-white: #fff;
+  --ed-canvas: #fffdfa;
+  --ed-shell: #fcfaf5;
+  --ed-sand: #f7f7f4;
+  --ed-sand-2: #f5f3ee;
+  --ed-line: #f1f1ed;
+  --ed-line-2: #e7e7e2;
+  --ed-line-3: #dbdbd5;
+
+  /* ── 切り替え（サブタブ）。緑を使わず、沈めたトラックに白いピルを載せる ── */
+  --ed-track: #f2efe8;
+  --ed-track-ink: #63605a;
+
+  /* ── 緑（既存の --niho-* を引く） ── */
+  --ed-primary-bg: var(--niho-primary-bg);
+  --ed-primary-bg-hover: var(--niho-primary-bg-hover);
+  --ed-primary-ink: var(--niho-primary-ink);
+  --ed-accent-soft: var(--niho-accent-soft);
+  --ed-leaf: var(--niho);
+  --ed-deep: var(--niho-deep);
+  /* 白地に載せる操作色（文字・アイコン・選択チップの文字）。color-style-guide の --niho-accent-ink の既定値。面には使わない */
+  --ed-accent-ink: #56751e;
+
+  /* ── 役割色（既存の --niho-* を引く。値は同じ） ── */
+  --ed-amber: var(--niho-orange);
+  --ed-amber-soft: var(--niho-orange-pale);
+  --ed-blue: var(--niho-info);
+  --ed-blue-soft: var(--niho-info-soft);
+  --ed-red: var(--niho-danger);
+  --ed-red-soft: #fdebec;
+  --ed-brown: #5d4335;
+
+  /* ── 書体 ──
+   * 本文の明朝系は仮素材（モックは Fraunces を内蔵）。Web font は配信せず、無ければ端末の明朝へ落とす。 */
+  --ed-font-sans: var(--font-family-sans);
+  --ed-font-serif: "Fraunces", "Hiragino Mincho ProN", "Yu Mincho", Georgia, serif;
+  --ed-font-mono: ui-monospace, Menlo, monospace;
+}

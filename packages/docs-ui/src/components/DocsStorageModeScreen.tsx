@@ -22,7 +22,7 @@ export function DocsStorageModeScreen({ mode, selecting, error, onSelectCloud, o
     <div className="min-h-dvh bg-niho-docs-surface px-4 pb-[max(36px,env(safe-area-inset-bottom))] pt-[max(20px,env(safe-area-inset-top))]">
       <main className="mx-auto w-full max-w-2xl space-y-5">
         <header className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-          <span className="text-lg font-extrabold text-niho-text">NIHO docs</span>
+          <span className="text-lg font-extrabold text-niho-text">NIHO editor</span>
           <button type="button" onClick={() => setShowAccount((value) => !value)} aria-expanded={showAccount}
             className="min-h-11 rounded-xl border border-niho-border bg-white px-4 text-body font-bold text-niho-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-niho-dark/40">設定</button>
         </header>
