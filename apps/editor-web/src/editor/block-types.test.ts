@@ -1,0 +1,163 @@
+// @vitest-environment jsdom
+import { Editor, type JSONContent } from "@tiptap/core";
+import { TextSelection } from "@tiptap/pm/state";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { validateBlocks } from "@/ast/blocks";
+import { BLOCK_CHOICES, LINE_TYPE_CHOICES, blankLineAround, fillBlankLine, filterBlockChoices, lineTypeOf, setLineType } from "./block-types";
+import { checkLinkInput } from "./link-href";
+import { buildPageExtensions } from "./page-extensions";
+
+beforeAll(() => {
+  const rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }) as DOMRect;
+  Range.prototype.getBoundingClientRect = rect;
+  Range.prototype.getClientRects = () => ({ length: 0, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }) as unknown as DOMRectList;
+  Element.prototype.scrollIntoView = () => undefined;
+});
+
+let editor: Editor | null = null;
+
+afterEach(() => {
+  editor?.destroy();
+  editor = null;
+  document.body.innerHTML = "";
+});
+
+const text = (value: string, marks?: JSONContent["marks"]): JSONContent => (marks ? { type: "text", text: value, marks } : { type: "text", text: value });
+const p = (value?: string): JSONContent => (value ? { type: "paragraph", content: [text(value)] } : { type: "paragraph" });
+const li = (...content: JSONContent[]): JSONContent => ({ type: "listItem", content });
+
+/** 書式の帯・「/」・「＋」で操作する前の、いろいろな形の本文（入れ子のリスト・引用の中のリスト・見出し・区切り線・書式）。 */
+const BODY: JSONContent = {
+  type: "doc",
+  content: [
+    { type: "heading", attrs: { level: 2 }, content: [text("見出し")] },
+    { type: "paragraph", content: [text("太字", [{ type: "bold" }]), text("と"), text("リンク", [{ type: "link", attrs: { href: "https://example.com" } }])] },
+    { type: "bulletList", content: [li(p("一つ目"), { type: "orderedList", content: [li(p("入れ子"))] }), li(p("二つ目"))] },
+    { type: "blockquote", content: [p("引用の中"), { type: "bulletList", content: [li(p("引用のリスト"))] }] },
+    { type: "horizontalRule" },
+    { type: "orderedList", attrs: { start: 3 }, content: [li(p("三"))] },
+    p("最後"),
+  ],
+};
+
+function makeEditor(content: JSONContent = BODY): Editor {
+  const element = document.createElement("div");
+  document.body.appendChild(element);
+  editor = new Editor({ element, extensions: buildPageExtensions(), content });
+  return editor;
+}
+
+function assertSavable(current: Editor, label: string) {
+  const result = validateBlocks(current.getJSON().content ?? []);
+  expect(result.ok ? null : result.reason, label).toBeNull();
+}
+
+/** 本文の中の文字の位置（textblock の中）を全て集める。 */
+function textPositions(current: Editor): number[] {
+  const positions: number[] = [];
+  current.state.doc.descendants((node, pos) => {
+    if (node.isTextblock) positions.push(pos + 1 + Math.floor(node.content.size / 2));
+  });
+  return positions;
+}
+
+describe("every operation of the format bar and the block lists keeps the body within the limited AST", () => {
+  const BAR_COMMANDS: Array<[string, (current: Editor) => unknown]> = [
+    ["bold", (current) => current.chain().focus().toggleBold().run()],
+    ["italic", (current) => current.chain().focus().toggleItalic().run()],
+    ["heading", (current) => current.chain().focus().toggleHeading({ level: 2 }).run()],
+    ["list", (current) => current.chain().focus().toggleBulletList().run()],
+    ["link", (current) => current.chain().focus().setLink({ href: "https://example.com/x" }).run()],
+    ["unlink", (current) => current.chain().focus().extendMarkRange("link").unsetLink().run()],
+  ];
+
+  it("for the line types and the bar's commands, on every line, and across lines", () => {
+    const current = makeEditor();
+    const lines = textPositions(current);
+    const count = lines.length;
+    // 行をまたぐ選択（見出しから最後の段落まで・リストの途中から引用まで）
+    const spans: Array<[number, number]> = [
+      [1, current.state.doc.content.size - 1],
+      [lines[3]!, lines[6]!],
+    ];
+    const operations: Array<[string, (target: Editor) => unknown]> = [
+      ...LINE_TYPE_CHOICES.map((choice): [string, (target: Editor) => unknown] => [`line type ${choice.id}`, (target) => setLineType(target, choice.id)]),
+      ...BAR_COMMANDS,
+    ];
+    for (const [name, run] of operations) {
+      for (let index = 0; index < count; index++) {
+        current.commands.setContent(BODY);
+        const pos = textPositions(current)[index]!;
+        // 1 文字を選んでから（帯は選択に出る）
+        current.view.dispatch(current.state.tr.setSelection(TextSelection.create(current.state.doc, pos, Math.min(pos + 1, current.state.doc.resolve(pos).end()))));
+        run(current);
+        assertSavable(current, `${name} at line ${index}`);
+        // 同じ操作を 2 回（切り替え・入れ子が深くならない）
+        run(current);
+        assertSavable(current, `${name} twice at line ${index}`);
+      }
+      for (const [from, to] of spans) {
+        current.commands.setContent(BODY);
+        current.view.dispatch(current.state.tr.setSelection(TextSelection.create(current.state.doc, from, to)));
+        run(current);
+        assertSavable(current, `${name} across ${from}..${to}`);
+      }
+    }
+  });
+
+  it("keeps the inline marks when the line type changes", () => {
+    const current = makeEditor({ type: "doc", content: [{ type: "paragraph", content: [text("太字", [{ type: "bold" }]), text("と斜体", [{ type: "italic" }])] }] });
+    current.commands.setTextSelection({ from: 2, to: 4 });
+    for (const choice of LINE_TYPE_CHOICES) {
+      setLineType(current, choice.id);
+      expect(lineTypeOf(current.state), choice.id).toBe(choice.id);
+      expect(JSON.stringify(current.getJSON()), choice.id).toContain('"marks":[{"type":"bold"}]');
+      expect(JSON.stringify(current.getJSON()), choice.id).toContain('"marks":[{"type":"italic"}]');
+      assertSavable(current, choice.id);
+    }
+  });
+
+  it("fills only a blank line directly in the body, and leaves everything else untouched", () => {
+    const current = makeEditor({ type: "doc", content: [p("前"), p(), p("後")] });
+    for (const choice of BLOCK_CHOICES) {
+      current.commands.setContent({ type: "doc", content: [p("前"), p(), p("後")] });
+      expect(fillBlankLine(current, choice.id, { at: 3 }), choice.id).toBe(true);
+      assertSavable(current, choice.id);
+      // 空でない段落・見出し・範囲の外は変えない
+      const before = JSON.stringify(current.getJSON());
+      expect(fillBlankLine(current, choice.id, { at: 0 }), `${choice.id} on text`).toBe(false);
+      expect(fillBlankLine(current, choice.id, { at: 999 }), `${choice.id} outside`).toBe(false);
+      expect(JSON.stringify(current.getJSON())).toBe(before);
+    }
+  });
+
+  it("finds a blank line around 「/…」 only directly in the body", () => {
+    const current = makeEditor({ type: "doc", content: [p(" /a "), p("x/a"), { type: "blockquote", content: [p("/a")] }, { type: "heading", attrs: { level: 3 }, content: [text("/")] }] });
+    const { doc } = current.state;
+    expect(blankLineAround(doc, { from: 2, to: 4 })).toEqual({ pos: 0, start: 1, end: 5 });
+    expect(blankLineAround(doc, { from: 8, to: 10 })).toBeNull();
+    expect(blankLineAround(doc, { from: 13, to: 15 })).toBeNull();
+    expect(blankLineAround(doc, { from: 18, to: 19 })).toEqual({ pos: 17, start: 18, end: 19 });
+  });
+});
+
+describe("the block choices", () => {
+  it("never offer what this body cannot hold (heading 1, code, check, image, recording)", () => {
+    expect(BLOCK_CHOICES.map((choice) => choice.id)).toEqual(["paragraph", "h2", "h3", "bullet", "ordered", "quote", "hr"]);
+    expect(filterBlockChoices("").map((choice) => choice.label)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "区切り線"]);
+    for (const query of ["画像", "image", "録音", "code", "h1", "todo"]) expect(filterBlockChoices(query), query).toEqual([]);
+  });
+});
+
+describe("the link field's check", () => {
+  it("accepts what the saved body accepts, and says why it refuses the rest", () => {
+    expect(checkLinkInput(" https://example.com/a ")).toEqual({ ok: true, href: "https://example.com/a" });
+    expect(checkLinkInput("http://example.com")).toEqual({ ok: true, href: "http://example.com" });
+    expect(checkLinkInput("mailto:someone@example.com")).toEqual({ ok: true, href: "mailto:someone@example.com" });
+    for (const value of ["", "  ", "javascript:alert(1)", "JAVASCRIPT:alert(1)", "data:text/html,x", "vbscript:x", "/relative", "./a", "#top", "example.com", "java\nscript:x", `https://example.com/${"a".repeat(2100)}`]) {
+      const result = checkLinkInput(value);
+      expect(result.ok, value).toBe(false);
+      expect(!result.ok && result.reason.length > 0, value).toBe(true);
+    }
+  });
+});

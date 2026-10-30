@@ -7,6 +7,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { PageTitle } from "niho-docs-ui/components/BlockEditor";
 import { ConflictBand } from "@/components/ConflictBand";
+import { PageChrome } from "@/components/PageChrome";
 import { docFromBlocks } from "@/editor/doc";
 import { buildPageExtensions } from "@/editor/page-extensions";
 import { normalizePastedHtml } from "@/editor/paste";
@@ -87,8 +88,8 @@ function loadDraft(editor: Editor, draft: PageDraft): boolean {
  *   届かなかった分は、次に開いたときに下書きから戻す。
  * 日本語入力の変換中は、下書き・保存のどちらも走らせない。
  *
- * 「/」のブロック一覧と書式のバーは、docs-ui の BlockEditor が Markdown 文書の schema（コード・チェック・取り消し線）を前提にしているため、
- * ここでは付けていない。モック v6 の shell（#54）を本文に繋ぐときに、この schema に合わせて付ける。
+ * 「/」「＋」のブロック一覧と、選んだ文字の上の書式の帯は、docs-ui の BlockEditor（Markdown 文書の schema が前提）ではなく、
+ * モック v6 の shell の部品をこの schema に合わせて繋いだもの（src/components/PageChrome.tsx・src/editor/slash-menu.ts）。
  */
 export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | null }) {
   const { page } = props;
@@ -337,6 +338,7 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
       {unreadable && <p role="alert">本文を読み込めませんでした。この画面では本文を変更しません。</p>}
       <div className="be">
         <EditorContent editor={editor} />
+        <PageChrome editor={editor} />
       </div>
     </div>
   );
