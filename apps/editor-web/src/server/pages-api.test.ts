@@ -88,6 +88,32 @@ describe("/api/pages", () => {
     expect(((await list.json()) as { pages: PageSummary[] }).pages.map((item) => item.id)).toEqual([page.id]);
   });
 
+  it("stores a body as the limited AST: drops display-only attributes and refuses HTML, script and unsafe links with the same 400", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", {});
+    const patch = (body: unknown) => patchPage(request("PATCH", `/api/pages/${page.id}`, body), page.id, deps("user-a", store));
+    const link = { type: "link", attrs: { href: "https://niho.life/", target: "_blank", rel: "noopener noreferrer nofollow", class: null, title: null } };
+
+    const saved = await patch({ blocks: [{ type: "paragraph", content: [{ type: "text", text: "NIHO", marks: [link] }] }] });
+    expect(saved.status).toBe(200);
+    expect(((await saved.json()) as { page: Page }).page.blocks).toEqual([
+      { type: "paragraph", content: [{ type: "text", text: "NIHO", marks: [{ type: "link", attrs: { href: "https://niho.life/" } }] }] },
+    ]);
+
+    const refused = [
+      [{ type: "script", content: [{ type: "text", text: "alert(1)" }] }],
+      [{ type: "html", html: "<img src=x onerror=alert(1)>" }],
+      [{ type: "paragraph", content: [{ type: "text", text: "x", marks: [{ type: "link", attrs: { href: "javascript:alert(1)" } }] }] }],
+      [{ type: "heading", attrs: { level: 1 }, content: [{ type: "text", text: "x" }] }],
+      [{ type: "image", attrs: { assetId: "not-a-uuid", src: "https://example.com/a.png" } }],
+    ];
+    for (const blocks of refused) {
+      const response = await patch({ blocks });
+      expect(response.status, JSON.stringify(blocks)).toBe(400);
+      expect(await response.text()).toBe('{"error":"bad_request"}');
+    }
+  });
+
   it("answers the same 404 for another owner's page, an unknown id, a malformed id, and a deleted page", async () => {
     const store = memoryStore();
     const theirs = await store.createPage("user-b", { title: "theirs" });
