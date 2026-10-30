@@ -165,6 +165,34 @@ describe("toPublishedBlocks: CONFIRM", () => {
   });
 });
 
+describe("toPublishedBlocks: CONFIRM split across text nodes", () => {
+  it("finds a marker that formatting split into several nodes and keeps the marks of the text around it", () => {
+    const conversion = toPublishedBlocks(doc(
+      p(t("Open ", [{ type: "italic" }]), t("[CONFIRM: ", [{ type: "bold" }]), t("hours", [{ type: "code" }]), t("] daily"), t(" and [CONFIRM:", [{ type: "bold" }]), t(" b]")),
+    ));
+    expect(conversion.problems).toEqual([]);
+    expect(conversion.blocks).toEqual([
+      {
+        type: "paragraph",
+        content: [
+          t("Open ", [{ type: "italic" }]),
+          { type: "confirm", text: "hours" },
+          t(" daily"),
+          t(" and ", [{ type: "bold" }]),
+          { type: "confirm", text: "b" },
+        ],
+      },
+    ]);
+  });
+
+  it("leaves an unclosed marker as plain text", () => {
+    const conversion = toPublishedBlocks(doc(p(t("Price [CONFIRM: "), t("later", [{ type: "bold" }]))));
+    expect(conversion.blocks).toEqual([
+      { type: "paragraph", content: [t("Price [CONFIRM: "), t("later", [{ type: "bold" }])] },
+    ]);
+  });
+});
+
 describe("toPublishedBlocks: never drops unknown nodes silently", () => {
   it("reports every unknown node as a problem (fix: body) and an image inside a list as misplaced", () => {
     const conversion = toPublishedBlocks(unknownNodes);

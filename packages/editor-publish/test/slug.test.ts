@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RESERVED_SLUGS, slugFromTitle, suggestSlug, validateSlug } from "../src/index.js";
+import { RESERVED_SLUGS, slugFromTitle, slugStem, suggestSlug, validateSlug } from "../src/index.js";
 import { PAGE_ID } from "./support/world.js";
 
 describe("slugFromTitle", () => {
@@ -71,11 +71,24 @@ describe("suggestSlug", () => {
     expect(suggestSlug("feed", ["feed-2"])).toBe("feed-3");
   });
 
-  it("keeps the suffix within 160 characters", () => {
+  it("numbers a long slug from one stem that leaves room for -9999", () => {
     const base = "x".repeat(160);
-    const slug = suggestSlug(base, [base]);
-    expect(slug).toBe(`${"x".repeat(158)}-2`);
-    expect(slug?.length).toBe(160);
+    const stem = slugStem(base);
+    expect(stem).toBe("x".repeat(155));
+    expect(suggestSlug(base, [base])).toBe(`${stem}-2`);
+    // Every numbered candidate shares the stem, so a store that reports the slugs under it sees them all.
+    expect(suggestSlug(base, [base, `${stem}-2`, `${stem}-3`])).toBe(`${stem}-4`);
+    expect(`${stem}-9999`.length).toBeLessThanOrEqual(160);
+  });
+
+  it("gives up when nothing up to -9999 is free", () => {
+    const taken = ["walk", ...Array.from({ length: 9998 }, (_, index) => `walk-${index + 2}`)];
+    expect(suggestSlug("walk", taken)).toBeNull();
+  });
+
+  it("keeps a short slug as its own stem", () => {
+    expect(slugStem("walk")).toBe("walk");
+    expect(slugStem("x".repeat(155))).toBe("x".repeat(155));
   });
 
   it("returns null for a base that is not slug-shaped", () => {

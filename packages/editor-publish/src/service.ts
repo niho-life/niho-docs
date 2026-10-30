@@ -23,7 +23,7 @@ import { destinationUrl, parseDestinationDeclaration, type DestinationDeclaratio
 import { collectFacts, evaluateReadiness, type ServerFacts } from "./readiness.js";
 import { planRedirect, type Place, type Redirect } from "./redirects.js";
 import { buildSnapshot, type AssetUrls, type Snapshot } from "./snapshot.js";
-import { slugFromTitle, suggestSlug, validateSlug, type SlugError } from "./slug.js";
+import { slugFromTitle, slugStem, suggestSlug, validateSlug, type SlugError } from "./slug.js";
 import { deriveStatus, type StatusState } from "./status.js";
 import {
   EXTRA_KEYS,
@@ -251,6 +251,13 @@ function stringsOf(value: unknown): readonly string[] {
   return Array.isArray(value) ? (value as readonly unknown[]).filter((entry): entry is string => typeof entry === "string") : [];
 }
 
+/** Slugs another page holds that `suggestSlug(base, …)` has to avoid: under `base` and under its stem. */
+async function takenUnder(tx: PublishTx, handle: string, base: string, pageId: string): Promise<readonly string[]> {
+  const taken = await tx.takenSlugs(handle, base, pageId);
+  const stem = slugStem(base);
+  return stem === base ? taken : [...taken, ...(await tx.takenSlugs(handle, stem, pageId))];
+}
+
 export class PublishService {
   constructor(private readonly ports: PublishPorts) {}
 
@@ -388,12 +395,12 @@ export class PublishService {
       const check = validateSlug(context.slug);
       if (!check.ok) return { ok: false, reason: "invalid_slug", detail: check.reason };
       const requested = context.slug as string;
-      const taken = await tx.takenSlugs(handle, requested, pageId);
+      const taken = await takenUnder(tx, handle, requested, pageId);
       if (taken.includes(requested)) return { ok: false, reason: "slug_taken", suggestion: suggestSlug(requested, taken) };
       slug = requested;
     } else {
       const base = current?.slug ?? slugFromTitle(page.title, page.id);
-      const suggestion = suggestSlug(base, await tx.takenSlugs(handle, base, pageId));
+      const suggestion = suggestSlug(base, await takenUnder(tx, handle, base, pageId));
       if (suggestion === null) return { ok: false, reason: "slug_taken", suggestion: null };
       slug = suggestion;
     }

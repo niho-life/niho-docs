@@ -57,19 +57,32 @@ export function slugFromTitle(title: string, pageId: string): string {
   return id === "" ? "p" : `p-${id}`;
 }
 
+/** Room kept for a `-N` suffix (up to `-9999`), so every numbered candidate shares one stem. */
+const SUFFIX_RESERVE = 5;
+
 /**
- * The first of `base`, `base-2`, `base-3`, … that is valid (not reserved, within length) and not in
- * `taken`. Null when `base` itself is not slug-shaped.
+ * The part of `base` that numbered candidates (`stem-2`, `stem-3`, …) start with: `base` itself when it
+ * leaves room for a suffix, otherwise its first characters. A store must report the slugs taken under
+ * the stem as well as under `base` (`takenSlugs(handle, stem, …)`) for `suggestSlug` to see them.
+ */
+export function slugStem(base: string): string {
+  return base.length > SLUG_MAX_LENGTH - SUFFIX_RESERVE ? trimHyphens(base.slice(0, SLUG_MAX_LENGTH - SUFFIX_RESERVE)) : base;
+}
+
+/**
+ * The first of `base`, `stem-2`, `stem-3`, … that is valid (not reserved, within length) and not in
+ * `taken`. Null when `base` itself is not slug-shaped, or when nothing up to `-9999` is free.
  */
 export function suggestSlug(base: string, taken: Iterable<string>): string | null {
   if (!SLUG_PATTERN.test(base)) return null;
   const used = new Set(taken);
   const fits = (candidate: string): boolean => validateSlug(candidate).ok && !used.has(candidate);
-  const head = base.length > SLUG_MAX_LENGTH ? trimHyphens(base.slice(0, SLUG_MAX_LENGTH)) : base;
-  if (fits(head)) return head;
-  for (let n = 2; ; n += 1) {
-    const suffix = `-${n}`;
-    const candidate = `${trimHyphens(head.slice(0, SLUG_MAX_LENGTH - suffix.length))}${suffix}`;
+  if (fits(base)) return base;
+  const stem = slugStem(base);
+  if (stem === "") return null;
+  for (let n = 2; n <= 9999; n += 1) {
+    const candidate = `${stem}-${n}`;
     if (fits(candidate)) return candidate;
   }
+  return null;
 }

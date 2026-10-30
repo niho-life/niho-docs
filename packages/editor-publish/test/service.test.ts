@@ -167,6 +167,18 @@ describe("reasons", () => {
     ok(await world.service.publish(world.input("exp", { slug: "coast-walk" })));
   });
 
+  it("suggests past a numbered candidate another page holds under the stem of a 160-character slug", async () => {
+    const world = createWorld();
+    const page3 = "8b2e4c60-3d5f-4e70-8b92-1c3d4e5f6071";
+    addPage(world, PAGE_2);
+    addPage(world, page3);
+    const full = "x".repeat(160);
+    const stem = "x".repeat(155);
+    ok(await world.service.publish(world.input("niho", { pageId: PAGE_2, slug: full })));
+    ok(await world.service.publish(world.input("niho", { pageId: page3, slug: `${stem}-2` })));
+    expect(await world.service.publish(world.input("niho", { slug: full }))).toEqual({ ok: false, reason: "slug_taken", suggestion: `${stem}-3` });
+  });
+
   it("keeps a stopped page's slug reserved", async () => {
     const world = createWorld();
     addPage(world, PAGE_2);
