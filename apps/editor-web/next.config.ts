@@ -14,6 +14,16 @@ const securityHeaders = [
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
 ];
 
+/**
+ * 共有リンク（`/s/{token}`。#34）。全体の規則の後に置く: 同じ名前の header は後の規則の値で置き換わる（値は 1 つだけ）。
+ * token は path にあるので、リンク先へ Referer で渡さない（no-referrer。このページに更新系の要求は無い）。
+ * 共有の停止・作り直しがすぐ効くよう、ブラウザにも途中の cache にも保存させない。
+ */
+export const SHARED_PAGE_HEADERS = [
+  { key: "Cache-Control", value: "private, no-store" },
+  { key: "Referrer-Policy", value: "no-referrer" },
+];
+
 const nextConfig: NextConfig = {
   // Cloud Run の container 用の自己完結の server（Dockerfile）
   output: "standalone",
@@ -29,7 +39,10 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     // `/:path*` は `/` も含む全ての path（ページ・API・404・robots.txt・静的ファイル）
-    return [{ source: "/:path*", headers: [...ROBOTS_HEADERS, ...securityHeaders] }];
+    return [
+      { source: "/:path*", headers: [...ROBOTS_HEADERS, ...securityHeaders] },
+      { source: "/s/:token*", headers: SHARED_PAGE_HEADERS },
+    ];
   },
 };
 

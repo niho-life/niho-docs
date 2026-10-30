@@ -46,8 +46,8 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name",
       [schema],
     );
-    assert.deepEqual(tables.rows.map((row) => row.table_name), ["assets", MIGRATIONS_TABLE, "page_versions", "pages", "publications"].sort());
-    for (const table of ["pages", "page_versions", "assets", "publications"]) {
+    assert.deepEqual(tables.rows.map((row) => row.table_name), ["assets", MIGRATIONS_TABLE, "page_shares", "page_versions", "pages", "publications"].sort());
+    for (const table of ["pages", "page_versions", "assets", "publications", "page_shares"]) {
       const count = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM ${table}`);
       assert.equal(count.rows[0]?.n, "0", `${table} must be empty after migration`);
     }

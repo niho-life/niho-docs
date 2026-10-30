@@ -230,4 +230,153 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.equal((await fetch(`${base}/api/search?q=${"a".repeat(101)}`)).status, 400);
     assert.equal((await fetch(`${base}/api/search?q=x&limit=0`)).status, 400);
   });
+
+  // ---- リンクで共有・複製・書き出し（#34） ----
+
+  const PRIVATE_SHARE = { status: "PRIVATE", publicId: null, url: null, updatedAt: null };
+  const tokenOf = (share) => {
+    assert.equal(share.status, "PUBLIC");
+    assert.match(share.url, new RegExp(`^${base.replace(/[.]/g, "\\.")}/s/[A-Za-z0-9_-]{43}$`));
+    return share.url.slice(`${base}/s/`.length);
+  };
+  /** Cookie も認証の header も付けない素の要求（ログインしていない人の開き方）。 */
+  const anonymous = (path) => fetch(`${base}${path}`, { headers: {}, redirect: "manual" });
+  const assertSharedHeaders = (response, label) => {
+    // 全体の規則（Referrer-Policy: same-origin）と重ならず、値は 1 つだけ（2 つあれば "a, b" になる）
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer", label);
+    assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow", label);
+    // `next dev` はページの Cache-Control を開発用の値に置き換える（本番の値は test/startup-guard.test.mjs で確かめる）
+    assert.match(response.headers.get("cache-control") ?? "", /no-store|no-cache/, label);
+  };
+
+  it("shares the latest saved version at /s/{token} without signing in, and stops or rotates the link at once (#34)", async () => {
+    const page = (await (await write("POST", "/api/pages", {})).json()).page;
+    createdIds.push(page.id);
+    const first = [{ type: "paragraph", content: [{ type: "text", text: "合成の共有 最初の本文" }] }];
+    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { title: "合成の共有 e2e", blocks: first })).status, 200);
+    assert.deepEqual((await (await fetch(`${base}/api/pages/${page.id}/share`)).json()).share, PRIVATE_SHARE);
+
+    const enabled = await write("PUT", `/api/pages/${page.id}/share`);
+    assert.equal(enabled.status, 200);
+    const { share } = await enabled.json();
+    const token = tokenOf(share);
+    assert.deepEqual((await (await write("PUT", `/api/pages/${page.id}/share`)).json()).share, share, "starting again keeps the same link");
+    assert.deepEqual((await (await fetch(`${base}/api/pages/${page.id}/share`)).json()).share, share);
+    assert.equal((await write("PUT", `/api/pages/${page.id}/share`, undefined, { origin: "https://evil.example" })).status, 403);
+
+    const shared = await anonymous(`/s/${token}`);
+    assert.equal(shared.status, 200);
+    assert.equal(shared.headers.get("set-cookie"), null);
+    assertSharedHeaders(shared, "GET /s/{token}");
+    const html = await shared.text();
+    assert.match(html, /<h1>合成の共有 e2e<\/h1>/);
+    assert.match(html, /合成の共有 最初の本文/);
+    assert.match(html, /<meta name="referrer" content="no-referrer"\/>/);
+    assert.match(html, /<meta name="robots" content="noindex, nofollow"\/>/);
+    assert.match(html, /<title>共有されたページ<\/title>/);
+    assert.doesNotMatch(html.match(/<head>[\s\S]*?<\/head>/)?.[0].replace(/<script[\s\S]*?<\/script>/g, "") ?? "", new RegExp(token), "the token is not in the title or metadata");
+
+    // 共有中に本文を保存し直すと、次に開いたときは新しい保存版
+    const second = [{ type: "paragraph", content: [{ type: "text", text: "合成の共有 直した本文" }] }];
+    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { blocks: second })).status, 200);
+    const updated = await (await anonymous(`/s/${token}`)).text();
+    assert.match(updated, /合成の共有 直した本文/);
+    assert.doesNotMatch(updated, /合成の共有 最初の本文/);
+
+    // 作り直すと古いリンクはすぐ 404、新しいリンクは 200
+    const rotated = await write("POST", `/api/pages/${page.id}/share/rotate`);
+    assert.equal(rotated.status, 200);
+    const fresh = tokenOf((await rotated.json()).share);
+    assert.notEqual(fresh, token);
+    assert.equal((await anonymous(`/s/${token}`)).status, 404);
+    assert.equal((await anonymous(`/s/${fresh}`)).status, 200);
+
+    // 止めるとすぐ 404（もう一度止めても同じ）
+    const stopped = await write("DELETE", `/api/pages/${page.id}/share`);
+    assert.equal(stopped.status, 200);
+    assert.deepEqual((await stopped.json()).share, PRIVATE_SHARE);
+    assert.deepEqual((await (await write("DELETE", `/api/pages/${page.id}/share`)).json()).share, PRIVATE_SHARE);
+
+    // 止めた・作り直す前・形の違う・知らない token はどれも同じ 404（header・画面とも）
+    const snapshot = async (response) => ({
+      status: response.status,
+      headers: [...response.headers.entries()].filter(([name]) => name !== "date").map(([name, value]) => [name, value.replace(/\?v=\d+/g, "?v=")]).sort(),
+      body: await response.text(),
+    });
+    const missing = [];
+    for (const candidate of [fresh, token, "not-a-token", "A".repeat(43)]) missing.push(await snapshot(await anonymous(`/s/${candidate}`)));
+    for (const result of missing) {
+      assert.equal(result.status, 404);
+      assert.deepEqual(result.headers, missing[0].headers, "404 headers must be identical");
+      assert.match(result.body, /ページが見つかりません/);
+      assert.doesNotMatch(result.body, /合成の共有/);
+    }
+    assertSharedHeaders(await anonymous(`/s/${fresh}`), "GET /s/{stopped} (404)");
+  });
+
+  it("answers the same 404 for another owner's page on every page action, and changes nothing (#34)", async () => {
+    const other = await pool.query("INSERT INTO pages (owner, title) VALUES ($1, 'synthetic other share') RETURNING id", [OTHER_OWNER]);
+    const otherId = other.rows[0].id;
+    createdIds.push(otherId);
+    const otherToken = "S".repeat(43);
+    await pool.query("INSERT INTO page_shares (page_id, owner, token) VALUES ($1, $2, $3)", [otherId, OTHER_OWNER, otherToken]);
+    const before = (await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1", [OTHER_OWNER])).rows[0].n;
+
+    const snapshot = async (response) => ({
+      status: response.status,
+      headers: [...response.headers.entries()].filter(([name]) => name !== "date").sort(),
+      body: await response.text(),
+    });
+    for (const [label, call] of [
+      ["GET share", (id) => fetch(`${base}/api/pages/${id}/share`)],
+      ["PUT share", (id) => write("PUT", `/api/pages/${id}/share`)],
+      ["POST share/rotate", (id) => write("POST", `/api/pages/${id}/share/rotate`)],
+      ["DELETE share", (id) => write("DELETE", `/api/pages/${id}/share`)],
+      ["POST duplicate", (id) => write("POST", `/api/pages/${id}/duplicate`)],
+      ["GET export.md", (id) => fetch(`${base}/api/pages/${id}/export.md`)],
+    ]) {
+      const results = [];
+      for (const id of [otherId, randomUUID(), "not-a-uuid"]) results.push(await snapshot(await call(id)));
+      assert.equal(results[0].status, 404, label);
+      assert.equal(results[0].body, '{"error":"not_found"}', label);
+      for (const result of results.slice(1)) assert.deepEqual(result, results[0], `${label} responses must be identical`);
+    }
+    const shares = await pool.query("SELECT token FROM page_shares WHERE page_id = $1", [otherId]);
+    assert.deepEqual(shares.rows, [{ token: otherToken }], "another owner's share is neither rotated nor stopped");
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1", [OTHER_OWNER])).rows[0].n, before, "nothing was duplicated");
+    // 他人の共有リンクは、ログインしていない人には読める（共有の目的どおり）
+    assert.equal((await anonymous(`/s/${otherToken}`)).status, 200);
+  });
+
+  it("duplicates a page and exports its saved body as Markdown (#34)", async () => {
+    const page = (await (await write("POST", "/api/pages", {})).json()).page;
+    createdIds.push(page.id);
+    const blocks = [
+      { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "合成の見出し" }] },
+      { type: "paragraph", content: [{ type: "text", text: "太字", marks: [{ type: "bold" }] }, { type: "text", text: "と <script> と # 記号" }] },
+      { type: "bulletList", content: [{ type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "項目" }] }] }] },
+    ];
+    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { title: "合成の書き出し e2e", blocks })).status, 200);
+    assert.equal((await write("PUT", `/api/pages/${page.id}/share`)).status, 200);
+
+    assert.equal((await write("POST", `/api/pages/${page.id}/duplicate`, undefined, { origin: "https://evil.example" })).status, 403);
+    const duplicated = await write("POST", `/api/pages/${page.id}/duplicate`);
+    assert.equal(duplicated.status, 201);
+    const copy = (await duplicated.json()).page;
+    createdIds.push(copy.id);
+    assert.notEqual(copy.id, page.id);
+    assert.equal(copy.title, "合成の書き出し e2eのコピー");
+    assert.deepEqual(copy.blocks, blocks);
+    assert.deepEqual((await (await fetch(`${base}/api/pages/${copy.id}/share`)).json()).share, PRIVATE_SHARE, "the share is not copied");
+    assert.equal((await (await fetch(`${base}/api/pages/${page.id}`)).json()).page.title, "合成の書き出し e2e", "the original is unchanged");
+
+    const exported = await fetch(`${base}/api/pages/${page.id}/export.md`);
+    assert.equal(exported.status, 200);
+    assert.equal(await exported.text(), "## 合成の見出し\n\n**太字**と \\<script\\> と \\# 記号\n\n- 項目\n");
+    assert.equal(exported.headers.get("content-type"), "text/markdown; charset=utf-8");
+    assert.equal(exported.headers.get("content-disposition"), `attachment; filename="page.md"; filename*=UTF-8''${encodeURIComponent("合成の書き出し e2e.md")}`);
+    assert.equal(exported.headers.get("cache-control"), "private, no-store");
+    assert.equal(exported.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(exported.headers.get("x-robots-tag"), "noindex, nofollow");
+  });
 });

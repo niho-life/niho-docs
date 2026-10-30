@@ -1,0 +1,133 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import { SHARED_LINK_REL, SharedBlocks, safeShareHref } from "./render-blocks";
+
+type Node = Record<string, unknown>;
+const text = (value: string, marks?: Node[]): Node => (marks ? { type: "text", text: value, marks } : { type: "text", text: value });
+const paragraph = (...content: Node[]): Node => ({ type: "paragraph", content });
+const link = (href: unknown): Node => ({ type: "link", attrs: { href } });
+
+const render = (blocks: unknown[]) => renderToStaticMarkup(<SharedBlocks blocks={blocks} />);
+
+/** 出力に、React が組み立てた要素以外の HTML が混ざっていないこと（タグは許した名前だけ）。 */
+function tagsOf(html: string): string[] {
+  return [...html.matchAll(/<\/?([a-zA-Z0-9]+)/g)].map((match) => match[1]!.toLowerCase());
+}
+const ALLOWED_TAGS = new Set(["p", "h2", "h3", "ul", "ol", "li", "blockquote", "hr", "br", "strong", "em", "a"]);
+
+describe("SharedBlocks", () => {
+  it("renders the supported blocks as plain React elements", () => {
+    const html = render([
+      { type: "heading", attrs: { level: 2 }, content: [text("見出し二")] },
+      { type: "heading", attrs: { level: 3 }, content: [text("見出し三")] },
+      paragraph(text("一行目"), { type: "hardBreak" }, text("二行目")),
+      { type: "bulletList", content: [{ type: "listItem", content: [paragraph(text("箇条"))] }] },
+      { type: "orderedList", attrs: { start: 3 }, content: [{ type: "listItem", content: [paragraph(text("番号"))] }] },
+      { type: "blockquote", content: [paragraph(text("引用"))] },
+      { type: "horizontalRule" },
+    ]);
+    expect(html).toBe(
+      "<h2>見出し二</h2><h3>見出し三</h3><p>一行目<br/>二行目</p><ul><li><p>箇条</p></li></ul>" +
+        '<ol start="3"><li><p>番号</p></li></ol><blockquote><p>引用</p></blockquote><hr/>',
+    );
+  });
+
+  it("rounds other heading levels to h3 and never renders an h1", () => {
+    const html = render([1, 4, 6, "2", undefined].map((level) => ({ type: "heading", attrs: { level }, content: [text("h")] })));
+    expect(html).toBe("<h3>h</h3>".repeat(5));
+  });
+
+  it("escapes text that looks like HTML instead of injecting it", () => {
+    const html = render([paragraph(text('<script>alert("x")</script><img src=x onerror=alert(1)>&amp;'))]);
+    expect(html).toBe("<p>&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;&amp;amp;</p>");
+    expect(tagsOf(html)).toEqual(["p", "p"]);
+  });
+
+  it("links only https, http, and mailto URLs, always with rel, and leaves other links as text", () => {
+    const html = render([
+      paragraph(
+        text("安全", [link("https://example.com/a?b=1#c")]),
+        text("http", [link("http://example.com/")]),
+        text("mail", [link("mailto:someone@example.com")]),
+        text("js", [link("javascript:alert(1)")]),
+        text("JS", [link(" JAVASCRIPT:alert(1)")]),
+        text("data", [link("data:text/html,<script>alert(1)</script>")]),
+        text("relative", [link("/p/123")]),
+        text("protocol-relative", [link("//evil.example/")]),
+        text("creds", [link("https://user:pass@example.com/")]),
+        text("broken", [link(42)]),
+        text("vbscript", [link("vbscript:msgbox(1)")]),
+      ),
+    ]);
+    expect(html).toBe(
+      `<p><a href="https://example.com/a?b=1#c" rel="${SHARED_LINK_REL}">安全</a><a href="http://example.com/" rel="${SHARED_LINK_REL}">http</a>` +
+        `<a href="mailto:someone@example.com" rel="${SHARED_LINK_REL}">mail</a>jsJSdatarelativeprotocol-relativecredsbrokenvbscript</p>`,
+    );
+    expect(SHARED_LINK_REL).toBe("noopener noreferrer nofollow ugc");
+    expect(html).not.toMatch(/javascript:|data:|vbscript:|evil\.example|user:pass/i);
+  });
+
+  it("applies bold, italic, and link together and ignores every other mark", () => {
+    const html = render([
+      paragraph(
+        text("全部", [{ type: "bold" }, { type: "italic" }, link("https://example.com/")]),
+        text("太", [{ type: "bold" }]),
+        text("斜", [{ type: "italic" }]),
+        text("コード", [{ type: "code" }, { type: "strike" }, { type: "underline" }, { type: "highlight", attrs: { color: "red" } }]),
+        text("壊れた", ["bold" as unknown as Node, { type: "link" }]),
+      ),
+    ]);
+    expect(html).toBe(
+      `<p><a href="https://example.com/" rel="${SHARED_LINK_REL}"><strong><em>全部</em></strong></a><strong>太</strong><em>斜</em>コード壊れた</p>`,
+    );
+  });
+
+  it("renders the children of unknown nodes without throwing, and skips images", () => {
+    const html = render([
+      { type: "callout", content: [paragraph(text("囲みの中"))] },
+      { type: "table", content: [{ type: "tableRow", content: [{ type: "tableCell", content: [paragraph(text("表の中"))] }] }] },
+      { type: "image", attrs: { src: "https://example.com/a.png", alt: "写真" } },
+      { type: "docAssetImage", attrs: { name: "a.png" } },
+      { type: "codeBlock", content: [text("const a = 1;")] },
+      { type: "mystery" },
+      null,
+      "文字列",
+      42,
+      [paragraph(text("配列"))],
+      { content: [text("型なし")] },
+    ]);
+    expect(html).toBe("<p>囲みの中</p><p>表の中</p>const a = 1;型なし");
+    expect(html).not.toMatch(/img|example\.com|写真/);
+  });
+
+  it("stops at depth 64 instead of recursing without end", () => {
+    let node: Node = paragraph(text("底"));
+    for (let depth = 0; depth < 200; depth++) node = { type: "blockquote", content: [node] };
+    const html = render([node]);
+    expect(html).not.toContain("底");
+    expect(html.match(/<blockquote>/g)?.length).toBe(64);
+
+    let shallow: Node = paragraph(text("届く"));
+    for (let depth = 0; depth < 60; depth++) shallow = { type: "blockquote", content: [shallow] };
+    expect(render([shallow])).toContain("届く");
+  });
+
+  it("puts no raw HTML into the output for hostile input", () => {
+    const hostile = [
+      { type: "paragraph", attrs: { style: "x", onclick: "alert(1)", dangerouslySetInnerHTML: { __html: "<b>x</b>" } }, content: [text("<b>太字</b>")] },
+      { type: "heading", attrs: { level: 2, id: "x" }, content: [text("</h2><script>")] },
+      { type: "text", text: "<iframe>", marks: [link("https://example.com/\"><script>")] },
+    ];
+    const html = render(hostile);
+    for (const tag of tagsOf(html)) expect(ALLOWED_TAGS.has(tag), tag).toBe(true);
+    expect(html).not.toMatch(/onclick|style=|<b>|<script|<iframe/);
+  });
+
+  it("keeps only absolute http(s) and mailto URLs in safeShareHref", () => {
+    expect(safeShareHref("https://example.com")).toBe("https://example.com/");
+    expect(safeShareHref("https://example.com/\n")).toBeNull();
+    expect(safeShareHref("https://exa mple.com")).toBeNull();
+    expect(safeShareHref("")).toBeNull();
+    expect(safeShareHref(`https://example.com/${"a".repeat(2048)}`)).toBeNull();
+  });
+});

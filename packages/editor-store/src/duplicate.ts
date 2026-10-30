@@ -1,0 +1,95 @@
+import { isPageId } from "./store.ts";
+import type { Block, OwnerId, Page, PageKind, PageLang, Queryable, StepStatus } from "./types.ts";
+
+/**
+ * ページの複製（#34）。本人の・ゴミ箱でないページだけを、1 つの INSERT … SELECT で写す。
+ * 写すのは kind・lang・blocks・lead と題名（「〜のコピー」）。parent・cover・recipe・step_status・共有・公開・版は写さない。
+ */
+
+/** 複製の題名に足す言葉。 */
+export const DUPLICATE_TITLE_SUFFIX = "のコピー";
+/** 題名の上限（0001 の CHECK と同じ。PostgreSQL の length は code point の数）。 */
+export const PAGE_TITLE_MAX_CHARS = 500;
+
+/** 複製したページ（createPage の戻りと同じ列）。 */
+export type DuplicatedPage = Pick<
+  Page,
+  "id" | "kind" | "title" | "lang" | "blocks" | "cover" | "lead" | "parent" | "recipe" | "stepStatus" | "createdAt" | "updatedAt"
+>;
+
+/**
+ * 複製の題名（SQL と同じ規則。テストと画面の見込みのため）。空なら空のまま。
+ * そうでなければ「題名のコピー」。上限を超えるときは元の題名の側を code point 単位で切る。
+ */
+export function duplicateTitle(title: string): string {
+  if (title === "") return "";
+  const keep = PAGE_TITLE_MAX_CHARS - Array.from(DUPLICATE_TITLE_SUFFIX).length;
+  return `${Array.from(title).slice(0, keep).join("")}${DUPLICATE_TITLE_SUFFIX}`;
+}
+
+type PageRow = {
+  id: string;
+  kind: PageKind;
+  title: string;
+  lang: PageLang;
+  blocks: Block[];
+  cover: string | null;
+  lead: string | null;
+  parent: string | null;
+  recipe: string | null;
+  step_status: StepStatus | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+/** store.ts の PAGE_COLUMNS と同じ列（#33 と並行して触らないよう、ここに持つ）。 */
+const DUPLICATE_COLUMNS = "id, kind, title, lang, blocks, cover, lead, parent, recipe, step_status, created_at, updated_at";
+
+// $1 owner / $2 元のページの id / $3 題名に足す言葉 / $4 題名の上限。left・char_length は code point で数える。
+const DUPLICATE_SQL = `
+INSERT INTO pages (owner, kind, title, lang, blocks, lead)
+SELECT owner, kind,
+       CASE WHEN title = '' THEN '' ELSE left(title, $4::int - char_length($3::text)) || $3::text END,
+       lang, blocks, lead
+  FROM pages
+ WHERE owner = $1 AND id = $2 AND deleted_at IS NULL
+RETURNING ${DUPLICATE_COLUMNS}`;
+
+function assertOwner(owner: OwnerId): void {
+  // store.ts と同じ守り: 認証の層の誤りで空の owner が来たときに、誰のものでもない行を読み書きしない
+  if (typeof owner !== "string" || owner.length === 0 || owner.length > 256) {
+    throw new TypeError("editor-store: owner must be a non-empty stable user id");
+  }
+}
+
+function isInvalidTextRepresentation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "22P02";
+}
+
+/** 本人のページを複製する。別の人のページ・削除済み・存在しない・UUID として不正な id はどれも null。 */
+export async function duplicatePage(db: Queryable, owner: OwnerId, pageId: string): Promise<DuplicatedPage | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId)) return null;
+  try {
+    const result = await db.query<PageRow>(DUPLICATE_SQL, [owner, pageId, DUPLICATE_TITLE_SUFFIX, PAGE_TITLE_MAX_CHARS]);
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      kind: row.kind,
+      title: row.title,
+      lang: row.lang,
+      blocks: row.blocks,
+      cover: row.cover,
+      lead: row.lead,
+      parent: row.parent,
+      recipe: row.recipe,
+      stepStatus: row.step_status,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  } catch (error) {
+    if (isInvalidTextRepresentation(error)) return null;
+    throw error;
+  }
+}
