@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "exp",
+  "label": "NIHO Experience",
+  "host": "exp.example.com",
+  "path": "guides",
+  "ranges": ["live", "unlisted"],
+  "extras": ["app", "news", "xp"],
+  "accepts": {
+    "blocks": ["paragraph", "heading", "list", "figure", "note"],
+    "marks": ["bold", "italic", "link"]
+  },
+  "requires": [
+    { "id": "lang-en", "kind": "lang", "equals": "en", "message": "英語で書いてください", "fix": "lang" },
+    { "id": "cover", "kind": "cover", "consent": true, "message": "掲載許諾のあるカバー写真を選んでください", "fix": "cover" },
+    { "id": "lead", "kind": "lead", "max": 200, "message": "リードを 200 字以内で書いてください", "fix": "lead" },
+    { "id": "category", "kind": "category", "oneOf": ["walks", "food", "stay"], "message": "カテゴリを選んでください", "fix": "category" },
+    { "id": "headings", "kind": "headings", "min": 1, "message": "本文に見出しを 1 つ以上入れてください", "fix": "body" },
+    { "id": "no-confirm", "kind": "noConfirm", "message": "未確認の印（CONFIRM）を解消してください", "fix": "body" },
+    { "id": "related-live", "kind": "relatedLive", "message": "掲載中の関連する体験を選んでください", "fix": "related" }
+  ]
+}

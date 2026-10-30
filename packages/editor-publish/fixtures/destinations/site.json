@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "site",
+  "label": "Example Notes",
+  "host": "notes.example.net",
+  "path": "",
+  "ranges": ["live"],
+  "extras": [],
+  "accepts": {
+    "blocks": ["paragraph", "heading", "list", "quote", "figure", "divider", "note"],
+    "marks": ["bold", "italic", "strike", "code", "link"]
+  },
+  "requires": []
+}

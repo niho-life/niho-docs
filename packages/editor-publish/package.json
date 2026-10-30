@@ -1,0 +1,34 @@
+{
+  "name": "@niho/editor-publish",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "editor の公開のシートの実処理（発信先の宣言・公開の前の評価・slug・公開版・状態・転送・PublishService）。DB・HTTP・時計・資産置き場はポートで受ける。",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./test-support": {
+      "types": "./test-support/memory-store.ts",
+      "default": "./test-support/memory-store.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "dependencies": {
+    "@niho/editor-publish-contract": "file:../editor-publish-contract"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  }
+}

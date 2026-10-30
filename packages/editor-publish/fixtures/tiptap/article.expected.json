@@ -1,0 +1,52 @@
+{
+  "blocks": [
+    { "type": "heading", "level": 2, "content": [{ "type": "text", "text": "Getting there" }] },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Meet at the " },
+        { "type": "text", "text": "station", "marks": [{ "type": "bold" }] },
+        { "type": "text", "text": " at 7:00. See the " },
+        { "type": "text", "text": "harbor map", "marks": [{ "type": "link", "href": "https://maps.example.com/harbor" }] },
+        { "type": "text", "text": " or the " },
+        { "type": "text", "text": "old map", "marks": [{ "type": "italic" }] },
+        { "type": "text", "text": "." }
+      ]
+    },
+    { "type": "heading", "level": 3, "content": [{ "type": "text", "text": "Route" }] },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        [{ "type": "text", "text": "Walk to the pier" }],
+        [{ "type": "text", "text": "Turn left" }],
+        [{ "type": "text", "text": "at the red gate" }],
+        [{ "type": "text", "text": "past the shrine", "marks": [{ "type": "italic" }] }]
+      ]
+    },
+    { "type": "figure", "assetId": "asset-figure-01", "caption": "The harbor at 7:30" },
+    {
+      "type": "note",
+      "blocks": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "Bring cash" }] },
+        { "type": "paragraph", "content": [{ "type": "text", "text": "The tea house takes cash only." }] },
+        { "type": "list", "ordered": false, "items": [[{ "type": "text", "text": "Coins" }]] }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Opening hours " },
+        { "type": "confirm", "text": "winter schedule" },
+        { "type": "text", "text": " may change; " },
+        { "type": "confirm", "text": "price" },
+        { "type": "text", "text": " too." }
+      ]
+    },
+    { "type": "figure", "assetId": "asset-figure-01", "caption": null }
+  ],
+  "figures": [{ "assetId": "asset-figure-01", "alt": "Fishing boats in the harbor" }],
+  "problems": [],
+  "notices": ["link-dropped", "format-dropped", "list-flattened", "recording-dropped"],
+  "markdown": "## Getting there\n\nMeet at the **station** at 7\\:00\\. See the [harbor map](https://maps.example.com/harbor) or the *old map*\\.\n\n### Route\n\n- Walk to the pier\n- Turn left\n- at the red gate\n- *past the shrine*\n\n![Fishing boats in the harbor](https://assets.example.com/a/1111111111111111111111111111111111111111111111111111111111111111 \"The harbor at 7\\:30\")\n\n:::note\nBring cash\n\nThe tea house takes cash only\\.\n\n- Coins\n:::\n\nOpening hours [CONFIRM: winter schedule] may change\\; [CONFIRM: price] too\\.\n\n![Fishing boats in the harbor](https://assets.example.com/a/1111111111111111111111111111111111111111111111111111111111111111)\n"
+}
