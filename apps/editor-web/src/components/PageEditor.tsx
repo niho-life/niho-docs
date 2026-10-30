@@ -12,6 +12,7 @@ import { buildPageExtensions } from "@/editor/page-extensions";
 import { normalizePastedHtml } from "@/editor/paste";
 import { createAutosave, type Autosave, type SaveState } from "@/lib/autosave";
 import {
+  NEW_PAGE_DRAFT_KEY,
   createDraftKeeper,
   createIndexedDbDraftStorage,
   decideRestore,
@@ -21,19 +22,36 @@ import {
   type PageDraft,
 } from "@/lib/drafts";
 import { MAX_TITLE_CHARS } from "@/lib/page-limits";
-import { classifySaveFailure, createPageSaver, type PageSaver } from "@/lib/page-save";
+import { UNCREATED_REVISION, classifySaveFailure, createPageSaver, type PageSaver } from "@/lib/page-save";
 import { PageConflictError, type ConflictPage, type PageBody } from "@/lib/pages-client";
 
 export { docFromBlocks };
 
 export type EditablePage = {
-  id: string;
   title: string;
   blocks: unknown[];
-  /** 読み込んだときの revision。保存のたびに `baseRevision` として送り、応答の値に進める。 */
-  revision: number;
-  /** 読み込んだときの更新時刻（開いたときに端末の下書きと競合したら、帯に出す）。 */
-  updatedAt: string;
+} & (
+  | {
+      id: string;
+      /** 読み込んだときの revision。保存のたびに `baseRevision` として送り、応答の値に進める。 */
+      revision: number;
+      /** 読み込んだときの更新時刻（開いたときに端末の下書きと競合したら、帯に出す）。 */
+      updatedAt: string;
+    }
+  | {
+      /** まだ作っていない新しいページ（最初の保存で作り、その応答の revision から始める）。 */
+      id: null;
+      revision: null;
+      updatedAt?: undefined;
+    }
+);
+
+export type PageEditorEvents = {
+  /** 新しいページを最初の保存で作った（1 回だけ）。 */
+  onCreated?: (id: string) => void;
+  onTitleChange?: (title: string) => void;
+  /** 保存が終わった（作った・PATCH のどちらも）。 */
+  onSaved?: () => void;
 };
 
 /** 右上の保存状態（`conflict` は競合の帯が出ていて、自動保存を止めている）。 */
@@ -87,10 +105,16 @@ function loadDraft(editor: Editor, draft: PageDraft): boolean {
  *   届かなかった分は、次に開いたときに下書きから戻す。
  * 日本語入力の変換中は、下書き・保存のどちらも走らせない。
  *
+ * 新しいページ（id が null）:
+ * - 最初の保存で POST して作り、以後はその id へ、作ったときの revision を `baseRevision` にして PATCH する
+ *   （id と revision は保存の部品が持ち、エディタは作り直さない。変換中は保存を待つので、作るのも変換の確定の後）。
+ * - 作る前の本文も端末に残す（key は `NEW_PAGE_DRAFT_KEY` の 1 つの枠）。次に新しいページを開いたとき、
+ *   その枠に下書きがあれば載せて、それでページを作る。作ったら、以後の下書きはそのページの id に書く。
+ *
  * 「/」のブロック一覧と書式のバーは、docs-ui の BlockEditor が Markdown 文書の schema（コード・チェック・取り消し線）を前提にしているため、
  * ここでは付けていない。モック v6 の shell（#54）を本文に繋ぐときに、この schema に合わせて付ける。
  */
-export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | null }) {
+export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | null } & PageEditorEvents) {
   const { page } = props;
   const [title, setTitle] = useState(page.title);
   const [state, setState] = useState<SaveState>("saved");
@@ -115,11 +139,21 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
   const saverRef = useRef<PageSaver | null>(null);
   const autosaveRef = useRef<Autosave<PageBody> | null>(null);
   const keeperRef = useRef<DraftKeeper | null>(null);
+  const eventsRef = useRef<PageEditorEvents>(props);
+
+  useEffect(() => {
+    eventsRef.current = props;
+  });
 
   useEffect(() => {
     const initial = initialRef.current;
     const isComposing = () => composingRef.current || Boolean(editorRef.current?.view.composing);
-    const saver = createPageSaver({ pageId: initial.id, revision: initial.revision, content: { title: initial.title, blocks: initial.blocks } });
+    const saver = createPageSaver({
+      pageId: initial.id,
+      revision: initial.revision ?? UNCREATED_REVISION,
+      content: { title: initial.title, blocks: initial.blocks },
+      onCreated: (created) => eventsRef.current.onCreated?.(created.id),
+    });
     let keeper: DraftKeeper | null = null;
     const autosave = createAutosave<PageBody>({
       save: (patch, context) => saver.save(patch, context),
@@ -131,15 +165,18 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
       },
       onSaved: (idle) => {
         setConflict(null);
+        // 新しいページを作った → 以後の下書きはそのページの id に書く（作る前の枠の下書きは消す。まだ届いていない変更は持っていく）
+        if (saver.pageId !== null) keeper?.rekey(saver.pageId, !idle);
         // 今の内容が全てサーバーにある → 下書きは要らない。保存の最中に入力があった → 新しい revision の上で書き直す
         if (idle) keeper?.discard();
         else keeper?.touch();
+        eventsRef.current.onSaved?.();
       },
     });
     if (storage) {
       keeper = createDraftKeeper({
         storage,
-        pageId: initial.id,
+        pageId: initial.id ?? NEW_PAGE_DRAFT_KEY,
         isComposing,
         read: () => ({
           baseRevision: saver.revision,
@@ -229,7 +266,7 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
       return;
     }
     let cancelled = false;
-    void readDraft(storage, initial.id).then((result) => {
+    void readDraft(storage, initial.id ?? NEW_PAGE_DRAFT_KEY).then((result) => {
       if (cancelled) return;
       if (!result.ok) {
         // 読めなかった下書きを上書きしないよう、この画面では端末に書かない
@@ -238,7 +275,8 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
         finish();
         return;
       }
-      const decision = decideRestore(result.draft, initial);
+      // 新しいページは、空のページ（作る前の revision）と比べる
+      const decision = decideRestore(result.draft, { title: initial.title, blocks: initial.blocks, revision: initial.revision ?? UNCREATED_REVISION });
       if (result.draft) keeper?.adopt(result.draft);
       if (decision.action === "discard") {
         keeper?.discard();
@@ -252,9 +290,10 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
         }
         titleRef.current = draft.title;
         setTitle(draft.title);
+        eventsRef.current.onTitleChange?.(draft.title);
         const blocks = () => editor.getJSON().content ?? [];
-        if (decision.action === "load") {
-          // 届いていなかった下書きを保存し直す
+        if (decision.action === "load" || initial.id === null) {
+          // 届いていなかった下書きを保存し直す（新しいページは、比べるサーバーのページが無いので、下書きでページを作る）
           autosave.change({ title: draft.title, blocks });
         } else {
           // サーバーが先へ進んでいる: 自分の本文（下書き）を出したまま、自動保存を止めて帯を出す
@@ -329,6 +368,7 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
           setTitleClamped(value !== input);
           setTitle(value);
           titleRef.current = value;
+          eventsRef.current.onTitleChange?.(value);
           autosaveRef.current?.change({ title: value });
           keeperRef.current?.touch();
         }}

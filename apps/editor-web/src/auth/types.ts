@@ -4,6 +4,8 @@ import type { AuthMode } from "./config";
 export type Session = {
   readonly userId: string;
   readonly mode: AuthMode;
+  /** 一覧の下の本人の行に出す名前（NIHO から読む。stub では合成の値）。 */
+  readonly profile?: { readonly name: string; readonly email?: string };
 };
 
 /** getSession が読むのは要求の header だけ（route handler の Request と、server component の headers() の両方を渡せる）。 */
@@ -12,4 +14,10 @@ export type SessionRequest = { readonly headers: Pick<Headers, "get"> };
 export interface AuthProvider {
   readonly mode: AuthMode;
   getSession(request: SessionRequest): Promise<Session | null>;
+  /** `/auth/login/start`。returnTo は safeReturnTo を通した editor の中の path。 */
+  beginLogin(input: { request: Request; returnTo: string }): Promise<Response>;
+  /** `/auth/callback`。 */
+  completeLogin(request: Request): Promise<Response>;
+  /** `/auth/logout`（POST・同じ origin だけ）。 */
+  logout(request: Request): Promise<Response>;
 }

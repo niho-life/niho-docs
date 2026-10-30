@@ -168,6 +168,12 @@ describe("ShellSidebar", () => {
     expect(shellAccountItems(0).every((item) => !item.badge)).toBe(true);
   });
 
+  it("listEnd は一覧の <ul> の直後（<nav> の中）に出る。渡さなければ何も足さない", () => {
+    const withEnd = renderToStaticMarkup(sidebar({ listEnd: <div data-list-end="" /> }));
+    expect(withEnd).toContain('</ul><div data-list-end=""></div></nav>');
+    expect(html).toContain("</ul></nav>");
+  });
+
   it("検索を開くと入力に替わる（aria-label つき）", () => {
     const open = renderToStaticMarkup(sidebar({ search: { open: true, value: "", onOpen: noop, onClose: noop, onChange: noop } }));
     expect(open).toContain('role="search"');

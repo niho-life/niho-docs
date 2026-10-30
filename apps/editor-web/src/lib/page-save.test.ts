@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { classifySaveFailure, createPageSaver, jsonEqual, sameContent } from "./page-save";
+import { UNCREATED_REVISION, classifySaveFailure, createPageSaver, jsonEqual, sameContent } from "./page-save";
 import { PageConflictError, PageRequestError, type ConflictPage, type PageBody, type SaveRequestOptions } from "./pages-client";
 
 const PAGE_ID = "00000000-0000-4000-8000-000000000001";
@@ -170,5 +170,45 @@ describe("createPageSaver", () => {
     expect(server.page).toMatchObject({ title: "この画面", blocks: paragraph("この本文"), revision: 3 });
     await saver.save({ title: "続き" }, NO_KEEPALIVE);
     expect(server.calls.at(-1)?.options).toEqual({ baseRevision: 3, overwrite: false, keepalive: false });
+  });
+
+  it("creates a new page with the first save (POST), then PATCHes that page on the revision it was created with", async () => {
+    const server = fakeServer({ title: "", blocks: [], revision: 1 });
+    const create = vi.fn(async (body: PageBody = {}, options: { keepalive?: boolean } = {}) => {
+      expect(typeof options.keepalive).toBe("boolean");
+      if (body.title !== undefined) server.page.title = body.title;
+      if (body.blocks !== undefined) server.page.blocks = body.blocks;
+      return { id: PAGE_ID, revision: server.page.revision };
+    });
+    const onCreated = vi.fn();
+    const saver = createPageSaver({ pageId: null, revision: UNCREATED_REVISION, content: { title: "", blocks: [] }, request: server.request, create, onCreated });
+    expect(saver.pageId).toBeNull();
+    expect(saver.revision).toBe(UNCREATED_REVISION);
+
+    await saver.save({ title: "作る" }, { keepalive: true });
+    expect(create).toHaveBeenCalledWith({ title: "作る" }, { keepalive: true });
+    expect(onCreated).toHaveBeenCalledWith({ id: PAGE_ID, revision: 1 });
+    expect(saver.pageId).toBe(PAGE_ID);
+    expect(saver.revision).toBe(1);
+    expect(server.calls).toEqual([]);
+
+    await saver.save({ blocks: paragraph("本文") }, NO_KEEPALIVE);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(onCreated).toHaveBeenCalledTimes(1);
+    expect(server.calls.map((call) => call.options)).toEqual([{ baseRevision: 1, overwrite: false, keepalive: false }]);
+    expect(server.page).toMatchObject({ title: "作る", blocks: paragraph("本文"), revision: 2 });
+  });
+
+  it("keeps a new page uncreated when the POST fails, and creates it with the next save", async () => {
+    const create = vi.fn(async (): Promise<{ id: string; revision: number }> => {
+      throw new TypeError("Failed to fetch");
+    });
+    const saver = createPageSaver({ pageId: null, revision: UNCREATED_REVISION, content: { title: "", blocks: [] }, create });
+    await expect(saver.save({ title: "圏外" }, NO_KEEPALIVE)).rejects.toBeInstanceOf(TypeError);
+    expect(saver.pageId).toBeNull();
+    create.mockImplementationOnce(async () => ({ id: PAGE_ID, revision: 1 }));
+    await saver.save({ title: "圏外" }, NO_KEEPALIVE);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(saver.pageId).toBe(PAGE_ID);
   });
 });

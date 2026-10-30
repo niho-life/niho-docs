@@ -2,6 +2,7 @@ export * from "./types.ts";
 export {
   DEFAULT_AUTOSAVE_VERSION_INTERVAL_MS,
   EditorStore,
+  InvalidPageCursorError,
   PAGE_LIST_LIMIT,
   TRASH_LIST_LIMIT,
   TRASH_RETENTION_DAYS,

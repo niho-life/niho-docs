@@ -1,6 +1,6 @@
-import { conflictResponse, errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
+import { conflictResponse, errorResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 import { parseBlocks, parseRestoreBody, parseVersionNumber } from "./page-input";
-import { guarded, sessionOf, type PagesApiDeps } from "./pages-api";
+import { sessionOf, type PagesApiDeps } from "./pages-api";
 
 /** GET /api/pages/{id}/versions — 版の一覧（新しい順・最大 100・本文は含めない）。 */
 export function listVersions(request: Request, id: string, deps: PagesApiDeps): Promise<Response> {
