@@ -269,6 +269,14 @@ export class MemoryPublishStore implements PublishStore, ConnectionStore {
         const connection = enter().connections[connectionId];
         return connection ? frozenClone(connection) : null;
       },
+      connectionLive: async (actorId, handle) => {
+        const known = Object.values(enter().connections).filter((connection) => connection.handle === handle);
+        // A handle this store has no record of is left to the pre-check: the #39 tests keep their
+        // connections outside the store (`MemoryConnections`). A real adapter must not do this; a
+        // connection is never deleted, so a handle that passed the pre-check always has its row.
+        if (known.length === 0) return true;
+        return known.some((connection) => connection.ownerId === actorId && connection.removedAt === null);
+      },
       getConnectionByHandle: async (handle) => {
         const connection = Object.values(enter().connections).find((candidate) => candidate.handle === handle);
         return connection ? frozenClone(connection) : null;

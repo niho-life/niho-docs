@@ -85,6 +85,8 @@ export interface KeyRecord {
  * rolls the whole transaction back.
  */
 export interface ConnectionTx extends PublishTx {
+  /** The owner's connection to `handle` exists and is not removed. */
+  connectionLive(actorId: string, handle: string): Promise<boolean>;
   getConnection(connectionId: string): Promise<ConnectionRecord | null>;
   /** Removed connections included. */
   getConnectionByHandle(handle: string): Promise<ConnectionRecord | null>;
