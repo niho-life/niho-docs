@@ -7,7 +7,7 @@ export type PageKind = (typeof PAGE_KINDS)[number];
 export const PAGE_LANGS = ["ja", "en"] as const;
 export type PageLang = (typeof PAGE_LANGS)[number];
 
-export const STEP_STATUSES = ["done", "run", "wait", "stale"] as const;
+export const STEP_STATUSES = ["done", "run", "wait", "stale", "failed"] as const;
 export type StepStatus = (typeof STEP_STATUSES)[number];
 
 /**

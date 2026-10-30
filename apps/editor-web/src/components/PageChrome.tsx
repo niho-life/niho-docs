@@ -80,6 +80,15 @@ function lineTypeItems(current: LineTypeId | null): ShellMenuItem[] {
 const keepFocus = (event: ReactMouseEvent) => event.preventDefault();
 
 /** 選んだ文字の位置（画面の座標）。描画の API が無い環境では null。 */
+/**
+ * 書式の帯の「行の種類」ボタンに出す、いまの行の種類の名前。ボタンの名前は見える文字から始める（WCAG 2.5.3。docs-ui の
+ * shell が「<種類>、行の種類」にする）。種類が決まらない（区切り線など）ときは「テキスト」。
+ */
+function currentLineTypeName(editor: Editor): string {
+  const current = lineTypeOf(editor.state);
+  return LINE_TYPE_CHOICES.find((choice) => choice.id === current)?.label ?? "テキスト";
+}
+
 function selectionAnchor(editor: Editor): Anchor | null {
   const { from, to } = editor.state.selection;
   try {
@@ -417,7 +426,7 @@ function Chrome({ editor }: { editor: Editor }) {
     <div ref={setRoot} className="es-root" data-page-chrome="">
       {root && (
         <>
-          <ShellBubbleMenu editor={editor} onTextType={openLineType} onLink={openLink} onAi={showAiNotice} />
+          <ShellBubbleMenu editor={editor} onTextType={openLineType} onLink={openLink} onAi={showAiNotice} textType={currentLineTypeName(editor)} />
           <FloatingMenu ref={addMenu} editor={editor} pluginKey={ADD_BUTTON_KEY} appendTo={root} shouldShow={shouldShowAddButton} options={addButtonOptions}>
             <button
               ref={addButton}

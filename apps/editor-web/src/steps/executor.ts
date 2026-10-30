@@ -1,0 +1,111 @@
+import type { Block } from "@niho/editor-store";
+import type { RecipeDef } from "./recipes";
+
+export type StepExecutorInput = {
+  recipe: RecipeDef;
+  stepIndex: number;
+  /** 録音ページの本文。 */
+  parentBlocks: Block[];
+  /** 前の段階のサブページの本文（段階 0 は null）。 */
+  previousBlocks: Block[] | null;
+  /** lease を失った（取消・掃除）ときに止める合図。 */
+  signal?: AbortSignal;
+};
+
+export type StepExecutorOutput = {
+  blocks: Block[];
+  usage?: { inputTokens: number; outputTokens: number; model: string };
+};
+
+/** 1 つの段階を実行する（本物の AI は後段。#38 の AiModel をこの形に包む）。 */
+export type StepExecutor = {
+  run(input: StepExecutorInput): Promise<StepExecutorOutput>;
+};
+
+/**
+ * 段階の失敗。`code` は短い英小文字の code だけ（本文・プロンプト・内部の情報を入れない）。
+ * `retryable` は一時的な失敗（時間切れ・5xx 相当）。入力の誤り（4xx 相当）は false ですぐ失敗にする。
+ */
+export class StepError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+
+  constructor(code: string, retryable: boolean) {
+    super(`step failed: ${code}`);
+    this.name = "StepError";
+    this.code = code;
+    this.retryable = retryable;
+  }
+}
+
+/** blocks の中の文字（text）をつなげたもの。 */
+function plainText(value: unknown): string {
+  if (Array.isArray(value)) return value.map(plainText).join("");
+  if (typeof value !== "object" || value === null) return "";
+  const record = value as Record<string, unknown>;
+  return (typeof record.text === "string" ? record.text : "") + plainText(record.content);
+}
+
+function textBlock(type: "heading" | "paragraph", text: string): Block {
+  return type === "heading"
+    ? { type, attrs: { level: 2 }, content: [{ type: "text", text }] }
+    : { type, content: [{ type: "text", text }] };
+}
+
+/** 偽物の結果（決定的。`[fake]` の印・段階の名前・前の段階の先頭 30 文字を入れる）。 */
+export function fakeBlocks(input: Pick<StepExecutorInput, "recipe" | "stepIndex" | "parentBlocks" | "previousBlocks">): Block[] {
+  const step = input.recipe.steps[input.stepIndex];
+  if (!step) throw new StepError("unknown_step", false);
+  const source = input.stepIndex === 0 ? input.parentBlocks : (input.previousBlocks ?? []);
+  const head = Array.from(plainText(source).replace(/\s+/g, " ").trim()).slice(0, 30).join("") || "（入力なし）";
+  return [
+    textBlock("heading", `[fake] ${step.name}`),
+    textBlock("paragraph", `[fake] ${input.recipe.name}の段階 ${input.stepIndex + 1}/${input.recipe.steps.length}「${step.name}」の偽の結果です。`),
+    textBlock("paragraph", `[fake] 前の段階の先頭: ${head}`),
+  ];
+}
+
+function wait(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new StepError("aborted", true));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new StepError("aborted", true));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+export type FakeExecutorOptions = {
+  /** 最初の n 回は失敗する。 */
+  failures?: number;
+  /** 失敗のときに投げるもの（既定は再試行できる `StepError("fake_failure")`）。 */
+  error?: () => unknown;
+  /** 毎回この時間（ms）かかる（signal で止まる）。 */
+  delayMs?: number;
+};
+
+/** 偽物の実行器（AI を呼ばない）。テスト用に「n 回目まで失敗する」「遅い」「投げるものを決める」を作れる。 */
+export function createFakeExecutor(options: FakeExecutorOptions = {}): StepExecutor & { readonly calls: number } {
+  let calls = 0;
+  return {
+    get calls() {
+      return calls;
+    },
+    async run(input) {
+      calls += 1;
+      if (options.delayMs) await wait(options.delayMs, input.signal);
+      if (calls <= (options.failures ?? 0)) throw options.error ? options.error() : new StepError("fake_failure", true);
+      return { blocks: fakeBlocks(input), usage: { inputTokens: 0, outputTokens: 0, model: "fake" } };
+    },
+  };
+}
+
+export const fakeExecutor: StepExecutor = createFakeExecutor();

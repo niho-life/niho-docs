@@ -111,7 +111,8 @@ function bodyEditor(): Editor {
 
 const chrome = () => container!.querySelector<HTMLElement>("[data-page-chrome]")!;
 const formatBar = () => chrome().querySelector<HTMLElement>(":scope > .es-selbar--live");
-const labelled = (label: string) => container!.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+/** aria-label が label か、「<見える文字>、label」（shell の「行の種類」は「テキスト、行の種類」のように見える文字から始まる）のボタン。 */
+const labelled = (label: string) => container!.querySelector<HTMLButtonElement>(`button[aria-label="${label}"], button[aria-label$="、${label}"]`);
 const menu = (label: string) => container!.querySelector<HTMLElement>(`[role="menu"][aria-label="${label}"]`);
 /** 項目の名前（右の小さな補足を除く）。 */
 const itemName = (item: Element) =>

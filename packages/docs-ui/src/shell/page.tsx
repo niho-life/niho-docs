@@ -133,7 +133,9 @@ export function ShellPage(props: ShellPageProps) {
   return (
     <div className="es-canvas-in">
       {props.cover === "set" && (
-        <div className="es-cover" role="img" aria-label="カバー写真（仮の面）">
+        // 画像（role=img）とボタンは兄弟にする。role=img の中にボタンを入れると、ボタンが支援技術から見えなくなる（nested-interactive。#43）
+        <div className="es-cover">
+          <span className="es-cover-ph" role="img" aria-label="カバー写真（仮の面）" />
           <button type="button" className="es-chg" onClick={props.onAddCover}>
             変更
           </button>
@@ -149,6 +151,8 @@ export function ShellPage(props: ShellPageProps) {
       <h1
         className={`es-tt${ja ? " es-ja" : ""}${props.kind === "journal" ? " es-tt--journal" : ""}`}
         data-ph="無題"
+        // 題名が空のときは、見えている「無題」（::before のプレースホルダー）を見出しの名前にする（空の h1 にしない）
+        aria-label={props.title ? undefined : "無題"}
         spellCheck={false}
         contentEditable={props.onTitleChange ? true : undefined}
         suppressContentEditableWarning
