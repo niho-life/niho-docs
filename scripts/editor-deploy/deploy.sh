@@ -71,6 +71,11 @@ gcp run deploy "$SERVICE" \
   --set-env-vars "$(service_env_vars)" \
   --labels "$COST_LABEL,commit=${TAG:0:12}"
 
+# 一度でも特定の revision へ traffic を割り当てる（docs/ops/editor-deploy.md §9 の戻し方）と、Cloud Run は以降のデプロイもその割り当てを
+# 引き継ぎ、新しい revision へ traffic を送らない。smoke が古い revision に通らないよう、毎回、最新の revision へ明示的に向ける。
+log "route all traffic to the latest revision of $SERVICE"
+gcp run services update-traffic "$SERVICE" --region "$GCP_REGION" --to-latest
+
 log "smoke: $SERVICE_URL"
 # `-D -` prints the headers; the checks read the headers and status only, never a body.
 smoke_headers() { curl -sS -o /dev/null -D - --retry 5 --retry-all-errors --max-time 20 "$SERVICE_URL$1"; }
