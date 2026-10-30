@@ -38,6 +38,17 @@ describe("shell.css（モック v6 の枠のスタイル）", () => {
     expect(stripped).not.toMatch(/\b(?:rgb|hsl)a?\((?!\s*(?:0|28|255)\s*,)/);
   });
 
+  it("初期化（ul・ol の list-style、a の下線、見出し・p の margin）は、本文（.ProseMirror の中）に効かせない", () => {
+    // EditorShell は本文のエディタごと .es-root に入れるので、枠の初期化が本文の箇条書きの印・リンクの下線を消してしまう（#70 の枠で確認）
+    const resets = css.split("\n").filter((line) => /\.es-root (?:ul|ol|a)(?::where\(:not\(\.ProseMirror \*\)\))?[,{]/.test(line) && /list-style:none|text-decoration:none|\{margin:0\}/.test(line));
+    expect(resets.length).toBeGreaterThanOrEqual(3);
+    for (const rule of resets) {
+      for (const selector of rule.split("{")[0]!.split(/,(?=:where)/)) {
+        if (/\.es-root (?:h1|h2|h3|h4|p|dl|dd|ul|ol|a)\b/.test(selector)) expect(selector, selector.slice(-60)).toContain(":where(:not(.ProseMirror *))");
+      }
+    }
+  });
+
   it("全セレクタが共通 UI の root の中の .es-root 配下（@media の中も）。裸の * html body :root は無い", () => {
     expect(selectors.length).toBeGreaterThan(200);
     for (const selector of selectors) {
@@ -51,7 +62,8 @@ describe("shell.css（モック v6 の枠のスタイル）", () => {
 
   it("クラスはすべて es- 接頭辞、@keyframes も es-、@import・@font-face・url() は持たない", () => {
     for (const selector of selectors) {
-      for (const match of selector.matchAll(/\.([A-Za-z_][\w-]*)/g)) expect(match[1], selector).toMatch(/^es-/);
+      // 本文（TipTap の .ProseMirror）は初期化の対象から外すために `:not(.ProseMirror *)` で参照するだけ（スタイルは当てない）
+      for (const match of selector.replaceAll(":not(.ProseMirror *)", "").matchAll(/\.([A-Za-z_][\w-]*)/g)) expect(match[1], selector).toMatch(/^es-/);
     }
     const names: string[] = [];
     root.walkAtRules((rule) => {
