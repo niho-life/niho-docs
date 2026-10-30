@@ -2,6 +2,8 @@ name: Docs SDK CI
 
 on:
   pull_request:
+  # merge queue の検証。checkout と concurrency は `github.sha` へ fallback するので、merge_group のコミットを使う
+  merge_group:
   push:
     branches: [main]
     paths:
