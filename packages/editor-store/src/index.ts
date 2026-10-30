@@ -1,4 +1,5 @@
 export * from "./types.ts";
+export * from "./ai-usage.ts";
 export {
   DEFAULT_AUTOSAVE_VERSION_INTERVAL_MS,
   EditorStore,

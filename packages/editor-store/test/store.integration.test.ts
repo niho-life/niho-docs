@@ -52,8 +52,9 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name",
       [schema],
     );
-    assert.deepEqual(tables.rows.map((row) => row.table_name), ["assets", MIGRATIONS_TABLE, "page_versions", "pages", "publications"].sort());
-    for (const table of ["pages", "page_versions", "assets", "publications"]) {
+    // ai_usage は AI の使用量（0005。ページの表とは別）
+    assert.deepEqual(tables.rows.map((row) => row.table_name), ["ai_usage", "assets", MIGRATIONS_TABLE, "page_versions", "pages", "publications"].sort());
+    for (const table of ["pages", "page_versions", "assets", "publications", "ai_usage"]) {
       const count = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM ${table}`);
       assert.equal(count.rows[0]?.n, "0", `${table} must be empty after migration`);
     }
