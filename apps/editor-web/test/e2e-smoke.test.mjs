@@ -379,4 +379,139 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.equal(exported.headers.get("x-content-type-options"), "nosniff");
     assert.equal(exported.headers.get("x-robots-tag"), "noindex, nofollow");
   });
+
+  // ---- 録音と文字起こし（#36 段 1） ----
+
+  // 合成の VTT（実在の人の名前・会話ではない）
+  const SYNTHETIC_VTT = [
+    "WEBVTT",
+    "",
+    "00:00:01.000 --> 00:00:02.500",
+    "<v 司会役>合成の録音をはじめます",
+    "",
+    "00:00:02.500 --> 00:00:04.000",
+    "<v 記録役>合成の記録です",
+    "",
+    "00:00:04.000 --> 00:00:06.000",
+    "<v 司会役>一つ目の議題です",
+    "",
+  ].join("\n");
+
+  it("imports a VTT into a recording page, edits a paragraph, renames and merges speakers, and refuses a stale revision (#36)", async () => {
+    const created = await write("POST", "/api/recordings/import-vtt", { name: "合成の録音 e2e.vtt", vtt: SYNTHETIC_VTT });
+    assert.equal(created.status, 201);
+    assert.equal(created.headers.get("cache-control"), "private, no-store");
+    assert.equal(created.headers.get("x-robots-tag"), "noindex, nofollow");
+    const { page, recording } = await created.json();
+    createdIds.push(page.id);
+    assert.equal(page.kind, "rec");
+    assert.equal(page.title, "合成の録音 e2e");
+    assert.equal(recording.revision, 1);
+    assert.equal(recording.engine, "vtt-import");
+    assert.equal(recording.durationSec, 6);
+    assert.match(recording.sourceSha256, /^[0-9a-f]{64}$/);
+    assert.deepEqual(recording.speakerNames, { 1: "司会役", 2: "記録役" });
+
+    const read = await fetch(`${base}/api/pages/${page.id}/recording`);
+    assert.equal(read.status, 200);
+    const first = await read.json();
+    assert.deepEqual(first.recording, recording);
+    assert.deepEqual(first.speakers, [
+      { speaker: 1, name: "司会役", count: 2 },
+      { speaker: 2, name: "記録役", count: 1 },
+    ]);
+
+    // 段落をその場で直す
+    const edited = await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 1, edits: [{ index: 1, text: "合成の記録です。\r\n直しました" }] });
+    assert.equal(edited.status, 200);
+    const afterEdit = (await edited.json()).recording;
+    assert.equal(afterEdit.revision, 2);
+    assert.deepEqual(afterEdit.segments[1], { start: 2.5, end: 4, text: "合成の記録です。\n直しました", speaker: 2 });
+
+    // 話者の名前を変える: 名前の表が 1 つなので、話者 1 の全ての段落に反映される
+    const renamed = await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 2, renameSpeaker: { speaker: 1, name: "進行役" } });
+    assert.equal(renamed.status, 200);
+    const afterRename = await renamed.json();
+    assert.equal(afterRename.recording.revision, 3);
+    assert.deepEqual(afterRename.recording.speakerNames, { 1: "進行役", 2: "記録役" });
+    assert.deepEqual(afterRename.recording.segments.map((segment) => afterRename.recording.speakerNames[segment.speaker]), ["進行役", "記録役", "進行役"]);
+    assert.deepEqual(afterRename.speakers, [
+      { speaker: 1, name: "進行役", count: 2 },
+      { speaker: 2, name: "記録役", count: 1 },
+    ]);
+    const clash = await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 3, renameSpeaker: { speaker: 1, name: "記録役" } });
+    assert.equal(clash.status, 400);
+    assert.deepEqual(await clash.json(), { error: "bad_request", reason: "name" });
+
+    // 同じ話者をまとめる
+    const merged = await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 3, mergeSpeakers: { from: 2, into: 1 } });
+    assert.equal(merged.status, 200);
+    const afterMerge = await merged.json();
+    assert.equal(afterMerge.recording.revision, 4);
+    assert.deepEqual(afterMerge.recording.segments.map((segment) => segment.speaker), [1, 1, 1]);
+    assert.deepEqual(afterMerge.recording.speakerNames, { 1: "進行役" });
+    assert.deepEqual(afterMerge.speakers, [{ speaker: 1, name: "進行役", count: 3 }]);
+    assert.equal(afterMerge.recording.segments[1].text, "合成の記録です。\n直しました", "the earlier edit is kept");
+
+    // 古い revision の書き込みは上書きせず、409 で最新を返す
+    const stale = await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 2, edits: [{ index: 0, text: "古い画面の文" }] });
+    assert.equal(stale.status, 409);
+    const conflict = await stale.json();
+    assert.equal(conflict.error, "conflict");
+    assert.deepEqual(conflict.recording, afterMerge.recording);
+    assert.deepEqual(conflict.speakers, afterMerge.speakers);
+    const stored = await pool.query("SELECT revision, segments->0->>'text' AS first FROM page_recordings WHERE page_id = $1", [page.id]);
+    assert.deepEqual(stored.rows[0], { revision: 4, first: "合成の録音をはじめます" });
+
+    // 録音ページは普通のページとしても読める（本文は空）
+    const asPage = (await (await fetch(`${base}/api/pages/${page.id}`)).json()).page;
+    assert.equal(asPage.kind, "rec");
+    assert.equal(asPage.title, "合成の録音 e2e");
+    assert.deepEqual(asPage.blocks, []);
+
+    // 別の origin・壊れた VTT・形の違う要求は断る（何も作らない・書かない）
+    const count = async () => (await pool.query("SELECT count(*)::int AS n FROM page_recordings")).rows[0].n;
+    const before = await count();
+    assert.equal((await write("POST", "/api/recordings/import-vtt", { name: "a.vtt", vtt: SYNTHETIC_VTT }, { origin: "https://evil.example" })).status, 403);
+    assert.equal((await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 4, edits: [{ index: 0, text: "x" }] }, { origin: "https://evil.example" })).status, 403);
+    const invalid = await write("POST", "/api/recordings/import-vtt", { name: "a.vtt", vtt: "合成のただの文字" });
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(await invalid.json(), { error: "bad_request", reason: "vtt_invalid" });
+    const twoOps = await write("PATCH", `/api/pages/${page.id}/recording`, { baseRevision: 4, edits: [{ index: 0, text: "x" }], mergeSpeakers: { from: 1, into: 1 } });
+    assert.equal(twoOps.status, 400);
+    assert.deepEqual(await twoOps.json(), { error: "bad_request", reason: "body" });
+    assert.equal(await count(), before);
+    assert.equal((await pool.query("SELECT revision FROM page_recordings WHERE page_id = $1", [page.id])).rows[0].revision, 4);
+  });
+
+  it("answers the same 404 for another owner's recording, an unknown id, a malformed id, and a page without a recording (#36)", async () => {
+    const other = await pool.query("INSERT INTO pages (owner, kind, title) VALUES ($1, 'rec', 'synthetic other recording') RETURNING id", [OTHER_OWNER]);
+    const otherId = other.rows[0].id;
+    createdIds.push(otherId);
+    await pool.query(
+      `INSERT INTO page_recordings (page_id, owner, source, language, segments, speaker_names)
+       VALUES ($1, $2, 'vtt', 'ja', $3::jsonb, $4::jsonb)`,
+      [otherId, OTHER_OWNER, JSON.stringify([{ start: 0, end: 1, text: "他人の合成の段落", speaker: 1 }]), JSON.stringify({ 1: "他人の話し手" })],
+    );
+    const plain = (await (await write("POST", "/api/pages", {})).json()).page;
+    createdIds.push(plain.id);
+
+    const snapshot = async (response) => ({
+      status: response.status,
+      headers: [...response.headers.entries()].filter(([name]) => name !== "date").sort(),
+      body: await response.text(),
+    });
+    for (const [label, call] of [
+      ["GET recording", (id) => fetch(`${base}/api/pages/${id}/recording`)],
+      ["PATCH recording", (id) => write("PATCH", `/api/pages/${id}/recording`, { baseRevision: 1, renameSpeaker: { speaker: 1, name: "書き換え" } })],
+    ]) {
+      const results = [];
+      for (const id of [otherId, randomUUID(), "not-a-uuid", plain.id]) results.push(await snapshot(await call(id)));
+      assert.equal(results[0].status, 404, label);
+      assert.equal(results[0].body, '{"error":"not_found"}', label);
+      for (const result of results.slice(1)) assert.deepEqual(result, results[0], `${label} responses must be identical`);
+    }
+    const untouched = await pool.query("SELECT revision, speaker_names FROM page_recordings WHERE page_id = $1", [otherId]);
+    assert.deepEqual(untouched.rows[0], { revision: 1, speaker_names: { 1: "他人の話し手" } });
+  });
 });

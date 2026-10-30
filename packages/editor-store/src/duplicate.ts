@@ -2,8 +2,10 @@ import { isPageId } from "./store.ts";
 import type { Block, OwnerId, Page, PageKind, PageLang, Queryable, StepStatus } from "./types.ts";
 
 /**
- * ページの複製（#34）。本人の・ゴミ箱でないページだけを、1 つの INSERT … SELECT で写す。
+ * ページの複製（#34）。本人の・ゴミ箱でないページだけを、1 つの文（INSERT … SELECT）で写す。
  * 写すのは kind・lang・blocks・lead と題名（「〜のコピー」）。parent・cover・recipe・step_status・共有・公開・版は写さない。
+ * 録音ページ（#36。page_recordings の行がある）は、文字起こし（段落・話者名・原本の名前と SHA-256）も同じ文の中で写す。
+ * 録音の revision は 1 から数え直す（別の録音になるので、元の録音の編集とは競合しない）。
  */
 
 /** 複製の題名に足す言葉。 */
@@ -46,14 +48,27 @@ type PageRow = {
 const DUPLICATE_COLUMNS = "id, kind, title, lang, blocks, cover, lead, parent, recipe, step_status, created_at, updated_at";
 
 // $1 owner / $2 元のページの id / $3 題名に足す言葉 / $4 題名の上限。left・char_length は code point で数える。
+// 録音の行は、写したページの行と同じ文の中で入れる（片方だけが入ることはない。外部キーは文の終わりに確かめられる）。
 const DUPLICATE_SQL = `
-INSERT INTO pages (owner, kind, title, lang, blocks, lead)
-SELECT owner, kind,
-       CASE WHEN title = '' THEN '' ELSE left(title, $4::int - char_length($3::text)) || $3::text END,
-       lang, blocks, lead
-  FROM pages
- WHERE owner = $1 AND id = $2 AND deleted_at IS NULL
-RETURNING ${DUPLICATE_COLUMNS}`;
+WITH copied AS (
+  INSERT INTO pages (owner, kind, title, lang, blocks, lead)
+  SELECT owner, kind,
+         CASE WHEN title = '' THEN '' ELSE left(title, $4::int - char_length($3::text)) || $3::text END,
+         lang, blocks, lead
+    FROM pages
+   WHERE owner = $1 AND id = $2 AND deleted_at IS NULL
+  RETURNING ${DUPLICATE_COLUMNS}
+),
+recording AS (
+  INSERT INTO page_recordings
+         (page_id, owner, source, language, engine, duration_sec, source_name, source_sha256, segments, speaker_names, created_at, updated_at)
+  SELECT c.id, r.owner, r.source, r.language, r.engine, r.duration_sec, r.source_name, r.source_sha256,
+         r.segments, r.speaker_names, c.created_at, c.created_at
+    FROM copied AS c
+    JOIN page_recordings AS r ON r.owner = $1 AND r.page_id = $2
+  RETURNING page_id
+)
+SELECT ${DUPLICATE_COLUMNS} FROM copied`;
 
 function assertOwner(owner: OwnerId): void {
   // store.ts と同じ守り: 認証の層の誤りで空の owner が来たときに、誰のものでもない行を読み書きしない
