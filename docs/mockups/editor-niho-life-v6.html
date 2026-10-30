@@ -691,10 +691,10 @@ const tbar = (p) => `<div class="tbar ${S.rail ? "off" : ""}">
 const plusMenu = () => `<div class="menu" style="position:relative;top:6px;max-width:300px"><button data-close>${ic("type")}テキスト</button><button data-close>${ic("h")}見出し</button><button data-close>${ic("list")}箇条書き</button><button data-close>${ic("img")}画像</button><button data-close>${ic("mic")}録音<small>文字起こし</small></button><button data-close>${ic("up")}音声ファイル<small>文字起こし</small></button><button data-close>${ic("minus")}区切り線</button></div>`;
 
 function transcript(p) {
-  const segs = [["Takuya", "a", "00:12", "最初は、泊まりに来た人と一緒にご飯を作るだけだったんです。テーブルが一つしかなくて。"], ["Mika", "b", "00:41", "それが今の形になったのはいつ頃ですか。"], ["Takuya", "a", "00:48", "去年の秋かな。近所の人が「私も座っていい？」って言って、それから毎回誰かが来るようになって。"], ["Takuya", "a", "01:20", "今は8人まで。それ以上だと一つのテーブルで話せなくなる。"]];
+  const segs = p.segs ||= [["Takuya", "a", "00:12", "最初は、泊まりに来た人と一緒にご飯を作るだけだったんです。テーブルが一つしかなくて。"], ["Mika", "b", "00:41", "それが今の形になったのはいつ頃ですか。"], ["Takuya", "a", "00:48", "去年の秋かな。近所の人が「私も座っていい？」って言って、それから毎回誰かが来るようになって。"], ["Takuya", "a", "01:20", "今は8人まで。それ以上だと一つのテーブルで話せなくなる。"]];
   const ed = S.tredit, started = p.children && p.children.length;
   return `<div class="rec ${ed ? "editing" : ""}"><div class="hd"><button class="play" aria-label="再生">${ic("play")}</button><div class="wave"></div><span class="time">05:12 / 14:38</span><button class="btn sm ${ed ? "" : "line"}" data-tredit>${ed ? ic("check") + "直し終わり" : ic("type") + "文字起こしを直す"}</button></div>
-    <div class="tr">${segs.map((s, i) => `<div class="seg ${i === 2 && !ed ? "cur" : ""}"><div class="who"><span><i style="background:${s[1] === "a" ? "var(--moss)" : "var(--plum)"}"></i>${s[0]}</span><time>${s[2]}</time></div><p contenteditable="true">${s[3]}</p></div>`).join("")}</div>
+    <div class="tr">${segs.map((s, i) => `<div class="seg ${i === 2 && !ed ? "cur" : ""}"><div class="who"><span><i style="background:${s[1] === "a" ? "var(--moss)" : "var(--plum)"}"></i>${s[0]}</span><time>${s[2]}</time></div><p contenteditable="true" data-seg="${i}">${s[3]}</p></div>`).join("")}</div>
     ${ed ? `<div class="trhint">${ic("type")}段落をそのまま直せます。話者の名前は下で変えられます。</div>` : ""}
     <div class="speakers"><span><i style="background:var(--moss)"></i>Takuya</span><span><i style="background:var(--plum)"></i>Mika</span><button>名前を変える</button><button>タイムスタンプ</button></div></div>
     ${started ? "" : `<div class="makefrom"><span>この録音から</span><button class="btn sm" data-run="${p.id}">記事にする</button><button class="btn sm line" data-run="${p.id}">議事録にする</button><button class="btn sm line" data-chip="${p.id}:要約">要約する</button><span style="flex:1"></span><button class="btn sm quiet" data-go="settings">手順を変える</button></div>`}`;
@@ -939,7 +939,7 @@ document.addEventListener("click", (e) => {
 });
 document.getElementById("bk").onclick = () => { if (pos > 0) { pos--; S.sheet = null; render(); } };
 document.getElementById("fw").onclick = () => { if (pos < hist.length - 1) { pos++; S.sheet = null; render(); } };
-document.addEventListener("input", (e) => { const p = byId((hist[pos] || "").split(":")[1] || "new"); if (!p) return; if (e.target.classList.contains("tt")) { p.t = e.target.textContent.trim(); const d = document.querySelector(`.di.on b`); if (d) { d.textContent = p.t || "無題"; d.classList.toggle("untitled", !p.t); } } if (e.target.id === "f-lead") p.lead = e.target.textContent; });
+document.addEventListener("input", (e) => { const p = byId((hist[pos] || "").split(":")[1] || "new"); if (!p) return; if (e.target.classList.contains("tt")) { p.t = e.target.textContent.trim(); const d = document.querySelector(`.di.on b`); if (d) { d.textContent = p.t || "無題"; d.classList.toggle("untitled", !p.t); } } if (e.target.id === "f-lead") p.lead = e.target.textContent; if (p.segs && e.target.dataset && e.target.dataset.seg !== undefined) p.segs[+e.target.dataset.seg][3] = e.target.textContent; });
 go("login");
 </script>
 </body>
