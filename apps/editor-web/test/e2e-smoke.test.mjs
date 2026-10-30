@@ -385,7 +385,10 @@ describe("editor-web e2e (stub, next dev)", () => {
     const page = (await (await write("POST", "/api/pages", {})).json()).page;
     createdIds.push(page.id);
     const first = [{ type: "paragraph", content: [{ type: "text", text: "合成の共有 最初の本文" }] }];
-    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { title: "合成の共有 e2e", blocks: first })).status, 200);
+    // 本文を保存するには、読んだ revision を baseRevision で送る（#58 の競合検知）。応答の revision を次の保存に使う
+    const firstSave = await write("PATCH", `/api/pages/${page.id}`, { title: "合成の共有 e2e", blocks: first, baseRevision: page.revision });
+    assert.equal(firstSave.status, 200);
+    const firstRevision = (await firstSave.json()).page.revision;
     assert.deepEqual((await (await fetch(`${base}/api/pages/${page.id}/share`)).json()).share, PRIVATE_SHARE);
 
     const enabled = await write("PUT", `/api/pages/${page.id}/share`);
@@ -410,7 +413,7 @@ describe("editor-web e2e (stub, next dev)", () => {
 
     // 共有中に本文を保存し直すと、次に開いたときは新しい保存版
     const second = [{ type: "paragraph", content: [{ type: "text", text: "合成の共有 直した本文" }] }];
-    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { blocks: second })).status, 200);
+    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { blocks: second, baseRevision: firstRevision })).status, 200);
     const updated = await (await anonymous(`/s/${token}`)).text();
     assert.match(updated, /合成の共有 直した本文/);
     assert.doesNotMatch(updated, /合成の共有 最初の本文/);
@@ -492,7 +495,7 @@ describe("editor-web e2e (stub, next dev)", () => {
       { type: "paragraph", content: [{ type: "text", text: "太字", marks: [{ type: "bold" }] }, { type: "text", text: "と <script> と # 記号" }] },
       { type: "bulletList", content: [{ type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "項目" }] }] }] },
     ];
-    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { title: "合成の書き出し e2e", blocks })).status, 200);
+    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { title: "合成の書き出し e2e", blocks, baseRevision: page.revision })).status, 200);
     assert.equal((await write("PUT", `/api/pages/${page.id}/share`)).status, 200);
 
     assert.equal((await write("POST", `/api/pages/${page.id}/duplicate`, undefined, { origin: "https://evil.example" })).status, 403);
