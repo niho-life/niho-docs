@@ -4,7 +4,7 @@
 # ============================================================================
 #
 # 作るもの（apps/docs/release/。gitignore。<sha> は HEAD の 12 桁）:
-#   NIHO-docs-<版>-<sha>.dmg                 NIHO docs.app と Applications へのショートカット
+#   NIHO-docs-<版>-<sha>.dmg                 NIHO editor.app と Applications へのショートカット
 #   NIHO-docs-<版>-<sha>.app.tar.gz（+ .sig）  自動更新の成果物（Tauri updater の署名付き）。署名鍵があるときだけ
 #
 # 流れ:
@@ -42,7 +42,7 @@ DOCS_DIR="${REPO_ROOT}/apps/docs"
 SCRIPTS_DIR="${DOCS_DIR}/scripts"
 BUNDLE_DIR="${DOCS_DIR}/target/release/bundle/macos"
 OUT_DIR="${DOCS_DIR}/release"
-APP_NAME="NIHO docs"
+APP_NAME="NIHO editor"
 TARGET_TRIPLE="aarch64-apple-darwin"
 STAGED_SIDECAR="${DOCS_DIR}/src-tauri/binaries/niho-speech-${TARGET_TRIPLE}"
 

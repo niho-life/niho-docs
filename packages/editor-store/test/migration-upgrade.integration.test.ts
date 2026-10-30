@@ -61,7 +61,8 @@ describe("migration 0002 on a database that already has pages and versions", { s
       });
 
       const second = await applyMigrations(client);
-      assert.deepEqual(second.applied, ["0002_versions_and_trash.sql"]);
+      // 0002 のあとに足された migration（0003 の検索など）も、ここでいっしょに適用される。このテストが見るのは 0002 の上がり方
+      assert.equal(second.applied[0], "0002_versions_and_trash.sql");
       assert.deepEqual(second.skipped, ["0001_editor_store.sql"]);
 
       const row = async (id: string) =>

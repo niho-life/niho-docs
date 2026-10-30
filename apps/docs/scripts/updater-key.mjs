@@ -35,7 +35,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 /** @type {UpdaterApp} */
 const DOCS_APP = {
-  name: "NIHO docs",
+  name: "NIHO editor",
   tauriConf: path.resolve(SCRIPT_DIR, "../src-tauri/tauri.conf.json"),
   // apps/docs/src-tauri/src/updater.rs の PUBKEY_PLACEHOLDER と同じ
   placeholder: "REPLACE_WITH_DOCS_UPDATER_PUBKEY",
@@ -146,7 +146,7 @@ function configuredPubkey(app, tauriConfPath = app.tauriConf) {
 // --- self-test ------------------------------------------------------------------
 
 /** Tauri（tauri signer）と同じ形の鍵・署名を作る（self-test 用）。 */
-function fakeMinisign({ prehashed = true, file = "NIHO docs.app.tar.gz" } = {}) {
+function fakeMinisign({ prehashed = true, file = "NIHO editor.app.tar.gz" } = {}) {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
   const raw = Buffer.from(publicKey.export({ format: "jwk" }).x, "base64url");
   const keyId = crypto.randomBytes(8);
