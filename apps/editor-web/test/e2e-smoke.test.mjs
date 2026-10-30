@@ -1,6 +1,6 @@
 // 起動した editor-web（`next dev`・EDITOR_AUTH_MODE=stub）に対して、ページを作る → 書く → 読み直すと残る、一覧と枠、を確かめる。
 // あわせて、古い revision の保存が 409 になること・版から戻せること・ゴミ箱へ入れて戻せることを確かめる。
-// そのあと EDITOR_AUTH_MODE=niho で起動し直し、未ログインの画面がログインへ戻り先つきで移ることを確かめる（同じ dir の `next dev` は同時に 1 つ）。
+// そのあと EDITOR_AUTH_MODE=niho で起動し直し、未ログインの画面がログインへ戻り先つきで移ること・共有リンク（/s/{token}）はログインなしで枠の外に開くことを確かめる（同じ dir の `next dev` は同時に 1 つ）。
 // 前提: DATABASE_URL の DB に packages/editor-store の migration を適用済み（README）。合成の値だけを書き、終わりに消す。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -472,6 +472,243 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.deepEqual(await (await fetch(`${base}/api/search?q=a%00b`)).json(), { results: [] }, "NUL is not sent to the database");
     assert.equal((await fetch(`${base}/api/search?q=${"a".repeat(101)}`)).status, 400);
     assert.equal((await fetch(`${base}/api/search?q=x&limit=0`)).status, 400);
+  });
+
+  // ---- リンクで共有・複製・書き出し（#34） ----
+
+  const PRIVATE_SHARE = { status: "PRIVATE", publicId: null, url: null, updatedAt: null };
+  const tokenOf = (share) => {
+    assert.equal(share.status, "PUBLIC");
+    assert.match(share.url, new RegExp(`^${base.replace(/[.]/g, "\\.")}/s/[A-Za-z0-9_-]{43}$`));
+    return share.url.slice(`${base}/s/`.length);
+  };
+  /** Cookie も認証の header も付けない素の要求（ログインしていない人の開き方）。 */
+  const anonymous = (path) => fetch(`${base}${path}`, { headers: {}, redirect: "manual" });
+  const assertSharedHeaders = (response, label) => {
+    // 全体の規則（Referrer-Policy: same-origin）と重ならず、値は 1 つだけ（2 つあれば "a, b" になる）
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer", label);
+    assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow", label);
+    // `next dev` はページの Cache-Control を開発用の値に置き換える（本番の値は test/startup-guard.test.mjs で確かめる）
+    assert.match(response.headers.get("cache-control") ?? "", /no-store|no-cache/, label);
+  };
+
+  it("shares the latest saved version at /s/{token} without signing in, and stops or rotates the link at once (#34)", async () => {
+    const page = (await (await write("POST", "/api/pages", {})).json()).page;
+    createdIds.push(page.id);
+    const first = [{ type: "paragraph", content: [{ type: "text", text: "合成の共有 最初の本文" }] }];
+    // 本文を保存するには、読んだ revision を baseRevision で送る（#58 の競合検知）。応答の revision を次の保存に使う
+    const firstSave = await write("PATCH", `/api/pages/${page.id}`, { title: "合成の共有 e2e", blocks: first, baseRevision: page.revision });
+    assert.equal(firstSave.status, 200);
+    const firstRevision = (await firstSave.json()).page.revision;
+    assert.deepEqual((await (await fetch(`${base}/api/pages/${page.id}/share`)).json()).share, PRIVATE_SHARE);
+
+    const enabled = await write("PUT", `/api/pages/${page.id}/share`);
+    assert.equal(enabled.status, 200);
+    const { share } = await enabled.json();
+    const token = tokenOf(share);
+    assert.deepEqual((await (await write("PUT", `/api/pages/${page.id}/share`)).json()).share, share, "starting again keeps the same link");
+    assert.deepEqual((await (await fetch(`${base}/api/pages/${page.id}/share`)).json()).share, share);
+    assert.equal((await write("PUT", `/api/pages/${page.id}/share`, undefined, { origin: "https://evil.example" })).status, 403);
+
+    const shared = await anonymous(`/s/${token}`);
+    assert.equal(shared.status, 200);
+    assert.equal(shared.headers.get("set-cookie"), null);
+    assertSharedHeaders(shared, "GET /s/{token}");
+    const html = await shared.text();
+    assert.match(html, /<h1>合成の共有 e2e<\/h1>/);
+    assert.match(html, /合成の共有 最初の本文/);
+    assert.match(html, /<meta name="referrer" content="no-referrer"\/>/);
+    assert.match(html, /<meta name="robots" content="noindex, nofollow"\/>/);
+    assert.match(html, /<title>共有されたページ<\/title>/);
+    // 枠（app/(editor)）の外: 一覧・ヘッダーを出さない。CSP は他の画面と同じく src/proxy.ts の nonce つき
+    assert.doesNotMatch(html, /aria-label="ページの一覧"/, "the shared page is drawn without the editor frame");
+    const sharedNonce = /'nonce-([^']+)'/.exec(shared.headers.get("content-security-policy") ?? "")?.[1];
+    assert.ok(sharedNonce, "the shared page carries a nonce-based CSP");
+    for (const tag of html.match(/<script\b[^>]*>/g) ?? []) assert.ok(tag.includes(`nonce="${sharedNonce}"`), `a <script> without this request's nonce: ${tag.slice(0, 80)}`);
+    assert.doesNotMatch(html.match(/<head>[\s\S]*?<\/head>/)?.[0].replace(/<script[\s\S]*?<\/script>/g, "") ?? "", new RegExp(token), "the token is not in the title or metadata");
+
+    // 共有中に本文を保存し直すと、次に開いたときは新しい保存版
+    const second = [{ type: "paragraph", content: [{ type: "text", text: "合成の共有 直した本文" }] }];
+    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { blocks: second, baseRevision: firstRevision })).status, 200);
+    const updated = await (await anonymous(`/s/${token}`)).text();
+    assert.match(updated, /合成の共有 直した本文/);
+    assert.doesNotMatch(updated, /合成の共有 最初の本文/);
+
+    // 作り直すと古いリンクはすぐ 404、新しいリンクは 200
+    const rotated = await write("POST", `/api/pages/${page.id}/share/rotate`);
+    assert.equal(rotated.status, 200);
+    const fresh = tokenOf((await rotated.json()).share);
+    assert.notEqual(fresh, token);
+    assert.equal((await anonymous(`/s/${token}`)).status, 404);
+    assert.equal((await anonymous(`/s/${fresh}`)).status, 200);
+
+    // 止めるとすぐ 404（もう一度止めても同じ）
+    const stopped = await write("DELETE", `/api/pages/${page.id}/share`);
+    assert.equal(stopped.status, 200);
+    assert.deepEqual((await stopped.json()).share, PRIVATE_SHARE);
+    assert.deepEqual((await (await write("DELETE", `/api/pages/${page.id}/share`)).json()).share, PRIVATE_SHARE);
+
+    // 止めた・作り直す前・形の違う・知らない token はどれも同じ 404（header・画面とも）
+    const snapshot = async (response) => ({
+      status: response.status,
+      // CSP の nonce は要求ごとに変わる乱数で、ページの存在を漏らさないので、値だけ外して比べる（#61）
+      headers: [...response.headers.entries()]
+        .filter(([name]) => name !== "date")
+        .map(([name, value]) => [name, value.replace(/\?v=\d+/g, "?v=").replace(/'nonce-[^']*'/g, "'nonce-'")])
+        .sort(),
+      body: await response.text(),
+    });
+    const missing = [];
+    for (const candidate of [fresh, token, "not-a-token", "A".repeat(43)]) missing.push(await snapshot(await anonymous(`/s/${candidate}`)));
+    for (const result of missing) {
+      assert.equal(result.status, 404);
+      assert.deepEqual(result.headers, missing[0].headers, "404 headers must be identical");
+      assert.match(result.body, /ページが見つかりません/);
+      assert.doesNotMatch(result.body, /合成の共有/);
+    }
+    assertSharedHeaders(await anonymous(`/s/${fresh}`), "GET /s/{stopped} (404)");
+  });
+
+  it("answers the same 404 for another owner's page on every page action, and changes nothing (#34)", async () => {
+    const other = await pool.query("INSERT INTO pages (owner, title) VALUES ($1, 'synthetic other share') RETURNING id", [OTHER_OWNER]);
+    const otherId = other.rows[0].id;
+    createdIds.push(otherId);
+    const otherToken = "S".repeat(43);
+    await pool.query("INSERT INTO page_shares (page_id, owner, token) VALUES ($1, $2, $3)", [otherId, OTHER_OWNER, otherToken]);
+    const before = (await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1", [OTHER_OWNER])).rows[0].n;
+
+    const snapshot = async (response) => ({
+      status: response.status,
+      headers: [...response.headers.entries()].filter(([name]) => name !== "date").sort(),
+      body: await response.text(),
+    });
+    for (const [label, call] of [
+      ["GET share", (id) => fetch(`${base}/api/pages/${id}/share`)],
+      ["PUT share", (id) => write("PUT", `/api/pages/${id}/share`)],
+      ["POST share/rotate", (id) => write("POST", `/api/pages/${id}/share/rotate`)],
+      ["DELETE share", (id) => write("DELETE", `/api/pages/${id}/share`)],
+      ["POST duplicate", (id) => write("POST", `/api/pages/${id}/duplicate`)],
+      ["GET export.md", (id) => fetch(`${base}/api/pages/${id}/export.md`)],
+    ]) {
+      const results = [];
+      for (const id of [otherId, randomUUID(), "not-a-uuid"]) results.push(await snapshot(await call(id)));
+      assert.equal(results[0].status, 404, label);
+      assert.equal(results[0].body, '{"error":"not_found"}', label);
+      for (const result of results.slice(1)) assert.deepEqual(result, results[0], `${label} responses must be identical`);
+    }
+    const shares = await pool.query("SELECT token FROM page_shares WHERE page_id = $1", [otherId]);
+    assert.deepEqual(shares.rows, [{ token: otherToken }], "another owner's share is neither rotated nor stopped");
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1", [OTHER_OWNER])).rows[0].n, before, "nothing was duplicated");
+    // 他人の共有リンクは、ログインしていない人には読める（共有の目的どおり）
+    assert.equal((await anonymous(`/s/${otherToken}`)).status, 200);
+  });
+
+  it("duplicates a page and exports its saved body as Markdown (#34)", async () => {
+    const page = (await (await write("POST", "/api/pages", {})).json()).page;
+    createdIds.push(page.id);
+    const blocks = [
+      { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "合成の見出し" }] },
+      { type: "paragraph", content: [{ type: "text", text: "太字", marks: [{ type: "bold" }] }, { type: "text", text: "と <script> と # 記号" }] },
+      { type: "bulletList", content: [{ type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "項目" }] }] }] },
+    ];
+    assert.equal((await write("PATCH", `/api/pages/${page.id}`, { title: "合成の書き出し e2e", blocks, baseRevision: page.revision })).status, 200);
+    assert.equal((await write("PUT", `/api/pages/${page.id}/share`)).status, 200);
+
+    assert.equal((await write("POST", `/api/pages/${page.id}/duplicate`, undefined, { origin: "https://evil.example" })).status, 403);
+    const duplicated = await write("POST", `/api/pages/${page.id}/duplicate`);
+    assert.equal(duplicated.status, 201);
+    const copy = (await duplicated.json()).page;
+    createdIds.push(copy.id);
+    assert.notEqual(copy.id, page.id);
+    assert.equal(copy.title, "合成の書き出し e2eのコピー");
+    assert.deepEqual(copy.blocks, blocks);
+    assert.deepEqual((await (await fetch(`${base}/api/pages/${copy.id}/share`)).json()).share, PRIVATE_SHARE, "the share is not copied");
+    assert.equal((await (await fetch(`${base}/api/pages/${page.id}`)).json()).page.title, "合成の書き出し e2e", "the original is unchanged");
+
+    const exported = await fetch(`${base}/api/pages/${page.id}/export.md`);
+    assert.equal(exported.status, 200);
+    assert.equal(await exported.text(), "## 合成の見出し\n\n**太字**と \\<script\\> と \\# 記号\n\n- 項目\n");
+    assert.equal(exported.headers.get("content-type"), "text/markdown; charset=utf-8");
+    assert.equal(exported.headers.get("content-disposition"), `attachment; filename="page.md"; filename*=UTF-8''${encodeURIComponent("合成の書き出し e2e.md")}`);
+    assert.equal(exported.headers.get("cache-control"), "private, no-store");
+    assert.equal(exported.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(exported.headers.get("x-robots-tag"), "noindex, nofollow");
+  });
+});
+
+describe("editor-web e2e (niho until #19459, next dev)", () => {
+  let base;
+  let dev;
+  const pool = new pg.Pool({ connectionString: databaseUrl, max: 2 });
+  const createdIds = [];
+
+  before(async () => {
+    dev = await startDev("niho", 401);
+    base = dev.base;
+  });
+
+  after(async () => {
+    if (createdIds.length > 0) await pool.query("DELETE FROM pages WHERE id = ANY($1::uuid[])", [createdIds]);
+    await pool.end();
+    await dev?.stop();
+  });
+
+  it("sends an unauthenticated visitor to /auth/login with the screen as next", async () => {
+    const id = randomUUID();
+    for (const [path, expected, headers] of [
+      [`/p/${id}`, `/auth/login?next=%2Fp%2F${id}`, {}],
+      ["/p/new?from=recording", "/auth/login?next=%2Fp%2Fnew%3Ffrom%3Drecording", {}],
+      ["/settings", "/auth/login?next=%2Fsettings", { "x-editor-path": "//evil.example" }],
+      ["/", "/auth/login", {}],
+      ["/p/not-a-uuid", "/auth/login", {}],
+    ]) {
+      const response = await fetch(`${base}${path}`, { redirect: "manual", headers });
+      assert.equal(response.status, 307, path);
+      assert.equal(response.headers.get("location"), expected, path);
+    }
+  });
+
+  it("comes back to the login screen with an error and keeps next while niho login is unavailable", async () => {
+    const start = await fetch(`${base}/auth/login/start?next=%2Fsettings`, { redirect: "manual" });
+    assert.equal(start.status, 303);
+    assert.equal(start.headers.get("location"), "/auth/login?next=%2Fsettings&error=unavailable");
+    const login = await fetch(`${base}/auth/login?next=%2Fsettings&error=unavailable`);
+    assert.equal(login.status, 200);
+    const html = await login.text();
+    assert.match(html, /NIHOでログイン/);
+    assert.match(html, /role="alert"[^>]*>ログインできませんでした。もう一度お試しください。/);
+    assert.match(html, /<meta name="robots" content="noindex, nofollow"\/>/);
+    assert.doesNotMatch(html, /data-auth-mode="stub"/);
+  });
+
+  it("opens a shared link without signing in and without the editor frame, while the editor screens still ask for login (#34)", async () => {
+    const page = await pool.query(
+      `INSERT INTO pages (owner, title, blocks) VALUES ($1, '合成の共有 niho', '[{"type":"paragraph","content":[{"type":"text","text":"合成の共有 niho の本文"}]}]'::jsonb) RETURNING id`,
+      [OTHER_OWNER],
+    );
+    const pageId = page.rows[0].id;
+    createdIds.push(pageId);
+    const token = "N".repeat(43);
+    await pool.query("INSERT INTO page_shares (page_id, owner, token) VALUES ($1, $2, $3)", [pageId, OTHER_OWNER, token]);
+
+    const shared = await fetch(`${base}/s/${token}`, { redirect: "manual" });
+    assert.equal(shared.status, 200, "a shared link never goes to /auth/login");
+    assert.equal(shared.headers.get("referrer-policy"), "no-referrer");
+    assert.match(shared.headers.get("content-security-policy") ?? "", /'nonce-[^']+'/);
+    const html = await shared.text();
+    assert.match(html, /<h1>合成の共有 niho<\/h1>/);
+    assert.match(html, /合成の共有 niho の本文/);
+    assert.doesNotMatch(html, /aria-label="ページの一覧"/);
+
+    for (const candidate of ["not-a-token", "M".repeat(43)]) {
+      const missing = await fetch(`${base}/s/${candidate}`, { redirect: "manual" });
+      assert.equal(missing.status, 404, candidate);
+      assert.match(await missing.text(), /ページが見つかりません/);
+    }
+    // 共有したページでも、editor の画面はログインへ
+    const editor = await fetch(`${base}/p/${pageId}`, { redirect: "manual" });
+    assert.equal(editor.status, 307);
+    assert.equal(editor.headers.get("location"), `/auth/login?next=%2Fp%2F${pageId}`);
   });
 });
 

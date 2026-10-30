@@ -180,6 +180,32 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
       child.kill("SIGTERM");
     }
   });
+
+  it("serves /s/{token} with private, no-store and a single no-referrer, and answers without a database (#34)", async () => {
+    // `next dev` はページの Cache-Control を開発用の値に置き換えるので、本番の header はここ（standalone）で確かめる
+    const port = await freePort();
+    const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env: childEnv(port, "niho"), stdio: "ignore" });
+    try {
+      await waitForHttp(port);
+      const malformed = await fetch(`http://127.0.0.1:${port}/s/not-a-token`);
+      const wellFormed = await fetch(`http://127.0.0.1:${port}/s/${"A".repeat(43)}`);
+      // 形の違う token は DB に問い合わせずに 404。DB が無いときの正しい形の token は汎用の 500（止めたリンクと見分けがつかない 404 にしない）
+      assert.equal(malformed.status, 404);
+      assert.match(await malformed.text(), /ページが見つかりません/);
+      assert.equal(wellFormed.status, 500);
+      assert.doesNotMatch(await wellFormed.text(), /SELECT|page_shares|DATABASE_URL|shared page is unavailable/);
+      for (const response of [malformed, wellFormed]) {
+        assert.equal(response.headers.get("cache-control"), "private, no-store");
+        assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+        assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow");
+      }
+      // 他の route は全体の規則のまま
+      const home = await fetch(`http://127.0.0.1:${port}/`);
+      assert.equal(home.headers.get("referrer-policy"), "same-origin");
+    } finally {
+      child.kill("SIGTERM");
+    }
+  });
 });
 
 describe("production start without the entry (defence in depth)", () => {

@@ -26,4 +26,16 @@ export {
   type SearchHit,
   type SearchOptions,
 } from "./search.ts";
+export {
+  SHARE_TOKEN_PATTERN,
+  enableShare,
+  getShare,
+  isShareToken,
+  readSharedPage,
+  rotateShare,
+  stopShare,
+  type PageShareState,
+  type SharedPage,
+} from "./shares.ts";
+export { DUPLICATE_TITLE_SUFFIX, duplicatePage, duplicateTitle, type DuplicatedPage } from "./duplicate.ts";
 export * from "./step-runs.ts";

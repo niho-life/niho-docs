@@ -76,6 +76,7 @@ contract は認証 context、resource owner / tenant / workspace、upload / down
 **サーバーが毎 request で強制すること**（クライアントを信用しない）
 - 全てのクエリを `owner` と `deleted_at IS NULL` で絞る。別の人のページ・存在しない id・UUID として不正な id は、本文もヘッダーも同じ 404 にして、存在を推測させない。
 - 本番は `EDITOR_AUTH_MODE=niho` でなければ起動しない（開発用の `stub` に落ちない）。未認証は 401。
+- 認証を使わない画面は共有リンク `/s/{token}`（#34）だけ。256 bit の乱数の token が共有中・ゴミ箱でないページに一致したときだけ、最新の保存版の題名と本文を返す。形の違う・未共有・止めた・作り直す前の token は同じ 404。`Cache-Control: private, no-store`・`Referrer-Policy: no-referrer`。
 - 更新系は同一 origin の要求だけ受ける。本文は上限（1 MiB）と深さで拒む。エラーの本文は短い code だけで、内部構成を漏らさない。
 - アプリ用の DB ロールは DML だけで、スキーマの変更と migration の記録の書き換えはできない。
 - 全ての応答に `X-Robots-Tag: noindex, nofollow`。ページは nonce ベースの CSP で、`/api` は何も読み込まない CSP。
