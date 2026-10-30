@@ -1,6 +1,7 @@
 import type { Extensions } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { isSafeLinkHref } from "@/ast/blocks";
+import { PageSlashMenu } from "./slash-menu";
 
 /**
  * ページの本文のエディタの schema。限定 AST（src/ast/blocks.ts）と同じ範囲だけを作れる。
@@ -9,6 +10,9 @@ import { isSafeLinkHref } from "@/ast/blocks";
  * 見出し 1（題名の役）・コード・取り消し線・下線・チェックのリストは持たない。
  * 囲み・画像・録音は AST では許すが、作る手段（画像は資産の保存）がまだ無いので、この schema には入れていない
  * （`editor-schema.test.ts` が差を固定している。足すときは両方を揃える）。
+ *
+ * 空の行の「/」（全角の「／」も）でブロックの一覧を開く（src/editor/slash-menu.ts。ノード・mark は足さない。
+ * 一覧で作れるのも、この schema の範囲だけ: src/editor/block-types.ts）。
  */
 export function buildPageExtensions(): Extensions {
   return [
@@ -25,5 +29,6 @@ export function buildPageExtensions(): Extensions {
         isAllowedUri: (url) => isSafeLinkHref(url),
       },
     }),
+    PageSlashMenu,
   ];
 }

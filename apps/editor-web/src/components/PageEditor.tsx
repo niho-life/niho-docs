@@ -7,6 +7,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { PageTitle } from "niho-docs-ui/components/BlockEditor";
 import { ConflictBand } from "@/components/ConflictBand";
+import { PageChrome } from "@/components/PageChrome";
 import { docFromBlocks } from "@/editor/doc";
 import { buildPageExtensions } from "@/editor/page-extensions";
 import { normalizePastedHtml } from "@/editor/paste";
@@ -111,8 +112,10 @@ function loadDraft(editor: Editor, draft: PageDraft): boolean {
  * - 作る前の本文も端末に残す（key は `NEW_PAGE_DRAFT_KEY` の 1 つの枠）。次に新しいページを開いたとき、
  *   その枠に下書きがあれば載せて、それでページを作る。作ったら、以後の下書きはそのページの id に書く。
  *
- * 「/」のブロック一覧と書式のバーは、docs-ui の BlockEditor が Markdown 文書の schema（コード・チェック・取り消し線）を前提にしているため、
- * ここでは付けていない。モック v6 の shell（#54）を本文に繋ぐときに、この schema に合わせて付ける。
+ * 「/」「＋」のブロック一覧と、選んだ文字の上の書式の帯は、docs-ui の BlockEditor（Markdown 文書の schema が前提）ではなく、
+ * モック v6 の shell の部品をこの schema に合わせて繋いだもの（src/components/PageChrome.tsx・src/editor/slash-menu.ts）。
+ * どちらも本文を変える操作は TipTap の transaction なので、新しいページ（id が null）でも、手で打った変更と同じく
+ * 下書きと保存（最初の保存で作る）に乗る。
  */
 export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | null } & PageEditorEvents) {
   const { page } = props;
@@ -377,6 +380,7 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
       {unreadable && <p role="alert">本文を読み込めませんでした。この画面では本文を変更しません。</p>}
       <div className="be">
         <EditorContent editor={editor} />
+        <PageChrome editor={editor} />
       </div>
     </div>
   );
