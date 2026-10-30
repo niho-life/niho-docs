@@ -9,7 +9,7 @@ import ts from "../../apps/docs/node_modules/typescript/lib/typescript.js";
 
 import { sha256, sri, validatePackageTarball } from "./verify-release-set.mjs";
 
-const REPOSITORIES = new Set(["niho-coliving/niho-docs", "niho-life/niho-docs"]);
+const REPOSITORIES = new Set(["niho-coliving/niho-docs", "niho-life/niho-docs", "niho-life/niho-editor"]);
 const FULL_SHA = /^[a-f0-9]{40}$/u;
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/u;

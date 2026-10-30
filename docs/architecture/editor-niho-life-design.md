@@ -1,6 +1,6 @@
 # editor.niho.life：詳細設計
 
-[editor-niho-life.md](editor-niho-life.md)（方針）を画面と契約に落としたもの。Epic は niho-docs [#30](https://github.com/niho-life/niho-docs/issues/30)、niho-experience [#251](https://github.com/niho-life/niho-experience/issues/251)、niho-app [#19477](https://github.com/niho-coliving/niho-app/issues/19477)（役割・接続・カード）。子 Issue は各 Epic の一覧にある。
+[editor-niho-life.md](editor-niho-life.md)（方針）を画面と契約に落としたもの。Epic は niho-editor [#30](https://github.com/niho-life/niho-editor/issues/30)、niho-experience [#251](https://github.com/niho-life/niho-experience/issues/251)、niho-app [#19477](https://github.com/niho-coliving/niho-app/issues/19477)（役割・接続・カード）。子 Issue は各 Epic の一覧にある。
 
 ## 1. 使う人と場面
 
