@@ -295,7 +295,7 @@ export const REMOTE_RUN_ROUTE_OPTIONS: readonly { value: RemoteRunRoute; label: 
     label: "自分の Mac で続ける",
     description: "文字起こしはクラウドで行い、続きは自分の Mac に登録した AI で作ります。",
   },
-  { value: "this_pc", label: "この PC の契約", description: "Mac の NIHO docs で、その Mac に登録した AI の契約を使います。" },
+  { value: "this_pc", label: "この PC の契約", description: "Mac の NIHO editor で、その Mac に登録した AI の契約を使います。" },
 ];
 
 export function remoteRunRouteLabel(route: RemoteRunRoute): string {

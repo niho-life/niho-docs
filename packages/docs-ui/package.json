@@ -6,6 +6,7 @@
   "exports": {
     "./editor/*": "./src/editor/*.ts",
     "./sharing": "./src/sharing/page-sharing-panel.tsx",
+    "./shell": "./src/shell/index.ts",
     "./flow/*": "./src/flow/*.tsx",
     "./styles/*": "./src/styles/*",
     "./package.json": "./package.json",

@@ -120,3 +120,17 @@ Webの操作controllerは固定ID・操作内容を決め、commit送信前の`o
 文書の上下移動は最新の完全台帳から文書同士を入れ替え、非表示録音の位置・未知欄を保つ。文書削除は完全台帳を読み、非表示録音の参考ページからも外す。版・assets・会話履歴は保持する。空フォルダ削除は完全台帳・背景情報・全manifestの検査を再実行し、録音・版・画像などが残れば断る。これらの破壊操作の前には表示中と操作対象に残る編集の保存を待つ。
 
 音声作成・フォルダ並べ替え・フォルダ間移動・runs/composer/settings/Google書き出しは引き続き非表示。Macの既存callback・作成ショートカットは保持し、Webには作成ショートカットを出さない。
+
+### editor の面（shell。Issue #48）
+
+モック v6 の画面を `src/shell/`（`niho-docs-ui/shell`）と `src/styles/shell.css` に足した。既存の `components/` `screens/` と既存の CSS は書き換えていない。Mac アプリは差し替え（#45）まで既存の画面で動く。
+
+- props 駆動の表示部品だけ。`DocsHost`・fetch・保存は持たない。状態と操作は呼ぶ側が渡す。
+- 色は `niho-ui/styles/editor-tokens.css` の `--ed-*`（`niho-ui/styles/tokens.css` を先に読む）。主ボタンは `--ed-primary-bg` と `--ed-primary-ink` をセットで当てる。`--ed-accent-ink` は文字用で、面に使わない。
+- スタイルは `niho-docs-ui/styles/shell.css`。全セレクタが `.es-root` 配下で、`isolation.test.ts` の規則どおり先頭に `:where([data-docs-app-root]):where([data-docs-shared-ui])` を持つ。呼ぶ側は `data-docs-app-root` と `data-docs-shared-ui` を持つ祖先の中に `EditorShell` を置く。
+- 画面幅は 1440 / 390 / 320px で確認する（900px 未満で一覧・ページ・レール・シートを全画面／下からのシートに切り替える）。確認用ギャラリーは配布物に入らない `gallery/`。
+
+```sh
+cd packages/docs-ui
+npx vite --config gallery/vite.config.mjs --port 5199   # http://localhost:5199/#/ 画面一覧、#/_check で全画面×3幅の横はみ出し検査
+```
