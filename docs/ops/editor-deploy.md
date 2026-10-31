@@ -142,7 +142,7 @@ AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messa
 
 **Mac アプリ（この Mac の CLI）がサーバーへ返す口は 2 つ**（設計 §6.1）。`POST /api/pages/{id}/ai/proposals/device` は**提案として返す**（ページは変わらず、採用のときだけ版に残して保存する＝ブラウザの提案と同じ扱い。差分はサーバーが今の本文から作り、Mac から来た差分は信用しない）。`POST /api/pages/{id}/ai/chat/turns` は**直接書き換える**（チャットと同じ道：作業場の確認 → 版を残す → 保存 → 会話に記録）。どちらもモデルをサーバーで呼ばず、**月の上限には数えない**。
 
-**使用量は経路ごとに分けて数える**（`ai_usage` は owner・月・経路ごとに 1 行）。**月の上限（USD）で止めるのは
+**使用量は経路ごとに分けて数える**（サーバーの API は表 `ai_usage`、この Mac の CLI は表 `ai_usage_device`。**`ai_usage` の形は 0005 のまま変えない** — 主キーを貼り替えると、migration がサービスの入れ替えより先に走るぶん、**まだ動いている古い revision の `ON CONFLICT (owner, month)` が落ちる**。そのため列ではなく表で分けている）。**月の上限（USD）で止めるのは
 `server`（サーバーの API）だけ**で、`device`（Mac アプリがこの Mac の CLI で作ったもの。`POST /api/pages/{id}/ai/chat/turns`
 で書き戻す）は回数だけ記録し、止めない（利用者のサブスクで従量が出ないため）。`GET /api/ai/usage` の `usage` は
 サーバー経路の合計（上限が効く方）で、`device` は別の欄に出る。
@@ -179,6 +179,7 @@ $2／100 万トークンで **1 回あたり $0.04〜0.06**）。フォルダが
 
 ### 費用の見方
 
+- **0025 が本番の既存の行に触る所は無い**（足すのは新しい表だけ）。戻すときも、足した表を落とせば 0005 の形に戻る。
 - 1 人・1 か月（Asia/Tokyo の月）の見込み金額は、画面の設定（`GET /api/ai/usage`）に出る。返ったトークン数 × docs-core の単価表。上限の 80% 以上で一言出し、上限以上はモデルを呼ぶ前に 429 `quota_exceeded`。上限を変えるときは `deploy.env` の `AI_MONTHLY_LIMIT_USD` を変えて `deploy.sh --no-build`。
 - 請求の正は Anthropic の Console の使用量と請求。アプリの金額は見込み。応答が届いて使えなかった呼び出し（JSON でない・途中で切れた）の分も数える。HTTP の失敗・時間切れ・通信の失敗はトークン数が返らないので数えない。
 - GCP 側の追加は Secret の版 1 つだけ（無料の範囲）。

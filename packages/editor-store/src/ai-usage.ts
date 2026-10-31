@@ -1,11 +1,14 @@
 import type { OwnerId, Queryable } from "./types.ts";
 
 /**
- * AI の使用量（表 ai_usage。migration 0005・0025）。owner ごと・月（Asia/Tokyo の YYYY-MM）ごと・**経路ごと**に 1 行。
+ * AI の使用量。owner ごと・月（Asia/Tokyo の YYYY-MM）ごとに 1 行で、**経路ごとに表を分ける**。
  * 加算は 1 つの `INSERT … ON CONFLICT DO UPDATE` で行う（同時の要求でも足し漏れない）。
  *
- * 経路は `server`（サーバーの API。従量がかかる）と `device`（この Mac の CLI。利用者のサブスクなので従量は出ない）。
- * **月の上限（USD）で止めるのは `server` だけ**で、`device` は記録はするが止めない（設計 §6）。
+ * - `server`（サーバーの API。従量がかかる）＝ 表 `ai_usage`（migration 0005）。**月の上限（USD）で止めるのはこれだけ。**
+ * - `device`（この Mac の CLI。利用者のサブスク）＝ 表 `ai_usage_device`（migration 0025）。**金額を持たず、止めない**（設計 §6）。
+ *
+ * 列で分けずに表を分けているのは、`ai_usage` の主キーを貼り替えると、**配備の最中にまだ動いている古い revision の
+ * `ON CONFLICT (owner, month)` が落ちる**ため（migration はサービスの入れ替えより先に走る）。
  */
 
 export const AI_USAGE_SOURCES = ["server", "device"] as const;
@@ -74,25 +77,41 @@ function toTotals(owner: OwnerId, month: string, source: AiUsageSource, row: Usa
 }
 
 const RETURNING = "requests, input_tokens::text AS input_tokens, output_tokens::text AS output_tokens, cost_micro_usd::text AS cost_micro_usd";
+/** CLI の表は金額を持たないので、0 を選び直して同じ形で読む。 */
+const DEVICE_RETURNING = "requests, input_tokens::text AS input_tokens, output_tokens::text AS output_tokens, '0' AS cost_micro_usd";
 
-/** その月・その経路の使用量に足し、足した後の合計を返す。 */
+/** その月・その経路の使用量に足し、足した後の合計を返す。CLI（`device`）に金額は入れられない。 */
 export async function recordAiUsage(db: Queryable, owner: OwnerId, month: string, delta: AiUsageDelta, source: AiUsageSource = "server"): Promise<AiUsageTotals> {
   assertOwner(owner);
   assertMonth(month);
   assertDelta(delta);
   assertSource(source);
-  const result = await db.query<UsageRow>(
-    `INSERT INTO ai_usage (owner, month, source, requests, input_tokens, output_tokens, cost_micro_usd)
-     VALUES ($1, $2, $7, $3, $4, $5, $6)
-     ON CONFLICT (owner, month, source) DO UPDATE
-        SET requests = ai_usage.requests + EXCLUDED.requests,
-            input_tokens = ai_usage.input_tokens + EXCLUDED.input_tokens,
-            output_tokens = ai_usage.output_tokens + EXCLUDED.output_tokens,
-            cost_micro_usd = ai_usage.cost_micro_usd + EXCLUDED.cost_micro_usd,
-            updated_at = clock_timestamp()
-     RETURNING ${RETURNING}`,
-    [owner, month, delta.requests, delta.inputTokens, delta.outputTokens, delta.costMicroUsd, source],
-  );
+  if (source === "device" && delta.costMicroUsd !== 0) throw new RangeError("editor-store: the CLI route has no metered cost");
+  const result =
+    source === "server"
+      ? await db.query<UsageRow>(
+          `INSERT INTO ai_usage (owner, month, requests, input_tokens, output_tokens, cost_micro_usd)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (owner, month) DO UPDATE
+              SET requests = ai_usage.requests + EXCLUDED.requests,
+                  input_tokens = ai_usage.input_tokens + EXCLUDED.input_tokens,
+                  output_tokens = ai_usage.output_tokens + EXCLUDED.output_tokens,
+                  cost_micro_usd = ai_usage.cost_micro_usd + EXCLUDED.cost_micro_usd,
+                  updated_at = clock_timestamp()
+           RETURNING ${RETURNING}`,
+          [owner, month, delta.requests, delta.inputTokens, delta.outputTokens, delta.costMicroUsd],
+        )
+      : await db.query<UsageRow>(
+          `INSERT INTO ai_usage_device (owner, month, requests, input_tokens, output_tokens)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (owner, month) DO UPDATE
+              SET requests = ai_usage_device.requests + EXCLUDED.requests,
+                  input_tokens = ai_usage_device.input_tokens + EXCLUDED.input_tokens,
+                  output_tokens = ai_usage_device.output_tokens + EXCLUDED.output_tokens,
+                  updated_at = clock_timestamp()
+           RETURNING ${DEVICE_RETURNING}`,
+          [owner, month, delta.requests, delta.inputTokens, delta.outputTokens],
+        );
   const row = result.rows[0];
   if (!row) throw new Error("editor-store: usage upsert returned no row");
   return toTotals(owner, month, source, row);
@@ -103,7 +122,10 @@ export async function getAiUsage(db: Queryable, owner: OwnerId, month: string, s
   assertOwner(owner);
   assertMonth(month);
   assertSource(source);
-  const result = await db.query<UsageRow>(`SELECT ${RETURNING} FROM ai_usage WHERE owner = $1 AND month = $2 AND source = $3`, [owner, month, source]);
+  const result =
+    source === "server"
+      ? await db.query<UsageRow>(`SELECT ${RETURNING} FROM ai_usage WHERE owner = $1 AND month = $2`, [owner, month])
+      : await db.query<UsageRow>(`SELECT ${DEVICE_RETURNING} FROM ai_usage_device WHERE owner = $1 AND month = $2`, [owner, month]);
   return toTotals(owner, month, source, result.rows[0]);
 }
 
@@ -111,10 +133,6 @@ export async function getAiUsage(db: Queryable, owner: OwnerId, month: string, s
 export async function getAiUsageBySource(db: Queryable, owner: OwnerId, month: string): Promise<Record<AiUsageSource, AiUsageTotals>> {
   assertOwner(owner);
   assertMonth(month);
-  const result = await db.query<UsageRow & { source: AiUsageSource }>(
-    `SELECT source, ${RETURNING} FROM ai_usage WHERE owner = $1 AND month = $2`,
-    [owner, month],
-  );
-  const rows = new Map(result.rows.map((row) => [row.source, row] as const));
-  return { server: toTotals(owner, month, "server", rows.get("server")), device: toTotals(owner, month, "device", rows.get("device")) };
+  const [server, device] = await Promise.all([getAiUsage(db, owner, month, "server"), getAiUsage(db, owner, month, "device")]);
+  return { server, device };
 }

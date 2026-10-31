@@ -54,11 +54,22 @@ ALTER TABLE ai_messages
   -- 人の発言は経路を持たない（作ったのは人）
   ADD CONSTRAINT ai_messages_user_has_no_route CHECK (role <> 'user' OR (route IS NULL AND engine IS NULL));
 
--- 使用量を経路ごとに持つ（0005 の行はすべてサーバーの API なので server になる）。
--- **月の上限（USD）で止めるのは server だけ。** CLI は利用者のサブスクで従量が出ないので、記録はするが止めない。
-ALTER TABLE ai_usage DROP CONSTRAINT ai_usage_pkey;
-ALTER TABLE ai_usage ADD COLUMN source text NOT NULL DEFAULT 'server' CHECK (source IN ('server', 'device'));
-ALTER TABLE ai_usage ADD PRIMARY KEY (owner, month, source);
+-- この Mac の CLI（利用者のサブスク）の使用量。owner ごと・月ごとに 1 行で、**金額は持たない**
+-- （従量が出ないので数えない。月の上限（USD）で止めるのは ai_usage ＝サーバーの API の経路だけ）。
+--
+-- **ai_usage には触らない。** 主キーを (owner, month, source) に貼り替えると、配備の最中にまだ動いている
+-- 古い revision の `INSERT … ON CONFLICT (owner, month)` が
+-- 「there is no unique or exclusion constraint matching the ON CONFLICT specification」で落ちる
+-- （migration はサービスの入れ替えより先に走る）。経路を列で分けず、表を分けるのはこのため。
+CREATE TABLE ai_usage_device (
+  owner text NOT NULL CHECK (length(owner) BETWEEN 1 AND 256),
+  month text NOT NULL CHECK (month ~ '^\d{4}-(0[1-9]|1[0-2])$'),
+  requests integer NOT NULL DEFAULT 0 CHECK (requests >= 0),
+  input_tokens bigint NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+  output_tokens bigint NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (owner, month)
+);
 
 -- 「あなたについて」（旧アプリの about.json）。プロンプトに入れる本人の説明と書き方の希望で、
 -- **公開のときの著者情報とは別物**（公開は publications 側が持つ）。

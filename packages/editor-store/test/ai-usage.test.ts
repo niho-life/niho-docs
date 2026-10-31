@@ -87,11 +87,36 @@ describe("PostgreSQL AI usage", { skip: databaseUrl === undefined }, () => {
         ["output_tokens", "bigint"],
         ["cost_micro_usd", "bigint"],
         ["updated_at", "timestamp with time zone"],
-        // 0025: 経路ごとに 1 行（server＝サーバーの API、device＝この Mac の CLI）
-        ["source", "text"],
       ],
     );
     assert.equal((await pool.query("SELECT 1 FROM ai_usage")).rows.length, 0);
+
+    // 0025: CLI の経路は別の表（金額の列を持たない）。**ai_usage の主キーは貼り替えない**
+    const device = await pool.query<{ column_name: string; data_type: string }>(
+      "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'ai_usage_device' ORDER BY ordinal_position",
+      [schema],
+    );
+    assert.deepEqual(
+      device.rows.map((row) => [row.column_name, row.data_type]),
+      [
+        ["owner", "text"],
+        ["month", "text"],
+        ["requests", "integer"],
+        ["input_tokens", "bigint"],
+        ["output_tokens", "bigint"],
+        ["updated_at", "timestamp with time zone"],
+      ],
+    );
+    const key = await pool.query<{ column_name: string }>(
+      `SELECT a.attname AS column_name
+         FROM pg_index i
+         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+        WHERE i.indrelid = ($1 || '.ai_usage')::regclass AND i.indisprimary
+        ORDER BY a.attnum`,
+      [schema],
+    );
+    // 古い revision の `ON CONFLICT (owner, month)` が配備の最中も通るよう、主キーは 0005 のまま
+    assert.deepEqual(key.rows.map((row) => row.column_name), ["owner", "month"]);
   });
 
   it("answers zeros before any use and adds up per owner and month", async () => {
@@ -125,7 +150,7 @@ describe("PostgreSQL AI usage", { skip: databaseUrl === undefined }, () => {
     assert.equal((await pool.query("SELECT 1 FROM ai_usage WHERE owner = $1", [owner])).rows.length, 1);
   });
 
-  it("keeps the two routes apart: the CLI is recorded but never mixed into the server total", async () => {
+  it("keeps the two routes apart: the CLI is recorded in its own table and never mixed into the server total", async () => {
     const owner = "synthetic-owner-routes";
     await recordAiUsage(pool, owner, "2026-12", { requests: 1, inputTokens: 10, outputTokens: 2, costMicroUsd: 500 });
     await recordAiUsage(pool, owner, "2026-12", { requests: 1, inputTokens: 90, outputTokens: 8, costMicroUsd: 0 }, "device");
@@ -136,8 +161,24 @@ describe("PostgreSQL AI usage", { skip: databaseUrl === undefined }, () => {
     assert.deepEqual([device.costMicroUsd, device.inputTokens], [0, 90]);
     const both = await getAiUsageBySource(pool, owner, "2026-12");
     assert.deepEqual([both.server.costMicroUsd, both.device.inputTokens], [500, 90]);
-    assert.equal((await pool.query("SELECT 1 FROM ai_usage WHERE owner = $1", [owner])).rows.length, 2);
+    // サーバーの表は 1 行のまま（CLI の分は別の表）
+    assert.equal((await pool.query("SELECT 1 FROM ai_usage WHERE owner = $1", [owner])).rows.length, 1);
+    assert.equal((await pool.query("SELECT 1 FROM ai_usage_device WHERE owner = $1", [owner])).rows.length, 1);
     await assert.rejects(() => recordAiUsage(pool, owner, "2026-12", { requests: 1, inputTokens: 1, outputTokens: 1, costMicroUsd: 1 }, "cloud" as "device"), TypeError);
+    // CLI の行に金額は入れられない（入れようとしたら断る）
+    await assert.rejects(() => recordAiUsage(pool, owner, "2026-12", { requests: 1, inputTokens: 1, outputTokens: 1, costMicroUsd: 1 }, "device"), RangeError);
+  });
+
+  it("keeps working for the revision that is still running during a deploy (ON CONFLICT (owner, month))", async () => {
+    // 配備は migration を先に当て、古い revision がしばらく動き続ける。その upsert がそのまま通ること
+    const owner = "synthetic-owner-old-revision";
+    const upsert = `INSERT INTO ai_usage (owner, month, requests, input_tokens, output_tokens, cost_micro_usd)
+                    VALUES ($1, '2026-12', 1, 10, 2, 500)
+                    ON CONFLICT (owner, month) DO UPDATE
+                       SET requests = ai_usage.requests + EXCLUDED.requests`;
+    await pool.query(upsert, [owner]);
+    await pool.query(upsert, [owner]);
+    assert.equal((await getAiUsage(pool, owner, "2026-12")).requests, 2);
   });
 
   it("keeps large token counts and amounts beyond the integer range as exact numbers", async () => {
