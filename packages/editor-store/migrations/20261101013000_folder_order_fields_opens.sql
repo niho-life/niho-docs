@@ -1,8 +1,7 @@
 BEGIN;
 
 -- 旧 NIHO docs の一覧・フォルダまわりで editor に受け皿が無かったもの（docs/architecture/editor-migration-map.md §5）。
--- オーナー判断（2026-11-01「旧版の機能は全部必要」）で 3 つを足す。番号が 0026 なのは、並行する PR が 0021〜0025 を
--- 使うため（番号は一意であればよく、順序に依存しない）。
+-- オーナー判断（2026-11-01「旧版の機能は全部必要」）で 3 つを足す。名前は日時（#127 の new-migration）。
 --
 -- 1. 手動の並び（旧 `PageIndex.order`）: pages.sort_order。既定の 0 は「並べ替えていない」で、今までの更新順と同じに出る。
 -- 2. フォルダの登場人物・固有名詞（旧 project.json の info.entities・info.terms）: 表 page_fields。

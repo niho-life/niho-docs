@@ -3,9 +3,15 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type EditorProps = { page?: { id: string | null; lang?: string }; onCreated?: (id: string) => void; onLangChange?: (lang: "ja" | "en") => void };
+type EditorProps = {
+  page?: { id: string | null; title?: string; blocks?: unknown[]; revision?: number | null; lang?: string };
+  onCreated?: (id: string) => void;
+  onLangChange?: (lang: "ja" | "en") => void;
+};
 const editors: EditorProps[] = [];
 const frame = { pageCreated: vi.fn(), pageTitleChanged: vi.fn(), pageSaved: vi.fn(), pageOpened: vi.fn(), pageLangChanged: vi.fn(), narrow: false };
+/** 手順の帯が「この段階の本文が入れ替わった」と知らせる口（PageSteps のモックが預かる）。 */
+const steps: { onBodyReplaced?: () => void } = {};
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/p/new", useRouter: () => ({ refresh: vi.fn(), replace: vi.fn() }) }));
 vi.mock("./EditorFrame", () => ({ useEditorFrame: () => frame, isNarrowNow: () => false }));
@@ -19,9 +25,26 @@ vi.mock("./PageEditor", () => ({
 vi.mock("./RecordingTranscript", () => ({
   RecordingTranscript: ({ pageId }: { pageId: string }) => <div data-transcript={pageId} />,
 }));
+// 手順の帯（#37）は PageSteps.test.tsx が見る。ここは、帯・文字起こし・本文の並びと渡す値だけを見る
+vi.mock("./PageSteps", () => ({
+  PageSteps: (props: { pageId: string; kind: string; parentId: string | null; media?: unknown; onBodyReplaced?: () => void; children?: unknown }) => {
+    steps.onBodyReplaced = props.onBodyReplaced;
+    return (
+      <>
+        <div data-steps={`${props.pageId}:${props.kind}:${props.parentId ?? "none"}`} />
+        {props.media as never}
+        {props.children as never}
+      </>
+    );
+  },
+}));
+vi.mock("@/lib/pages-client", () => ({ readPageRequest: vi.fn() }));
 
 import { rememberLastPage } from "@/lib/last-page";
+import { readPageRequest } from "@/lib/pages-client";
 import { NewPage, OpenPage } from "./FramePages";
+
+const readPage = vi.mocked(readPageRequest);
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -71,30 +94,61 @@ describe("NewPage: the creation redirect belongs to the draft that made the page
   });
 });
 
-describe("OpenPage: a recording page shows the transcript above the title and body", () => {
+describe("OpenPage: the steps band, the transcript, then the title and body", () => {
   const PAGE = "33333333-3333-4333-8333-333333333333";
-  const summary = (kind: "note" | "rec") => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent: null, stepStatus: null, sortOrder: 0, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
+  const summary = (kind: "note" | "rec" | "step", parent: string | null = null) => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent, stepStatus: null, sortOrder: 0, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
 
-  async function open(kind: "note" | "rec") {
+  async function open(kind: "note" | "rec" | "step", parent: string | null = null) {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
     await act(async () => {
-      root!.render(<OpenPage summary={summary(kind)} blocks={[]} revision={1} />);
+      root!.render(<OpenPage summary={summary(kind, parent)} blocks={[]} revision={1} />);
     });
     return container;
   }
 
-  it("puts the transcript (kind=rec) before the page editor", async () => {
+  const order = (host: HTMLElement) =>
+    [...host.children].map((node) => node.getAttribute("data-steps") ?? node.getAttribute("data-transcript") ?? "editor");
+
+  it("puts the steps band first, then the transcript (kind=rec), then the page editor", async () => {
     const host = await open("rec");
-    expect([...host.children].map((node) => node.getAttribute("data-transcript") ?? "editor")).toEqual([PAGE, "editor"]);
+    expect(order(host)).toEqual([`${PAGE}:rec:none`, PAGE, "editor"]);
     expect(frame.pageOpened).toHaveBeenCalledTimes(1);
   });
 
-  it("shows only the editor for an ordinary page", async () => {
+  it("shows the band and the editor for an ordinary page, without the transcript", async () => {
     const host = await open("note");
-    expect([...host.children].map((node) => node.hasAttribute("data-editor"))).toEqual([true]);
+    expect(order(host)).toEqual([`${PAGE}:note:none`, "editor"]);
     expect(host.querySelector("[data-transcript]")).toBeNull();
+  });
+
+  it("gives the band the parent of a step subpage (the run belongs to the recording page)", async () => {
+    const host = await open("step", "44444444-4444-4444-8444-444444444444");
+    expect(order(host)).toEqual([`${PAGE}:step:44444444-4444-4444-8444-444444444444`, "editor"]);
+  });
+
+  it("段階が終わって本文が入れ替わったら、読み直してエディタを開き直す（#37。帯だけ「済み」にしない）", async () => {
+    readPage.mockResolvedValue({ title: "記事方針", blocks: [{ type: "paragraph" }], revision: 7, updatedAt: "2026-10-31T04:00:00.000Z", lang: "ja" });
+    await open("step", "44444444-4444-4444-8444-444444444444");
+    // 開いたときは、サーバーが描いた本文と revision
+    expect(editors.at(-1)!.page).toMatchObject({ id: PAGE, title: "録音", blocks: [], revision: 1 });
+    const before = editors.length;
+
+    await act(async () => steps.onBodyReplaced!());
+    expect(readPage).toHaveBeenCalledWith(PAGE);
+    // 入れ替わった本文と、worker が進めた revision でエディタを作り直す（Undo に混ぜず、自動保存も起こさない）
+    expect(editors.length).toBeGreaterThan(before);
+    expect(editors.at(-1)!.page).toMatchObject({ id: PAGE, title: "記事方針", blocks: [{ type: "paragraph" }], revision: 7 });
+    // サーバーの更新時刻が進んだので一覧の行も動かす
+    expect(frame.pageSaved).toHaveBeenCalledWith(PAGE);
+  });
+
+  it("読み直せなければエディタはそのまま（帯の「済み」だけが先に出る）", async () => {
+    readPage.mockRejectedValue(new Error("offline"));
+    await open("step", "44444444-4444-4444-8444-444444444444");
+    await act(async () => steps.onBodyReplaced!());
+    expect(editors.at(-1)!.page).toMatchObject({ title: "録音", blocks: [], revision: 1 });
   });
 });
 

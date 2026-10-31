@@ -12,7 +12,7 @@ export { ShellHeader, shellMoreItems, type ShellHeaderProps } from "./header";
 export { ShellSidebar, shellAccountItems, type ShellSidebarProps } from "./sidebar";
 export { NewPageMenu, type NewPageKind } from "./new-page-menu";
 export { ShellRail, ShellRailSection, type ShellRailProps, type ShellRailSectionProps } from "./rail";
-export { ShellSteps, type ShellStep } from "./steps";
+export { ShellSteps, ShellStepsStart, shellStepSay, type ShellStep, type ShellStepsAction, type ShellStepsChoice } from "./steps";
 export { ShellChat, type ShellChatAction, type ShellChatMessage, type ShellChatProps } from "./chat";
 export { ShellPageSettings, type ShellPageSettingsProps } from "./page-settings";
 export { ShellEntitiesEditor, ShellTermsEditor, type EditorSettingsEntityDraft } from "./editor-settings";

@@ -1,6 +1,6 @@
 # 手順の表とフォルダの木（#37 T1・T2）
 
-状態: **実装済み**（migration `0021_recipes.sql`）。Issue #37、設計 [editor-niho-life-design.md](editor-niho-life-design.md) §3・§7.2、実行基盤は [editor-steps-execution.md](editor-steps-execution.md)。
+状態: **実装済み**（migration `20261101001500_recipes.sql`）。Issue #37、設計 [editor-niho-life-design.md](editor-niho-life-design.md) §3・§7.2、実行基盤は [editor-steps-execution.md](editor-steps-execution.md)。
 
 この文書が決めるのは 2 つ。**手順（記事制作・議事録・インサイト整理）をどこに持つか**と、**フォルダをどう表すか**。どちらも「正本はサーバーに 1 つ」（オーナー判断 2026-10-31）に従う。
 
@@ -33,7 +33,7 @@ recipes (owner, id)   -- 主キー。人ごとに 1 行ずつ
 - **既定が表に入るのは、その人の行が 1 つも無い最初の読み出しのとき**（[apps/editor-web/src/server/recipe-source.ts](../../apps/editor-web/src/server/recipe-source.ts)）。行が 1 つでもあれば書かない（消した手順を勝手に戻さない）。
 - **既定の手順を増やすのは `DEFAULT_RECIPE_IDS` に 1 つ足すだけ。** もう表に行がある人にも、次の読み出しで足りない既定だけが並びの後ろに入る（`addRecipes`）。既にある行は中身も並びも版も動かさない。コーチング（docs-core の `tpl-4`）を入れ直すかは**オーナー確認待ち**で、この PR では足していない。
 - **0013 の列からの引き継ぎはその 1 回だけ**。写すときに `editor_settings.recipes`（既定に手を入れた分・足した分）をかぶせる。設定の形には工程のプロファイルが無いので、同じ id の工程のプロファイルを既定から引き継ぎ、足した手順・新しい工程は「標準」にする。
-- **列を落とすのは引き継ぎが要らなくなる配備の 1 つ後**（expand → contract）。0021 では `editor_settings.recipes` に触らない。
+- **列を落とすのは引き継ぎが要らなくなる配備の 1 つ後**（expand → contract）。この migration では `editor_settings.recipes` に触らない。
 - 工程を 1 つも持たない行は読み出しで落とす（実行できない手順を runner に渡さない）。
 
 ### 送り受けの形
@@ -79,7 +79,7 @@ recipes (owner, id)   -- 主キー。人ごとに 1 行ずつ
 7. **フォルダを削除すると中のページも一緒にゴミ箱へ入り、戻すと親子のまま戻る**（0001 からの `deletePage`・`restoreFromTrash` の振る舞い。入れる・出すでページは失われない）。
 8. **ゴミ箱から完全に消すときは子から先に消し、残った親の子は `parent = NULL` にする**（`purgeTrash`。孤児を作らない）。
 
-## 4. 一覧の並びと「最近」と書き出し（0026）
+## 4. 一覧の並びと「最近」と書き出し（`20261101013000_folder_order_fields_opens`）
 
 旧 NIHO docs で editor に受け皿が無かった 3 つ（[editor-migration-map.md](editor-migration-map.md) §5）。
 オーナー判断（2026-11-01「旧版の機能は全部必要」）で足した。

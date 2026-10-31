@@ -119,6 +119,15 @@ describe("recordingDataProblem", () => {
     assert.equal(recordingDataProblem({ segments: many, speakerNames: {} }), "segments");
   });
 
+  it("accepts a length only when it is omitted, null, or a non-negative finite number", () => {
+    assert.equal(recordingDataProblem({ ...valid, durationSec: 12.5 }), null);
+    assert.equal(recordingDataProblem({ ...valid, durationSec: 0 }), null);
+    assert.equal(recordingDataProblem({ ...valid, durationSec: null }), null, "null is 長さが分からない");
+    for (const durationSec of [-1, Number.NaN, Number.POSITIVE_INFINITY, "12", {}]) {
+      assert.equal(recordingDataProblem({ ...valid, durationSec }), "duration", JSON.stringify(durationSec));
+    }
+  });
+
   it("refuses speakers that are not positive integers", () => {
     for (const speaker of [0, -1, 1.5, "1", Number.MAX_SAFE_INTEGER + 2]) {
       assert.equal(recordingDataProblem({ segments: [{ ...segment("x"), speaker }], speakerNames: {} }), "speaker", String(speaker));

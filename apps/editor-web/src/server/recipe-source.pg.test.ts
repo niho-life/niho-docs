@@ -8,7 +8,7 @@ import { DEFAULT_RECIPES, findRecipeIn } from "../steps/recipes";
 import { ownerRecipes, saveOwnerRecipes } from "./recipe-source";
 
 /**
- * T1（#37）の条件を実 PostgreSQL で確かめる: 固定だった 3 つの手順が、表 `recipes`（0021）から読んだ既定として同じように
+ * T1（#37）の条件を実 PostgreSQL で確かめる: 固定だった 3 つの手順が、表 `recipes`から読んだ既定として同じように
  * 動くこと。TEST_DATABASE_URL が無ければ skip。値はすべて合成。
  */
 const databaseUrl = process.env.TEST_DATABASE_URL;

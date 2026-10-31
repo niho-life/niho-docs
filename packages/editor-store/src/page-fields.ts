@@ -2,7 +2,7 @@ import { SETTINGS_LIMITS, isSettingsTerm, isSettingsText, type SettingsTerm } fr
 import type { OwnerId, Queryable } from "./types.ts";
 
 /**
- * フォルダの欄（表 page_fields。migration 0026。docs/architecture/editor-recipes-and-folders.md §3）。
+ * フォルダの欄（表 page_fields。migration 20261101013000_folder_order_fields_opens。docs/architecture/editor-recipes-and-folders.md §3）。
  *
  * 旧 NIHO docs の `project.json` の `info` のうち、**登場人物（entities）と固有名詞（terms）**を持つ。
  * **背景情報はフォルダのページの本文そのもの**なので、ここには持たない（列を増やさない）。

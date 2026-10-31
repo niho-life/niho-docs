@@ -15,10 +15,10 @@ const OTHER = "synthetic-order-owner-b";
 const blocks = [{ type: "paragraph", content: [{ type: "text", text: "合成の本文" }] }];
 
 /**
- * 0026 の 3 つ（手動の並び・フォルダの欄・「最近」）を実 PostgreSQL で確かめる。
+ * 20261101013000_folder_order_fields_opens の 3 つ（手動の並び・フォルダの欄・「最近」）を実 PostgreSQL で確かめる。
  * 規則は docs/architecture/editor-recipes-and-folders.md §3・§5。
  */
-describe("manual order, folder fields and 最近 (0026)", { skip: databaseUrl === undefined }, () => {
+describe("manual order, folder fields and 最近 (20261101013000)", { skip: databaseUrl === undefined }, () => {
   const schema = `editor_store_order_${randomUUID().replaceAll("-", "")}`;
   let pool: PgPool;
   let store: EditorStore;
@@ -107,7 +107,10 @@ describe("manual order, folder fields and 最近 (0026)", { skip: databaseUrl ==
       const [a, b] = await pages("a", "b");
       const before = await store.getPage(OWNER, a!);
       assert.equal(await store.movePageOrder(OWNER, a!, "up"), "moved");
-      assert.deepEqual(await store.getPage(OWNER, a!), before);
+      const after = await store.getPage(OWNER, a!);
+      // 変わるのは並びだけ
+      assert.deepEqual({ ...after, sortOrder: 0 }, { ...before, sortOrder: 0 });
+      assert.equal(after?.sortOrder, 1);
       assert.ok(b);
     });
 

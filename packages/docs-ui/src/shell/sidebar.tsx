@@ -99,16 +99,18 @@ function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder }: { node
             )}
             <button
               type="button"
-              className={`es-di${item.id === currentId ? " es-di--on" : ""}${item.sub ? "" : " es-di--one"}`}
+              className={`es-di${item.id === currentId ? " es-di--on" : ""}${item.sub || item.busy ? "" : " es-di--one"}`}
               aria-current={item.id === currentId ? "page" : undefined}
               onClick={() => onSelect?.(item.id)}
             >
               <span className={`es-di-t${item.title ? "" : " es-di-t--untitled"}`}>{item.title || "無題"}</span>
               <span className="es-when">{item.when}</span>
-              {item.sub && (
+              {(item.sub || item.busy) && (
                 <span className="es-di-sub">
-                  {item.sub.dest && <i className={`es-dest es-dest--${item.sub.dest}`} aria-hidden="true" />}
-                  {item.sub.text}
+                  {/* 手順が動いている行の回るマーク。状態の言葉は sub の文字が持つので、マークは支援技術から隠す */}
+                  {item.busy && <i className="es-busy" aria-hidden="true" />}
+                  {item.sub?.dest && <i className={`es-dest es-dest--${item.sub.dest}`} aria-hidden="true" />}
+                  {item.sub?.text}
                 </span>
               )}
             </button>

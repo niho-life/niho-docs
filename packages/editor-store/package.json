@@ -23,7 +23,8 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "test": "node --test --test-concurrency=1 test/*.test.ts",
     "migrate": "node src/migrate-cli.ts",
-    "purge-trash": "node src/purge-cli.ts"
+    "purge-trash": "node src/purge-cli.ts",
+    "new-migration": "node src/new-migration-cli.ts"
   },
   "engines": {
     "node": "24.x"

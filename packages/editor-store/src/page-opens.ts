@@ -1,7 +1,7 @@
 import type { OwnerId, PageSummary, Queryable } from "./types.ts";
 
 /**
- * 「最近」（表 page_opens。migration 0026。旧 NIHO docs の `recent.json`）。
+ * 「最近」（表 page_opens。migration 20261101013000_folder_order_fields_opens。旧 NIHO docs の `recent.json`）。
  *
  * - owner ごとに 1 ページ 1 行で、**開いた時刻だけ**を持つ（回数・端末・滞在時間は持たない）。
  * - ゴミ箱に入れたページは一覧から外す（行は残り、戻せばまた出る）。完全に消すと外部キーで一緒に消える。

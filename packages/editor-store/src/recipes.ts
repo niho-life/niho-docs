@@ -2,7 +2,7 @@ import { SETTINGS_ID_PATTERN, SETTINGS_LIMITS, isSettingsTerm, isSettingsText, t
 import type { Database, OwnerId, Queryable } from "./types.ts";
 
 /**
- * 手順の実体（表 recipes。migration 0021。docs/architecture/editor-recipes-and-folders.md §2）。
+ * 手順の実体（表 recipes。migration 20261101001500_recipes。docs/architecture/editor-recipes-and-folders.md §2）。
  *
  * - owner ごとの行。既定の 3 つ（記事制作・議事録・インサイト整理）も行として入る（`origin` が `builtin`）。
  *   行が 1 つも無い owner の最初の読み出しで既定を写して入れるのは editor-web（src/server/recipe-source.ts）。

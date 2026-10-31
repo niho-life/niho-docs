@@ -442,6 +442,60 @@ describe("EditorFrame", () => {
     await act(async () => buttonByText("ページから公開")!.click());
     expect(dialog()?.getAttribute("aria-label")).toBe("公開");
   });
+
+  describe("手順のサブページ（#37 の stepPagesChanged）", () => {
+    const REC = "00000000-0000-4000-8000-0000000000aa";
+    const STEP_1 = "00000000-0000-4000-8000-0000000000b1";
+    const STEP_2 = "00000000-0000-4000-8000-0000000000b2";
+    type Step = { id: string; title: string; stepStatus: "done" | "run" | "wait" | "stale" | "failed" | null };
+    let send: (parentId: string, steps: Step[]) => void = () => undefined;
+
+    function FromBand() {
+      const { stepPagesChanged } = useEditorFrame();
+      send = stepPagesChanged;
+      return <p>合成の中身</p>;
+    }
+
+    const recording = (): PageSummary => ({ ...page(REC, "録音"), kind: "rec" });
+
+    it("まだ一覧に無いサブページを、親の下に段階の順で足す", async () => {
+      await mount({ pages: [recording()] }, <FromBand />);
+      await act(async () =>
+        send(REC, [
+          { id: STEP_1, title: "文字起こし修正", stepStatus: "done" },
+          { id: STEP_2, title: "記事方針", stepStatus: "run" },
+        ]),
+      );
+      expect(rows()).toEqual(["録音", "文字起こし修正", "記事方針"]);
+      // 済みの段階は 2 行目を出さず、作成中の段階は言葉（と回るマーク）を出す
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["録音", "作成中…"]);
+      expect(container!.querySelectorAll(".es-sb-list .es-busy")).toHaveLength(1);
+    });
+
+    it("サブページがゴミ箱に入っている段階（stepStatus が null）の行は作らない", async () => {
+      await mount({ pages: [recording()] }, <FromBand />);
+      await act(async () =>
+        send(REC, [
+          { id: STEP_1, title: "文字起こし修正", stepStatus: "done" },
+          // 実行の記録（attempt）は残るので run から届くが、押しても 404 のページへ行くだけ
+          { id: STEP_2, title: "記事方針", stepStatus: null },
+        ]),
+      );
+      expect(rows()).toEqual(["録音", "文字起こし修正"]);
+    });
+
+    it("同じ知らせを繰り返しても、行は増えず、状態だけが替わる", async () => {
+      await mount({ pages: [recording()] }, <FromBand />);
+      const run: Step[] = [{ id: STEP_1, title: "文字起こし修正", stepStatus: "run" }];
+      await act(async () => send(REC, run));
+      await act(async () => send(REC, run));
+      expect(rows()).toEqual(["録音", "文字起こし修正"]);
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["録音", "作成中…"]);
+      await act(async () => send(REC, [{ id: STEP_1, title: "文字起こし修正", stepStatus: "done" }]));
+      expect(rows()).toEqual(["録音", "文字起こし修正"]);
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["録音"]);
+    });
+  });
 });
 
 describe("EditorFrame: the header's state and the … menu (#34)", () => {

@@ -6,7 +6,7 @@ import { ROBOTS_HEADER_VALUE, errorResponse, guarded, isSameOriginRequest, jsonR
 import { exportContentDisposition } from "./share-api";
 
 /**
- * フォルダまわりの API（#37。migration 0026）。どれも本人のページだけで、未認証は 401、他人のページ・無いページは同じ 404。
+ * フォルダまわりの API（#37。migration 20261101013000_folder_order_fields_opens）。どれも本人のページだけで、未認証は 401、他人のページ・無いページは同じ 404。
  *
  * - `PATCH /api/pages/{id}/order` — 手動の並びを 1 つ動かす（`{ move: "up" | "down" }`）。もう端なら `{ moved: false }`。
  * - `GET /api/pages/{id}/children` — そのページの中の行（フォルダの子。自動参考ページ・書き出しの画面が読む）。

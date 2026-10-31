@@ -153,8 +153,16 @@ export async function mergeSpeakers(pageId: string, baseRevision: number, from: 
   return snapshotOrThrow(await request(recordingPath(pageId), "PATCH", { baseRevision, mergeSpeakers: { from, into } }));
 }
 
+/**
+ * あとの音声の文字起こし（.vtt）を、この録音ページに足す（#36 段 3b-3）。時刻は server が前の音声の長さだけずらす。
+ * 4 MiB を超える .vtt は送る前に断る（VTT_FILE_MAX_BYTES）。
+ */
+export async function appendVtt(pageId: string, baseRevision: number, input: { name: string; vtt: string }): Promise<RecordingSnapshot> {
+  return snapshotOrThrow(await request(recordingPath(pageId), "PATCH", { baseRevision, appendVtt: input }));
+}
+
 /** 失敗が起きた操作（同じ reason でも、何についての失敗かで文言が替わる）。 */
-export type RecordingAction = "load" | "import" | "edit" | "rename" | "merge";
+export type RecordingAction = "load" | "import" | "edit" | "rename" | "merge" | "append";
 
 export const CONFLICT_MESSAGE = "別の場所で先に直されました。最新に合わせました";
 
@@ -168,6 +176,9 @@ const REASON_MESSAGES: Record<string, string> = {
   text: "段落の文章が使えません。1 段落は 5,000 字までです。",
   speaker: "この話者が見つかりません。ページを開き直してください。",
   merge: "同じ話者にはまとめられません。",
+  append_empty: "この .vtt には発言がありません。文字起こしのある .vtt ファイルを選んでください。",
+  append_too_large: "足すと文字起こしが大きすぎます。段落は 20,000 個まで、本文は合わせて 8 MiB までです。",
+  append_invalid: "この .vtt の時刻か文字を読み取れませんでした。WebVTT の形式か確かめてください。",
 };
 
 /** 失敗を、画面に出す日本語の短い文言にする。reason は server の 400 の reason と対応する。 */
@@ -179,10 +190,12 @@ export function recordingErrorMessage(error: unknown, action: RecordingAction): 
   if (status === 401) return "ログインが切れました。ログインし直してください。";
   if (status === 403) return "この画面からは変更できません。ページを開き直してください。";
   if (status === 404) return action === "load" ? "このページには文字起こしがありません。" : "この録音が見つかりません。ページを開き直してください。";
+  if (status === 413 && action === "append") return "ファイルが大きすぎます。足せる .vtt は 4 MiB までです。";
   if (status === 413) return "ファイルが大きすぎます。.vtt は 4 MiB までです。";
   if (status === 503) return "いまサーバーが使えません。少ししてから、もう一度試してください。";
   if (status === 400) {
     if (reason === "name") {
+      if (action === "append") return "ファイル名が使えません。ファイル名を変えて、もう一度選んでください。";
       return action === "import"
         ? "ファイル名が使えません。ファイル名を変えて、もう一度選んでください。"
         : "この名前は使えません。60 字まで、改行とコロンは使えません。「話者1」の形や、ほかの話者と同じ名前も使えません。";
