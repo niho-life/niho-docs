@@ -25,7 +25,11 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | `DATABASE_URL` | ページの正本の PostgreSQL。未設定なら API は 503、画面は「保存先を使えません」 |
 | `EDITOR_AUTH_MODE` | `stub`（開発・CI だけ）か `niho`。開発では未設定で `stub` |
 | `EDITOR_ORIGIN` | 任意。更新系の要求の Origin 検査に使う origin（未設定なら Host と転送の header から） |
-| `EDITOR_AI_MODE` | 任意。未設定・`off` は AI を使わない（提案・採用は 503 `ai_unavailable`）。`fake` は偽物のモデル（開発・CI だけ。`NODE_ENV=production` では 503） |
+| `EDITOR_AI_MODE` | 任意。未設定・`off` は AI を使わない（提案・採用は 503 `ai_unavailable`）。`anthropic` は本物のモデル（Anthropic の Messages API。`ANTHROPIC_API_KEY` が空・未設定なら 503）。`fake` は偽物のモデル（開発・CI だけ。`NODE_ENV=production` では 503） |
+| `ANTHROPIC_API_KEY` | `EDITOR_AI_MODE=anthropic` の鍵。サーバーだけが要求のたびに読む（本番は Secret Manager から。[editor-deploy.md](../../docs/ops/editor-deploy.md) §10）。リポジトリ・ログに書かない |
+| `EDITOR_AI_MODEL` | 任意。`anthropic` のモデル。既定 `claude-sonnet-5-5`。`^[a-z0-9][a-z0-9._-]{0,63}$` に合わなければ 503 |
+| `EDITOR_AI_TIMEOUT_MS` | 任意。モデルの 1 回の呼び出しの時間切れ（ミリ秒）。既定 120,000、1,000〜300,000 に丸める |
+| `EDITOR_AI_MAX_TOKENS` | 任意。1 回の出力の上限（トークン。思考の分を含む）。既定 12,000、256〜32,000 に丸める（提案は送る文字数からこれ以下で決める） |
 | `EDITOR_AI_MONTHLY_LIMIT_USD` | 任意。owner ごとの月の上限（見込みの USD）。未設定は上限なし。0 以上の数でない値は 0（AI を止める） |
 | `EDITOR_STEPS_MODE` | 手順の実行の方式。`inline`（開発・CI だけ）。未設定・`off`・未知の値と、本番（`NODE_ENV=production`）の `inline` では手順の開始は 503 |
 | `EDITOR_STUB_ROLES` | stub の方式だけ。NIHO の役割の代わり（カンマ区切り）。未設定なら `writer,kamakura`（両方の面に出せる）、空なら役割なし。niho の方式では読まず、役割の契約（#42）まで面には出せない |
@@ -50,9 +54,10 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **版**: `GET /api/pages/{id}/versions`（新しい順・最大 100）、`GET …/versions/{n}`、`POST …/versions/{n}/restore`（`baseRevision` 付き。戻す直前の本文は版に残る。今の形で保存できない古い版は 422）。自動保存は本文が変わるとき、最新の版から 10 分以上空いていれば、保存の前の本文を版にする。1 ページ 200 版を超えたら古い自動保存の版から捨てる。
 - **ゴミ箱**: `DELETE /api/pages/{id}`（子孫も一緒。公開中は 409 `published`）、`GET /api/trash`、`POST /api/trash/{id}/restore`。30 日を過ぎたものは `npm -C packages/editor-store run purge-trash` が完全に削除する（定期実行の配線はクラウド側で別途）。
 - **公開のシート（#39）**: `GET /api/pages/{id}/publish`（シートの中身。発信先・条件・URL・主ボタン）、`POST /api/pages/{id}/publish`（`{ handle, range, extras, slug? }`。公開していなければ公開、同じ発信先なら更新を公開、別の発信先なら発信先を変える）、`POST /api/pages/{id}/publish/stop`（公開をやめる。もう一度呼んでも同じ）。判定と状態遷移は `packages/editor-publish`、ポートの組み立ては `src/publish/ports.ts`、Postgres は `src/publish/pg-store.ts`。公開・更新の前に自動保存を待ち（届かなければ送らない）、条件はサーバーでも評価し直す。カテゴリ・関連する体験は editor にまだ欄が無いので、同じ発信先なら公開中の値を引き継ぐ。
-- **AI の提案（#38 段 1。サーバー側だけ）**: `POST /api/pages/{id}/ai/proposals`（`baseRevision`・`intent`（`{ preset }` か `{ text }`）・任意の `scope`（最上位のブロックの位置の範囲。`toIndex` を含む））は提案を返すだけで、ページには何も書かない。`POST /api/pages/{id}/ai/adoptions` は採用したものだけを、今の本文を版（`ai`）に残してから `baseRevision` 付きで保存する（履歴から戻せる）。`GET /api/ai/usage` は今月（Asia/Tokyo）の使用量。実装は `src/ai/`（提案エンジン・語単位の差分・候補・偽物のモデル・プロンプト）と `src/server/ai-api.ts`。モデルと鍵はサーバー側で、この段は偽物だけ（本物のプロバイダは後段）。
+- **AI の提案（#38 段 1。サーバー側だけ）**: `POST /api/pages/{id}/ai/proposals`（`baseRevision`・`intent`（`{ preset }` か `{ text }`）・任意の `scope`（最上位のブロックの位置の範囲。`toIndex` を含む））は提案を返すだけで、ページには何も書かない。`POST /api/pages/{id}/ai/adoptions` は採用したものだけを、今の本文を版（`ai`）に残してから `baseRevision` 付きで保存する（履歴から戻せる）。`GET /api/ai/usage` は今月（Asia/Tokyo）の使用量。実装は `src/ai/`（提案エンジン・語単位の差分・候補・偽物のモデル・プロンプト・Anthropic のアダプタ）と `src/server/ai-api.ts`。モデルと鍵はサーバー側だけ。
   - 編集の対象は最上位の段落と見出しだけ（箇条書き・引用・囲み・画像などは文脈として送るだけ）。段落はブロックの位置で指す。**変更した段落の太字・斜体・リンクは外れてプレーンテキストになる**（v1 の制限）。変更しない段落には触れない。
-  - 足すだけの候補（要約・見出しをつける・Add headings・記事にできそうな部分・Check facts to confirm）は、モデルが既存の文の変更を返しても捨てる。長いページは段落の切れ目で約 12,000 文字ずつに分けて頼み、20 万文字を超える範囲は 413 `too_large`。
+  - 足すだけの候補（要約・見出しをつける・Add headings・記事にできそうな部分・Check facts to confirm）は、モデルが既存の文の変更を返しても捨てる。長いページは段落の切れ目で約 4,000 文字ずつに分けて頼み、30,000 文字を超える範囲は 413 `too_large`（範囲を選んで頼む）。
+  - 本物のモデル（`src/ai/anthropic.ts`）: 呼ぶのは固定の `https://api.anthropic.com/v1/messages` だけ（設定で変えられない。転送も追わない）。本文は `<untrusted_data>` の中だけに入れ、規則は system に置く。応答の最初の text ブロックを JSON として読む（コードフェンスは外す）。読めない・空・途中で切れた（`stop_reason: "max_tokens"`）応答と、HTTP の失敗・時間切れは 502 `ai_failed`（読めない・途中で切れた応答の使用量は数える）。自動の再試行はしない。`temperature` は送らない（claude-sonnet-5-5 など新しいモデルは既定以外の値を断る）。鍵・プロンプト・本文はエラーとログに出さない（ログは失敗の種類と HTTP ステータスだけ）。テストは差し替えた `fetch` だけで、本物の API は CI でも手元でも呼ばない。
   - 使用量は表 `ai_usage`（migration 0005。owner × 月）に原子的に足す。金額は docs-core の単価表の見込み（偽物・単価不明は 0）。上限以上はモデルを呼ぶ前に 429 `quota_exceeded`、上限の 80% 以上で `nearLimit`。モデルの失敗・検証に通らない出力は 502 `ai_failed`（使った分は記録する）。
 - **索引に載せない**: 全ての応答に `X-Robots-Tag: noindex, nofollow`（`next.config.ts`）、全ページに `<meta name="robots" content="noindex, nofollow">`。`robots.txt` は Disallow を付けない（クロールを止めると noindex が読まれない）。
 - **本文**: niho-docs-ui の `BlockEditor`（TipTap）を使い、`blocks` は TipTap の doc の `content`（ブロックの配列）をそのまま保存する。サーバーが見るのは「`type` を持つ object の配列で、大きさと深さが上限の内側」だけ。**限定 AST としての厳密な検証（許すブロックの種類・HTML の正規化）は #33。**
@@ -66,7 +71,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **索引**: migration `0003_search_text.sql` が `pages.search_text`（題名 + 本文の text ノードの文字だけ。generated column なので保存のコードは触らない）と pg_trgm の GIN（`deleted_at IS NULL`）を足す。pg_trgm は PostgreSQL の contrib（Cloud SQL・postgres:16-alpine・homebrew の postgresql@16 に入っている）。検索のコードは `packages/editor-store/src/search.ts`。
 - **フック**: `usePageSearch(query)`（150ms 止まってから 1 回だけ問い合わせ、古い要求は中止。`idle | loading | ready | error`）と `useSearchShortcut(onOpen)`（Mac は ⌘K、それ以外は Ctrl+K。入力欄の中でも効き、IME の変換中は無視）。
 - **画面（`EditorFrame`）**: サイドバーの検索入力に打つと、サーバーで題名と本文を探し、結果を更新順に出す（2 行目に当たった所の一文）。検索中は続きの読み込みを止め、一覧の下に状況（「N 件」「探しています…」「見つかりませんでした」と失敗）を `role="status"` で出す。検索語が空に戻ればふつうの一覧。⌘K（Mac 以外は Ctrl+K）で、畳まれた一覧を出し（狭い画面ではページから一覧へ）、検索入力を開いてフォーカスする。すでに開いていれば入力へフォーカスを戻す。専用のパレットは作っていない（モック v6 にもサイドバー内の検索しかない）。
-- **まだ**: 絞り込み（公開中・録音・日記。`/api/search` に引数が無く、公開中は `publications` の join が要る＝公開の配線の後）。
+- **まだ**: 絞り込み（公開中・録音。`/api/search` に引数が無く、公開中は `publications` の join が要る＝公開の配線の後）。
 
 ## リンクで共有・複製・書き出し（#34）
 
@@ -101,6 +106,10 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **上限**: VTT は UTF-8 で 4 MiB（取り込みの要求の本文は 5 MiB まで。超えたら 413）、段落は 20,000 個・1 段落 5,000 文字・本文の合計 8 MiB（docs-core の文字起こしの同期上限と同じ）、1 回の `edits` は 200 件（`PATCH` の本文は 4 MiB まで）。
 - **表**: migration `0007_page_recordings.sql`（録音ページに 1 行。ページを消す（hard delete）と消える。ゴミ箱の間は残る）。コードは `packages/editor-store/src/recordings.ts`、段落と話者の操作（純粋な関数）は `src/recording/`。
 - **まだ**: 音声の取り込み・エンジン（段 2）、マイク録音・再生・タイムスタンプの画面（段 3）。
+- **画面（段 3a。音声に依存しない部分）**:
+  - **できること**: 「録音から」（`/p/new?from=recording`）で文字起こし済みの `.vtt` を選ぶ（ドロップも可。4 MiB 超は送る前に断る）と、`importVtt` で録音ページを作って `/p/{id}` へ移る。失敗は画面に日本語で出し、選んだファイルは残す。録音ページ（`kind=rec`）は、`PageEditor` の上に文字起こし（`RecordingTranscript`）が入る。段落をその場で直して確定（フォーカスが外れたとき・Enter。変換中は確定しない）すると保存し、話者を押すと名前を変えられ、別の話者にまとめられる（確認は 1 回）。時刻の表示は端末ごとの好み（localStorage）。
+  - **保存**: 書き込みは 1 本ずつ順に送り、`baseRevision` は直前の応答の revision。別の画面が先に直していたら（409）自分の文章は消さず、最新に合わせて「別の場所で先に直されました。最新に合わせました」と出す。直した段落は止めておき、「もう一度保存」か書き直して確定すると送る（勝手には送り直さない）。クライアントは `src/lib/recording-client.ts`、サーバーの reason の日本語は `recordingErrorMessage`。
+  - **まだできない**: 音声ファイル（.m4a .mp3 .wav）とマイクは「まだ使えません」と知らせるだけ。再生・波形は出さない（音声は段 2 のあと）。「この録音から」（`ShellMakeFrom`）とサブページは手順（#37）の画面で出す。背景情報と「このあと」は入力できるが、まだ使われない（登場人物・固有名詞も未接続）。サイドバーの行は、取り込んだ直後は「録音」の 2 行目が出ない（読み込み直すと出る。`EditorFrame` の `pageCreated` が種類を受けない）。段落の数が多い録音の仮想化はしていない。
 
 ## 録音の音声（#36 段 2a）
 
@@ -130,4 +139,4 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 
 ## まだやらないこと
 
-見た目（#48）、版・履歴・オフライン・画像・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、公開 API（#40）、鍵の画面（#41）、公開の知らせ（録音は公開版に含まれない、など）の表示と、本人のサイトが 2 つ以上のときの選び方（#39 の後）、録音の開始（#36）、検索の絞り込み（#35）、発信先・役割とつながり・設定の中身（#41・#42 とその後）、AI の画面・本物のプロバイダ・固有名詞の設定（#38 の後段）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。
+見た目（#48）、版・履歴・オフライン・画像・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、公開 API（#40）、鍵の画面（#41）、公開の知らせ（録音は公開版に含まれない、など）の表示と、本人のサイトが 2 つ以上のときの選び方（#39 の後）、録音の開始（#36）、検索の絞り込み（#35）、発信先・役割とつながり・設定の中身（#41・#42 とその後）、AI の画面・固有名詞の設定（#38 の後段）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。

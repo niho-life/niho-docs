@@ -34,6 +34,18 @@ describe("migration files", () => {
     for (const file of files) assert.doesNotThrow(() => migrationBody(file));
   });
 
+  it("0020 drops the journal kind: the check is replaced and existing journal rows become note, nothing else is touched", async () => {
+    const file = (await readMigrations()).find((item) => item.name === "0020_remove_journal_kind.sql");
+    assert.ok(file, "0020 is in the ordered list");
+    const sql = withoutComments(file.sql);
+    assert.match(sql, /ALTER TABLE pages DROP CONSTRAINT pages_kind_check;/);
+    assert.match(sql, /UPDATE pages SET kind = 'note' WHERE kind = 'journal';/);
+    assert.match(sql, /ADD CONSTRAINT pages_kind_check CHECK \(kind IN \('note', 'rec', 'article', 'step'\)\)/);
+    // 行は kind しか書き換えない
+    assert.equal((sql.match(/\bUPDATE\b/g) ?? []).length, 1);
+    assert.doesNotMatch(sql, /\b(DELETE|TRUNCATE|DROP TABLE|DROP COLUMN)\b/);
+  });
+
   it("refuses a migration that is not wrapped in BEGIN/COMMIT", () => {
     assert.throws(() => migrationBody({ name: "0099_bad.sql", sql: "CREATE TABLE x (id int);\n" }), /BEGIN/);
   });

@@ -67,6 +67,11 @@ function App() {
     pick: DESTS.find((dest) => dest === pick),
     conn: params.has("conn") ? params.get("conn") === "1" : undefined,
     page: params.get("page") ?? undefined,
+    // 録音の文字起こし（話者の数・直している状態・時刻・再生）
+    speakers: params.has("speakers") ? Number(params.get("speakers")) : undefined,
+    edit: params.has("edit") ? params.get("edit") === "1" : undefined,
+    time: params.has("time") ? params.get("time") === "1" : undefined,
+    play: params.has("play") ? params.get("play") === "1" : undefined,
   };
   // 画面を替えたら状態を作り直す（モックの render と同じ）
   return (
