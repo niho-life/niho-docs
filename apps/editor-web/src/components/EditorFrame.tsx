@@ -6,9 +6,12 @@ import "niho-docs-ui/styles/shell.css";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageSummary } from "@niho/editor-store";
-import { EditorShell, ShellHeader, ShellSidebar, shellAccountItems, type NewPageKind } from "niho-docs-ui/shell";
+import { EditorShell, ShellHeader, ShellSidebar, shellAccountItems, shellPublishButton, type NewPageKind } from "niho-docs-ui/shell";
 import { listPagesRequest } from "@/lib/pages-client";
+import { useShortcuts } from "@/lib/shortcuts";
 import { arrangeSidebarItems } from "@/lib/sidebar-items";
+import { useSearchShortcut } from "@/lib/use-search-shortcut";
+import { FramePublishSheet, PublishNotice, type FramePublishKind } from "./FramePublish";
 
 /** shell.css と同じ境目（これ以下は一覧・ページのどちらかを全画面で出す）。 */
 const NARROW_QUERY = "(max-width: 900px)";
@@ -44,11 +47,13 @@ export type EditorFrameApi = {
   pageSaved: (id: string) => void;
   /** 新しいページを作った。一覧の上に足す。 */
   pageCreated: (id: string, title: string) => void;
+  /** 公開のシートを開く（ページを開いている画面だけで出る）。 */
+  openPublish: () => void;
 };
 
 const noop = () => undefined;
 
-const FrameContext = createContext<EditorFrameApi>({ narrow: false, pageOpened: noop, pageTitleChanged: noop, pageSaved: noop, pageCreated: noop });
+const FrameContext = createContext<EditorFrameApi>({ narrow: false, pageOpened: noop, pageTitleChanged: noop, pageSaved: noop, pageCreated: noop, openPublish: noop });
 
 export function useEditorFrame(): EditorFrameApi {
   return useContext(FrameContext);
@@ -76,6 +81,7 @@ function toTop(pages: PageSummary[], page: PageSummary): PageSummary[] {
  * editor の枠（一覧＋ヘッダー＋ページ）。見た目は niho-docs-ui の shell（#48）。ここは状態と移動だけを持つ。
  * - 一覧は最初の区切りをサーバーから受け、末尾が近づいたら続きを読む。
  * - 900px 以下では `/` が一覧の画面。ページと設定は全画面で、ヘッダーの左のボタンで一覧を出す。
+ * - ショートカット（設計 §11）: ⌘N 新しいページ、⌘K 検索、⌘⇧P 公開のシート（⌘S はページ、⌘/ は本文が持つ）。
  */
 export function EditorFrame({ initial, children }: { initial: FrameInitial; children: ReactNode }) {
   const router = useRouter();
@@ -91,6 +97,20 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
+  // ⌘K で検索の入力欄へフォーカスを移す回数（開いていても移す）
+  const [searchFocus, setSearchFocus] = useState(0);
+  // 公開のシート（path が変われば閉じる）と、「公開はまだ使えません」の知らせ
+  const [sheet, setSheet] = useState<FramePublishKind | null>(null);
+  const [sheetPath, setSheetPath] = useState(pathname);
+  if (sheetPath !== pathname) {
+    setSheetPath(pathname);
+    setSheet(null);
+  }
+  const [notice, setNotice] = useState(0);
+  const hideNotice = useCallback(() => setNotice(0), []);
+  const frameRoot = useRef<HTMLDivElement | null>(null);
+  // ⌘N で移り始めた元の path（移り終わるまで二度は押さない）
+  const newFrom = useRef<string | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
@@ -152,6 +172,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         const page: PageSummary = { id, kind: "note", title, lang: "ja", parent: null, stepStatus: null, createdAt: at, updatedAt: at };
         setList((current) => ({ ...current, pages: toTop(current.pages, page) }));
       },
+      openPublish: () => setSheet("publish"),
     }),
     [],
   );
@@ -185,18 +206,52 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     }
   };
 
-  const title = currentId
-    ? (list.pages.find((page) => page.id === currentId)?.title ?? (list.opened?.id === currentId ? list.opened.title : ""))
-    : pathname === "/p/new" && searchParams.get("from") === "recording"
-      ? "録音から"
-      : (settings?.title ?? "");
+  const opened = currentId ? (list.pages.find((page) => page.id === currentId) ?? (list.opened?.id === currentId ? list.opened : undefined)) : undefined;
+  const recordingStart = pathname === "/p/new" && searchParams.get("from") === "recording";
+  const title = currentId ? (opened?.title ?? "") : recordingStart ? "録音から" : (settings?.title ?? "");
+
+  // 公開のシートはページを開いている画面だけ（一覧・設定・新しいページ・録音からでは出さない）
+  const sheetShown = currentId ? sheet : null;
+  const openPublish = () => setSheet("publish");
+
+  const openSearch = () => {
+    if (sheetShown) return;
+    if (narrow) setListFor(pathname);
+    else setCollapsed(false);
+    setSearch((current) => (current.open ? current : { open: true, value: "" }));
+    setSearchFocus((count) => count + 1);
+  };
+  useEffect(() => {
+    if (searchFocus === 0) return;
+    const input = frameRoot.current?.querySelector<HTMLInputElement>('[role="search"] input');
+    input?.focus();
+    input?.select();
+  }, [searchFocus]);
+  useSearchShortcut(openSearch);
+
+  useEffect(() => {
+    newFrom.current = null;
+  }, [pathname]);
+  useShortcuts({
+    newPage: () => {
+      if (sheetShown) return false;
+      // 新しいページを開いている（作っている）とき・⌘N で移っている最中は、二つ目を作らない
+      if ((pathname === "/p/new" && !recordingStart) || newFrom.current === pathname) return;
+      newFrom.current = pathname;
+      pickNew("blank");
+    },
+    publish: () => {
+      if (!currentId || (narrow && sidebarOpen)) return false;
+      if (!sheetShown) openPublish();
+    },
+  });
 
   // 一覧をしまう: デスクトップでは列を閉じ、狭い画面ではページへ戻る（`/` では一覧がその画面なので出さない）
   const collapse = narrow ? (pathname === "/" ? undefined : () => setListFor(null)) : () => setCollapsed(true);
 
   return (
     <FrameContext.Provider value={frame}>
-      <div data-docs-app-root="" data-docs-shared-ui="" style={{ position: "fixed", inset: 0 }}>
+      <div ref={frameRoot} data-docs-app-root="" data-docs-shared-ui="" style={{ position: "fixed", inset: 0 }}>
         <EditorShell
           sidebarOpen={sidebarOpen}
           railOpen={false}
@@ -232,7 +287,28 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               plain={settings !== undefined}
               showListButton={!sidebarOpen}
               onToggleList={() => (narrow ? setListFor(pathname) : setCollapsed(false))}
+              publish={currentId ? { ...shellPublishButton({ pub: null, isArticle: opened?.kind === "article" }), onClick: openPublish } : null}
             />
+          }
+          overlay={
+            <>
+              {sheetShown && (
+                <FramePublishSheet
+                  kind={sheetShown}
+                  onKind={setSheet}
+                  onClose={() => setSheet(null)}
+                  onUnavailable={() => {
+                    setSheet(null);
+                    setNotice((count) => count + 1);
+                  }}
+                  onDestinations={() => {
+                    setSheet(null);
+                    router.push("/destinations");
+                  }}
+                />
+              )}
+              <PublishNotice shown={notice} onHide={hideNotice} />
+            </>
           }
         >
           {children}
