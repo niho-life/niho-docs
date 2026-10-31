@@ -73,7 +73,7 @@ describe("NewPage: the creation redirect belongs to the draft that made the page
 
 describe("OpenPage: a recording page shows the transcript above the title and body", () => {
   const PAGE = "33333333-3333-4333-8333-333333333333";
-  const summary = (kind: "note" | "rec") => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent: null, stepStatus: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z", publication: null });
+  const summary = (kind: "note" | "rec") => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent: null, stepStatus: null, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
 
   async function open(kind: "note" | "rec") {
     container = document.createElement("div");
