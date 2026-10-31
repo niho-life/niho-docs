@@ -156,7 +156,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
       },
       pageCreated: (id, title) => {
         const at = new Date().toISOString();
-        const page: PageSummary = { id, kind: "note", title, lang: "ja", parent: null, stepStatus: null, createdAt: at, updatedAt: at };
+        // 作ったばかりのページは公開していない
+        const page: PageSummary = { id, kind: "note", title, lang: "ja", parent: null, stepStatus: null, createdAt: at, updatedAt: at, publication: null };
         setList((current) => ({ ...current, pages: toTop(current.pages, page) }));
       },
     }),
