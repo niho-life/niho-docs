@@ -9,9 +9,11 @@ import {
   deletePageRequest,
   duplicatePageRequest,
   exportPageToGoogleDoc,
+  googleDocExportStatus,
   newGoogleDocExportId,
   pageExportUrl,
   type DuplicatedPage,
+  type GoogleDocExportResult,
 } from "./page-actions-client";
 
 export type { AttachedPage, PageOwner };
@@ -149,6 +151,8 @@ export function failureText(error: unknown, fallback: string): string {
 export function usePageMenu(options: PageMenuOptions): PageMenu {
   const [state, setState] = useState<MenuState | null>(null);
   const running = useRef<Owner | null>(null);
+  // Google ドキュメントへの書き出しのうち、結果がまだ分からないものの受付 id（ページごと）
+  const heldExports = useRef(new Map<string, string>());
   const latest = useRef(options);
   useEffect(() => {
     latest.current = options;
@@ -186,20 +190,48 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
   /**
    * Google ドキュメントへ書き出す（保存したあと）。本文は送らない（サーバーが保存済みの本文から作る）。
    * できたら新しいタブで開く。未接続・つなぎ直しが要るとき（409）は接続の案内へ移動する。
-   * 受付の id はこの 1 回だけのもの（同じ id で送り直すのは、呼び出し元が確かめてから）。
+   * 受付の id は、結果が分からないままのあいだ（応答が来なかった・まだできていない）は持ち続ける。次の書き出しは、
+   * 先にその id の状態を確かめ（できていればそれを開く）、受付が無かったときだけ同じ id で送る。
+   * 新しい id にすると、時間切れでも実はできていた文書がもう 1 つできてしまう（設計 §2）。
    */
   const exportToGoogleDoc = async (target: Owner) => {
     const next = typeof window === "undefined" ? null : `${window.location.pathname}${window.location.search}`;
+    const held = heldExports.current.get(target.id);
+    const exportId = held ?? newGoogleDocExportId();
+    // 確定した（できた・始めからやり直し・接続が要る）ら手放す。分からない・まだのときだけ残す
+    const keep = (kept: boolean) => {
+      if (kept) heldExports.current.set(target.id, exportId);
+      else heldExports.current.delete(target.id);
+    };
+    let checking = false;
     try {
-      const result = await exportPageToGoogleDoc(target.id, newGoogleDocExportId());
+      let result: GoogleDocExportResult | null = null;
+      if (held !== undefined) {
+        checking = true;
+        try {
+          result = await googleDocExportStatus(held);
+        } catch (error) {
+          // 受付が無い（届いていなかった）なら、同じ id で改めて送る。それ以外は確かめられなかったので送らない
+          if (!(error instanceof PageActionError && error.code === "export_not_found")) throw error;
+        }
+        checking = false;
+      }
+      // まだできていなくて再試行できる（retryable）ときも、同じ id で送り直す
+      if (result === null || (result.status === "pending" && result.retryable)) {
+        result = await exportPageToGoogleDoc(target.id, exportId);
+      }
       if (result.status === "pending") {
+        keep(true);
         report(target, (current) => ({ ...current, note: PAGE_MENU_TEXT.googleDocPending }));
         return;
       }
+      keep(false);
       // 文書はできている。別のページへ移っていても、新しいタブで開く（結果を捨てない。複製と同じ考え）
       (latest.current.openDocument ?? openInNewTab)(result.url);
     } catch (error) {
       const code = error instanceof PageActionError ? error.code : null;
+      // 送ったが応答が分からない・状態を確かめられなかったときは、id を残す。それ以外は受付そのものが済んだ（または届かなかった）
+      keep(checking || code === "export_result_unknown");
       if (code === "drive_not_connected" || code === "drive_reconnect_required") {
         // 移動は、まだ同じページを開いているときだけ（別のページを見ている人を連れて行かない）
         if (isCurrent(target)) (latest.current.goToGoogleDocsConnect ?? visit)(googleDocsConnectPath(next));
