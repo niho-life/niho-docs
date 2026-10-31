@@ -19,12 +19,12 @@ export function listItems(extraNew: boolean): ShellListItem[] {
           : page.st === "run"
             ? { text: "作成中…" }
             : undefined;
-  const item = (page: GalleryPage, child?: boolean): ShellListItem => ({ id: page.id, title: page.title, when: page.saved, child, sub: sub(page) });
+  const item = (page: GalleryPage, depth?: 1): ShellListItem => ({ id: page.id, title: page.title, when: page.saved, depth, sub: sub(page) });
   const rows = PAGES.filter((page) => !page.parent).flatMap((page) => [
-    item(page),
+    { ...item(page), folder: (page.children ?? []).length > 0, open: true },
     ...(page.children ?? []).flatMap((childId) => {
       const child = byId(childId);
-      return child ? [item(child, true)] : [];
+      return child ? [item(child, 1)] : [];
     }),
   ]);
   return extraNew ? [{ id: "new", title: "", when: "たった今" }, ...rows] : rows;
@@ -59,7 +59,6 @@ export function useSettingsSidebar(current: "dest" | "account" | "settings", for
       }}
       me={{
         name: ME.name,
-        caption: ME.email,
         initial: ME.initial,
         badge: pendingInvites || undefined,
         open: accountMenu,

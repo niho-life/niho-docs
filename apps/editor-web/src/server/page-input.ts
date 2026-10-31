@@ -2,6 +2,7 @@ import { isLanguage } from "@niho/docs-core";
 import {
   PAGE_KINDS,
   PAGE_LIST_LIMIT,
+  isPageId,
   isPositiveInteger,
   type Block,
   type CreatePageInput,
@@ -61,6 +62,18 @@ export function parseBlocks(value: unknown): InputResult<Block[]> {
   if (serialized.includes("\\u0000")) return { ok: false };
   const checked = validateBlocks(value);
   return checked.ok ? { ok: true, value: checked.blocks } : { ok: false };
+}
+
+/**
+ * フォルダへ入れる・出すの本文（`{ parent: id | null }` だけ）。id の形は見るが、本人のページかは store が見る
+ * （無い id・別の人のページ・ゴミ箱の中はどれも同じ 404）。
+ */
+export function parseMoveParent(body: unknown): InputResult<string | null> {
+  if (!isPlainObject(body) || Object.keys(body).some((key) => key !== "parent")) return { ok: false };
+  const { parent } = body;
+  if (parent === null) return { ok: true, value: null };
+  if (typeof parent !== "string" || !isPageId(parent)) return { ok: false };
+  return { ok: true, value: parent };
 }
 
 function parseFields(body: unknown): InputResult<PagePatch> {

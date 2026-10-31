@@ -12,7 +12,7 @@
 
 | 問い | 答え |
 | --- | --- |
-| 手順の正本 | **`recipes` の表 1 つ**に寄せる。いま正本が `editor_settings.recipes`（jsonb・migration 0013）と T1 の `recipes` の表で**二重になる**ので、0021 で移して列を使わなくする。差し替えは `RecipeReader` の 1 か所（§1.2） |
+| 手順の正本 | **`recipes` の表 1 つ**に寄せる。いま正本が `editor_settings.recipes`（jsonb・migration 0013）と T1 の `recipes` の表で**二重になる**ので、`20261101001500_recipes`（#122）で移して列を使わなくする。差し替えは `RecipeReader` の 1 か所（§1.2） |
 | 実行 → サブページ | **実行の制御は完成している**（世代・lease・1 transaction の確定・掃除・取消・決定的なサブページ id・帯）。足りないのは**実行器の中身と入力の組み立て**で、8 件（§2.2） |
 | 設計の画面 | **新しい画面を作らない。**設定の「手順」の節（#108 で入った）に足す。足すのは**お手本の文書の取り込みと文書ガイドの抽出**・並べ替え・手順ごとの固有名詞（§3） |
 | 落としてはいけない振る舞い | 17 件（§4）。いちばん重いのは**入力の規則**（段階 N は上流の**全部**の成果物を読む。いまは直前の 1 つだけ）と**前提変更の理由**（いまは理由を持たない） |
@@ -37,7 +37,7 @@
 | --- | --- | --- |
 | `packages/docs-core/src/templates.ts` の `FLOW_TEMPLATES` | 既定の 4 つのテンプレート（記事制作・議事録・インサイト整理・**コーチング**）の**指示文の正** | main に有り。editor は `tpl-1`〜`tpl-3` の **3 つだけ**を `DEFAULT_RECIPES` に写し、コーチング（`tpl-4`）を「§7.2 に無いので含めない」として外している（`apps/editor-web/src/steps/recipes.ts`）→ **4 つ目として入れる**（§1.5） |
 | `editor_settings.recipes`（jsonb。migration 0013） | 既定に手を入れた写しと、足した手順（`{ id, name, guide, steps: [{ id, name, instruction }] }`） | **main に有り。設定の画面・受付 API・worker が既に読み書きしている** |
-| `recipes` の表（T1 の `0021_recipes.sql`） | 工程・プロファイル・guide・固有名詞・お手本 | 作成中 |
+| `recipes` の表（T1 の `20261101001500_recipes.sql`） | 工程・プロファイル・guide・固有名詞・お手本 | 作成中 |
 
 `editor_settings.recipes` が既に動いているので、T1 の表が入ると**同じものの正本が 2 つになる**。放っておくと、設定の画面が jsonb を書き、実行が表を読む（またはその逆）形になり、「設定で直したのに実行に効かない」が起きる。
 
@@ -72,7 +72,7 @@
 ### 1.4 T1 へのお願い（表を作る側に渡すこと）
 
 1. `recipes` は **owner ごと**（`owner text` + `id text` の複合主キー）。既定の 3 つは行を作らず、**手を入れたものと足したものだけ**が行になる（いまの jsonb と同じ考え。`recipesOf()` が既定にかぶせる）。
-2. `0021` で **`editor_settings.recipes` の中身を `recipes` の行へ移す**（jsonb → 行）。列はその migration では落とさず残し、読まなくする（切り戻しのため）。落とすのは次の節目で。
+2. `20261101001500_recipes`（#122）で **`editor_settings.recipes` の中身を `recipes` の行へ移す**（jsonb → 行）。列はその migration では落とさず残し、読まなくする（切り戻しのため）。落とすのは次の節目で。
 3. お手本の本文は `recipes` の行に入れない（§1.2）。
 4. 上限は docs-core と editor で食い違っているので、**表の CHECK は editor 側の値に合わせる**。食い違い: 文書ガイド 20,000 字（editor）対 4,000 字（docs-core `GUIDE_MAX_CHARS`）、段階 12（editor）対 32（docs-core `FLOW_MAX_STEPS`）。値の正は `packages/editor-store/src/settings.ts` の `SETTINGS_LIMITS` 1 か所のままにする。
 5. 新しい表を足したら `packages/editor-store/test/store.integration.test.ts` の `documented` の一覧にも足す（忘れると CI が落ちる。#108 が 1 回踏んでいる）。
@@ -644,7 +644,7 @@ docs-core の `guide-extraction.ts` をサーバーで呼ぶだけ。中身は�
 
 `0023` は **T4 のもの**（オーナー 2026-11-01）。経緯を残す。
 
-- `0021` は T1（`recipes` の表・#122）、`0022` は T5（#125）。
+- T1 の `recipes` の表は `20261101001500_recipes`（#122。日時の名前。#127 の new-migration）、`0022` は T5（#125）。
 - T5 が一度 `0023_ai_chat_turns.sql` を取っていたが、**`0025` に改名**して空けてもらった（#125 は未マージ・未適用なので安全）。
 - **番号の取り合いそのものを無くす PR が別に出ている**（#127。`npm -C packages/editor-store run new-migration -- <名前>` が
   日時の名前を付ける。niho-app と同じ流儀）。**進行中のこの作業は `0023` のまま**で、#127 が入ったあとに作るものから日時になる。

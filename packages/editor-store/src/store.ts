@@ -4,6 +4,7 @@ import {
   type CreatePageInput,
   type Database,
   type DeleteResult,
+  type MovePageResult,
   type OwnerId,
   type Page,
   type PageChunk,
@@ -31,6 +32,11 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 /** 一覧で一度に返す上限。 */
 export const PAGE_LIST_LIMIT = 500;
+/**
+ * 親子の段の上限（docs/architecture/editor-recipes-and-folders.md §3）。0＝フォルダ、1＝その中のページ、
+ * 2＝録音のサブページ（手順の成果物）。これより深くすると、一覧も検索も辿り切れなくなる。
+ */
+export const MAX_PAGE_DEPTH = 2;
 /** 版の一覧で返す上限（新しい順）。 */
 export const VERSION_LIST_LIMIT = 100;
 /** 1 ページに残す版の数。超えたら古い autosave の版から捨てる（autosave 以外の版は捨てない）。公開版は別の表（publication_versions）。 */
@@ -332,6 +338,71 @@ export class EditorStore {
         const row = result.rows[0];
         if (!row) throw new Error("editor-store: locked page vanished during save");
         return { status: "saved", page: toPage(row) };
+      }),
+    );
+  }
+
+  /**
+   * ページをフォルダへ入れる・出す（`parent` を変える。フォルダは子を持てるふつうのページ。設計の規則は
+   * docs/architecture/editor-recipes-and-folders.md §3）。
+   *
+   * - `parent` に `null` を渡すと上の段へ出す。
+   * - 親も本人のページだけ（別の人のページ・ゴミ箱の中・無い id はどれも null＝同じ 404）。
+   * - 段が深くなりすぎる移動は `too_deep`、自分自身・自分の子孫の下へ入れる移動は `cycle`（どちらも何も書かない）。
+   * - 変えるのは `parent` だけ。本文・`revision`・`updated_at` は動かさない（移動は編集ではないので、開いている
+   *   エディタの楽観ロックも一覧の並びも壊さない）。
+   */
+  async movePage(owner: OwnerId, id: string, parent: string | null): Promise<MovePageResult | null> {
+    assertOwner(owner);
+    if (!isPageId(id)) return null;
+    if (parent !== null && !isPageId(parent)) return null;
+    if (parent === id) return "cycle";
+    return this.#orNull(() =>
+      this.#transaction(async (client): Promise<MovePageResult | null> => {
+        const current = await lockPage(client, owner, id);
+        if (!current) return null;
+        if (current.parent === parent) return "moved";
+        // 入れ先の段（上へ辿る）。上の段へ出すなら -1（入れたページが 0 の段になる）
+        let parentDepth = -1;
+        if (parent !== null) {
+          const up = await client.query<{ depth: number | null }>(
+            `WITH RECURSIVE up AS (
+               SELECT id, parent, 0 AS depth FROM pages WHERE owner = $1 AND deleted_at IS NULL AND id = $2
+               UNION ALL
+               SELECT p.id, p.parent, up.depth + 1
+                 FROM pages p JOIN up ON p.id = up.parent
+                WHERE p.owner = $1 AND p.deleted_at IS NULL
+             )
+             SELECT max(depth) AS depth FROM up`,
+            [owner, parent],
+          );
+          const depth = up.rows[0]?.depth;
+          // 入れ先が無い・別の人のもの・ゴミ箱の中なら、ページが無いときと同じ
+          if (depth === null || depth === undefined) return null;
+          parentDepth = Number(depth);
+        }
+        // 動かすページの下の高さと、入れ先がその中にあるか（下へ辿る）。ゴミ箱の中の子も数える:
+        // 戻す（restoreFromTrash）と親を保ったまま木に帰るので、数えないと動かしたあとに戻して上限を超える
+        const down = await client.query<{ height: number | null; inside: boolean | null }>(
+          `WITH RECURSIVE down AS (
+             SELECT id, 0 AS height FROM pages WHERE owner = $1 AND deleted_at IS NULL AND id = $2
+             UNION ALL
+             SELECT c.id, down.height + 1
+               FROM pages c JOIN down ON c.parent = down.id
+              WHERE c.owner = $1
+           )
+           SELECT max(height) AS height, bool_or(id = $3::uuid) AS inside FROM down`,
+          [owner, id, parent],
+        );
+        if (down.rows[0]?.inside === true) return "cycle";
+        const height = Number(down.rows[0]?.height ?? 0);
+        if (parentDepth + 1 + height > MAX_PAGE_DEPTH) return "too_deep";
+        const moved = await client.query(
+          "UPDATE pages SET parent = $3 WHERE owner = $1 AND deleted_at IS NULL AND id = $2",
+          [owner, id, parent],
+        );
+        if (moved.rowCount !== 1) throw new Error("editor-store: locked page vanished during move");
+        return "moved";
       }),
     );
   }

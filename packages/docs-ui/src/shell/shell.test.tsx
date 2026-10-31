@@ -33,8 +33,8 @@ const noop = () => undefined;
 
 const ITEMS: ShellListItem[] = [
   { id: "a", title: "10月30日（木）", when: "たった今" },
-  { id: "b", title: "Takuya さんと話したこと", when: "昨日", sub: { text: "録音" } },
-  { id: "c", title: "文字起こし修正", when: "昨日", child: true },
+  { id: "b", title: "Takuya さんと話したこと", when: "昨日", sub: { text: "録音" }, folder: true, open: true },
+  { id: "c", title: "文字起こし修正", when: "昨日", depth: 1 },
   { id: "d", title: "Riding the Enoden", when: "昨日", sub: { text: "NIHO Experience", dest: "exp" } },
   { id: "e", title: "", when: "たった今" },
 ];
@@ -48,7 +48,7 @@ function sidebar(over: Partial<Parameters<typeof ShellSidebar>[0]> = {}) {
       onCollapse={noop}
       newMenu={{ open: false, onToggle: noop, onClose: noop, onPick: noop }}
       search={{ open: false, value: "", onOpen: noop, onClose: noop, onChange: noop }}
-      me={{ name: "Mika Sato", caption: "mika@example.com", initial: "M", badge: 1, open: false, items: shellAccountItems(1), onToggle: noop, onClose: noop, onSelect: noop }}
+      me={{ name: "Mika Sato", initial: "M", badge: 1, open: false, items: shellAccountItems(1, undefined, "Mika Sato"), onToggle: noop, onClose: noop, onSelect: noop }}
       {...over}
     />
   );
@@ -61,7 +61,7 @@ function header(over: Partial<Parameters<typeof ShellHeader>[0]> = {}) {
       showListButton
       onToggleList={noop}
       tools={<ShellTools />}
-      status={shellStatus(null)}
+      status={shellStatus({ dest: "exp", range: "live", url: "experience.niho.life/stories/enoden" })}
       publish={{ label: "公開", tone: "outline" }}
       railOpen={false}
       onToggleRail={noop}
@@ -159,7 +159,24 @@ describe("ShellSidebar", () => {
     expect(html).toContain("es-di es-di--on es-di--one");
     expect(html).toContain('<i class="es-dest es-dest--exp" aria-hidden="true"></i>NIHO Experience');
     expect(html).toContain('<span class="es-di-t es-di-t--untitled">無題</span>');
-    expect(html).toContain("es-di es-di--child es-di--one");
+  });
+
+  it("一覧は 1 本の木: 段（depth）の行は入れ子の <ul> に入り、フォルダの行に開閉のボタンが付く", () => {
+    const html = renderToStaticMarkup(sidebar({ onToggleFolder: noop }));
+    // 「文字起こし修正」は、その上の行（フォルダ）の <li> の中の <ul> に入る
+    expect(html).toMatch(/Takuya さんと話したこと[\s\S]*?<ul><li><div class="es-dirow"><button[^>]*>.*?文字起こし修正/);
+    expect([...html.matchAll(/<ul>/g)]).toHaveLength(2);
+    expect(html).toContain('aria-label="Takuya さんと話したこと の中" aria-expanded="true"');
+    // フォルダでない行には開閉のボタンを出さない
+    expect([...html.matchAll(/class="es-ditw"/g)]).toHaveLength(1);
+    // 開閉をつながない画面（Mac の殻など）では、ボタンを出さずに木だけを出す
+    expect(renderToStaticMarkup(sidebar())).not.toContain("es-ditw");
+  });
+
+  it("閉じたフォルダは、呼ぶ側が中の行を渡さないので段が出ない", () => {
+    const closed = renderToStaticMarkup(sidebar({ items: ITEMS.filter((item) => item.id !== "c").map((item) => (item.id === "b" ? { ...item, open: false } : item)), onToggleFolder: noop }));
+    expect(closed).toContain('aria-expanded="false"');
+    expect([...closed.matchAll(/<ul>/g)]).toHaveLength(1);
   });
 
   it("現在のページは aria-current=page、下は本人の行ひとつ（招待の数つき）", () => {
@@ -283,6 +300,42 @@ describe("ShellRail", () => {
     expect(levels[0]).toBe(2);
     expect(levels.slice(1).length).toBeGreaterThan(0);
     expect(levels.slice(1).every((level) => level === 3)).toBe(true);
+  });
+
+  it("フォルダの節は、入れ先を渡したときだけ出る（名前つきの選び口と、入れられなかったときの一言）", () => {
+    const plain = renderToStaticMarkup(<ShellPageSettings lang="ja" author={{ name: "Mika Sato", title: "", initial: "M" }} info={[]} />);
+    expect(plain).not.toContain("フォルダ");
+
+    const withFolder = renderToStaticMarkup(
+      <ShellPageSettings
+        folder={{ value: "f-1", options: [{ id: "f-1", title: "鎌倉の記事" }, { id: "f-2", title: "" }], note: "このフォルダには入れられませんでした", onPick: noop }}
+        lang="ja"
+        author={{ name: "Mika Sato", title: "", initial: "M" }}
+        info={[]}
+      />,
+    );
+    expect(withFolder).toContain('<h3>フォルダ</h3>');
+    expect(withFolder).toContain('aria-label="フォルダ"');
+    expect(withFolder).toContain('<option value="">フォルダに入れない</option>');
+    // 題名の無いフォルダは「無題」
+    expect(withFolder).toContain('<option value="f-2">無題</option>');
+    expect(withFolder).toContain('<p role="alert" class="es-upnote">このフォルダには入れられませんでした</p>');
+  });
+
+  it("状態の丸は公開中だけ（地球のマーク）。非公開は丸を出さず、読み上げのための文だけを置く", () => {
+    const published = renderToStaticMarkup(<StatusDot {...shellStatus({ dest: "exp", range: "live", url: "experience.niho.life/stories/enoden" })} />);
+    expect(published).toContain("es-st es-st--published");
+    expect(published).toContain('aria-label="ページの状態"');
+    expect(published).toContain('role="tooltip"');
+
+    for (const pub of [null, { dest: "exp", range: "stopped", url: "experience.niho.life/stories/enoden" } as const]) {
+      const quiet = renderToStaticMarkup(<StatusDot {...shellStatus(pub)} />);
+      expect(quiet, String(pub?.range)).toContain("es-st-wrap es-st-wrap--quiet");
+      expect(quiet, String(pub?.range)).not.toContain('class="es-st ');
+      // 保存の状態は読み上げのために残す（見える文字は本文の上にある）
+      expect(quiet, String(pub?.range)).toContain('aria-live="polite"');
+      expect(quiet, String(pub?.range)).toContain("保存済み");
+    }
   });
 
   it("「AIと作る」は開閉せず残りの高さを使う（fill）", () => {
