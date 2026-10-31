@@ -1,0 +1,226 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ShellRecording } from "niho-docs-ui/shell";
+import {
+  CONFLICT_MESSAGE,
+  RecordingConflictError,
+  RecordingRequestError,
+  SEGMENT_EDITS_MAX,
+  editSegments,
+  getRecording,
+  mergeSpeakers,
+  recordingErrorMessage,
+  renameSpeaker,
+  type RecordingSnapshot,
+} from "@/lib/recording-client";
+import { durationLabel, readTimestampsPreference, shellSegments, shellSpeakers, writeTimestampsPreference } from "@/lib/recording-view";
+
+/** 直した段落の文章（まだ保存されていない）。held は、保存に失敗したか競合した段落で、もう一度確定するまで送らない。 */
+type Draft = { text: string; held: boolean };
+type Drafts = Readonly<Record<number, Draft>>;
+type Load = { state: "loading" } | { state: "ready" } | { state: "missing" } | { state: "failed"; message: string };
+
+/**
+ * 録音ページの文字起こし（設計 §7.1。本文の上）。録音を読み、段落をその場で直し（確定は blur・Enter）、話者の名前を変え・まとめる。
+ * - 保存は 1 本ずつ順に送る。`baseRevision` は直前の応答の revision（送る直前に読む）。
+ * - 別の画面が先に直していたら（409）、自分の文章は消さず、最新に合わせて知らせる。直した段落は止めておき、もう一度確定すると送る。
+ * - 再生は無い（音声は後段）。時刻の表示は端末ごとの好み。
+ */
+export function RecordingTranscript({ pageId }: { pageId: string }) {
+  const [load, setLoad] = useState<Load>({ state: "loading" });
+  const [attempt, setAttempt] = useState(0);
+  const [snapshot, setSnapshot] = useState<RecordingSnapshot | null>(null);
+  const [drafts, setDrafts] = useState<Drafts>({});
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [showTimestamps, setShowTimestamps] = useState(readTimestampsPreference);
+
+  // 送る直前に読む最新の値（非同期の保存が、古い render の値を掴まないため）
+  const snapshotRef = useRef<RecordingSnapshot | null>(null);
+  const draftsRef = useRef<Drafts>({});
+  const chain = useRef<Promise<unknown>>(Promise.resolve());
+
+  const applySnapshot = useCallback((next: RecordingSnapshot) => {
+    snapshotRef.current = next;
+    setSnapshot(next);
+  }, []);
+  const applyDrafts = useCallback((next: Drafts) => {
+    draftsRef.current = next;
+    setDrafts(next);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getRecording(pageId).then(
+      (loaded) => {
+        if (cancelled) return;
+        applySnapshot(loaded);
+        setLoad({ state: "ready" });
+      },
+      (error: unknown) => {
+        if (cancelled) return;
+        setLoad(error instanceof RecordingRequestError && error.status === 404 ? { state: "missing" } : { state: "failed", message: recordingErrorMessage(error, "load") });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [pageId, attempt, applySnapshot]);
+
+  /** 書き込みを 1 本ずつ順に走らせる（前の失敗は次を止めない）。 */
+  const enqueue = useCallback(<T,>(job: () => Promise<T>): Promise<T> => {
+    const run = chain.current.then(job);
+    chain.current = run.catch(() => undefined);
+    return run;
+  }, []);
+
+  /** 止めていない下書きを、まとめて送る。 */
+  const flush = useCallback(async () => {
+    for (;;) {
+      const batch = Object.entries(draftsRef.current)
+        .filter(([, draft]) => !draft.held)
+        .slice(0, SEGMENT_EDITS_MAX)
+        .map(([index, draft]) => ({ index: Number(index), text: draft.text }));
+      const base = snapshotRef.current;
+      if (batch.length === 0 || !base) return;
+      setSaving(true);
+      try {
+        applySnapshot(await editSegments(pageId, base.recording.revision, batch));
+        // 送った文章のままの下書きだけ消す（送っている間にさらに直された段落は残す）
+        const rest = { ...draftsRef.current };
+        for (const edit of batch) if (rest[edit.index]?.text === edit.text) delete rest[edit.index];
+        applyDrafts(rest);
+        setNotice(null);
+      } catch (error) {
+        if (error instanceof RecordingConflictError) applySnapshot(error.snapshot);
+        // 送ろうとした段落は止める（自分の文章は画面に残す）。もう一度確定すると送る
+        const held = { ...draftsRef.current };
+        for (const edit of batch) {
+          const draft = held[edit.index];
+          if (draft?.text === edit.text) held[edit.index] = { text: draft.text, held: true };
+        }
+        applyDrafts(held);
+        setNotice(recordingErrorMessage(error, "edit"));
+        return;
+      } finally {
+        setSaving(false);
+      }
+    }
+  }, [pageId, applySnapshot, applyDrafts]);
+
+  const onSegmentChange = (id: string, text: string) => {
+    const index = Number(id);
+    const base = snapshotRef.current;
+    const server = base?.recording.segments[index]?.text;
+    if (!base || server === undefined) return;
+    // 元の文章のまま・下書きも無いなら何もしない（下書きがあるときは、戻した文章を送って揃える）
+    if (text === server && draftsRef.current[index] === undefined) return;
+    applyDrafts({ ...draftsRef.current, [index]: { text, held: false } });
+    void enqueue(flush);
+  };
+
+  /** 止めた段落を、もう一度送る。 */
+  const retry = () => {
+    applyDrafts(Object.fromEntries(Object.entries(draftsRef.current).map(([index, draft]) => [index, { ...draft, held: false }])));
+    setNotice(null);
+    void enqueue(flush);
+  };
+
+  /** 話者の操作（名前・まとめる）。成功は undefined、失敗は画面に出す文言（競合は最新に合わせて、もう一度の案内）。 */
+  const speakerAction = (run: (base: RecordingSnapshot) => Promise<RecordingSnapshot>, action: "rename" | "merge"): Promise<string | undefined> =>
+    enqueue(async () => {
+      const base = snapshotRef.current;
+      if (!base) return recordingErrorMessage(null, action);
+      try {
+        applySnapshot(await run(base));
+        setNotice(null);
+        return undefined;
+      } catch (error) {
+        if (error instanceof RecordingConflictError) {
+          applySnapshot(error.snapshot);
+          setNotice(CONFLICT_MESSAGE);
+          return `${CONFLICT_MESSAGE}。もう一度試してください。`;
+        }
+        return recordingErrorMessage(error, action);
+      }
+    });
+
+  const held = Object.values(drafts).filter((draft) => draft.held).length;
+  const unsaved = Object.keys(drafts).length > 0;
+  // 保存されていない文章があるまま閉じようとしたら、ブラウザの確認を出す
+  useEffect(() => {
+    if (!unsaved) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved]);
+
+  if (load.state === "loading") {
+    return (
+      <p role="status" aria-live="polite" data-transcript="loading">
+        文字起こしを読み込んでいます
+      </p>
+    );
+  }
+  if (load.state === "missing") return <p data-transcript="missing">このページには文字起こしがありません。</p>;
+  if (load.state === "failed" || !snapshot) {
+    return (
+      <div role="alert" data-transcript="failed">
+        <p>{load.state === "failed" ? load.message : recordingErrorMessage(null, "load")}</p>
+        <button
+          type="button"
+          onClick={() => {
+            setLoad({ state: "loading" });
+            setAttempt((count) => count + 1);
+          }}
+        >
+          もう一度読み込む
+        </button>
+      </div>
+    );
+  }
+
+  const status = saving ? "saving" : held > 0 ? "held" : unsaved ? "pending" : "saved";
+  const statusText = { saving: "保存中", held: `保存されていない段落が ${held} つあります`, pending: "保存待ち", saved: "保存済み" }[status];
+  return (
+    <section aria-label="文字起こし" data-transcript="ready">
+      <ShellRecording
+        segments={shellSegments(snapshot.recording, Object.fromEntries(Object.entries(drafts).map(([index, draft]) => [index, draft.text])))}
+        speakers={shellSpeakers(snapshot.speakers)}
+        position={durationLabel(snapshot.recording)}
+        editing={editing}
+        onToggleEdit={() => setEditing((value) => !value)}
+        onSegmentChange={onSegmentChange}
+        onRenameSpeaker={(id, name) => speakerAction((base) => renameSpeaker(pageId, base.recording.revision, Number(id), name), "rename")}
+        onMergeSpeakers={(from, into) => speakerAction((base) => mergeSpeakers(pageId, base.recording.revision, Number(from), Number(into)), "merge")}
+        showTimestamps={showTimestamps}
+        onTimestamps={() => {
+          const next = !showTimestamps;
+          setShowTimestamps(next);
+          writeTimestampsPreference(next);
+        }}
+      />
+      <p role="status" aria-live="polite" data-save-state={status}>
+        {statusText}
+        {held > 0 && (
+          <>
+            {" "}
+            <button type="button" onClick={retry}>
+              もう一度保存
+            </button>
+          </>
+        )}
+      </p>
+      {notice && (
+        <p role="alert" data-transcript-notice="">
+          {notice}{" "}
+          <button type="button" onClick={() => setNotice(null)}>
+            閉じる
+          </button>
+        </p>
+      )}
+    </section>
+  );
+}
