@@ -1,11 +1,17 @@
 export * from "./types.ts";
 export * from "./ai-usage.ts";
 export {
+  AI_MESSAGE_RESULTS,
   CONVERSATION_LIST_LIMIT,
   CONVERSATION_MESSAGE_LIMIT,
   MESSAGE_JSON_MAX_BYTES,
   MESSAGE_TEXT_MAX_CHARS,
+  CHAT_WORKSPACE_LIMIT,
+  appendChatTurn,
   appendTurn,
+  getChatChanges,
+  listChatWorkspace,
+  markChangesUndone,
   getAssistantMessage,
   getConversation,
   isMessageJson,
@@ -16,7 +22,12 @@ export {
   type AiConversation,
   type AiConversationSummary,
   type AiMessage,
+  type AiMessageChange,
+  type AiMessageResult,
   type AiMessageRole,
+  type ChatChangeInput,
+  type ChatTurnInput,
+  type ChatWorkspacePage,
   type AiTurn,
   type AiTurnInput,
 } from "./ai-conversations.ts";

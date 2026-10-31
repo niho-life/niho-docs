@@ -5,7 +5,11 @@ import type { Pool as PgPool } from "pg";
 import {
   CONVERSATION_MESSAGE_LIMIT,
   MESSAGE_JSON_MAX_BYTES,
+  appendChatTurn,
   appendTurn,
+  getChatChanges,
+  listChatWorkspace,
+  markChangesUndone,
   getAssistantMessage,
   getConversation,
   listConversations,
@@ -221,5 +225,139 @@ describe("AI conversations", { skip: databaseUrl ? false : "TEST_DATABASE_URL is
     assert.equal(rows.rows[0]?.count, 0);
     const messages = await pool.query("SELECT count(*)::int AS count FROM ai_messages WHERE conversation_id = $1", [added.conversation.id]);
     assert.equal(messages.rows[0]?.count, 0);
+  });
+
+  describe("the AI chat (the AI writes the pages itself)", () => {
+    it("keeps the work, the reply and the pages the turn changed", async () => {
+      const pageId = await newPage();
+      const added = await appendChatTurn(pool, OWNER, {
+        pageId,
+        input: "見出しを付けて",
+        reply: "見出しを 2 つ付けました。",
+        items: [
+          { kind: "narration", text: "本文を読みます。" },
+          { kind: "tool", tool: "read_page", page: "合成のページ", ok: true },
+          { kind: "tool", tool: "write_page", page: "合成のページ", ok: true },
+        ],
+        result: "done",
+        changes: [{ pageId, change: "edited", version: 1, revision: 2, chars: 120, delta: 20 }],
+      });
+      assert.ok(added);
+      assert.equal(added.request.text, "見出しを付けて");
+      assert.equal(added.result.result, "done");
+      assert.equal(added.result.resultCode, null);
+      assert.equal((added.result.items as unknown[]).length, 3);
+      assert.deepEqual(
+        added.result.changes.map((change) => [change.pageId, change.change, change.version, change.revision, change.delta, change.undoneAt]),
+        [[pageId, "edited", 1, 2, 20, null]],
+      );
+
+      const opened = await getConversation(pool, OWNER, pageId, added.conversation.id);
+      assert.equal(opened?.messages.length, 2);
+      assert.equal(opened?.messages[1]?.changes.length, 1);
+      assert.equal(opened?.messages[1]?.changes[0]?.title, "合成のページ");
+    });
+
+    it("keeps one row per page in a turn (the version stays the one from before the turn)", async () => {
+      const pageId = await newPage();
+      const added = await appendChatTurn(pool, OWNER, {
+        pageId,
+        input: "二回直して",
+        reply: "直しました。",
+        items: [],
+        result: "done",
+        changes: [
+          { pageId, change: "edited", version: 1, revision: 2, chars: 100, delta: 10 },
+          { pageId, change: "edited", version: 2, revision: 3, chars: 90, delta: -10 },
+        ],
+      });
+      assert.ok(added);
+      assert.deepEqual(
+        added.result.changes.map((change) => [change.version, change.revision, change.chars, change.delta]),
+        [[1, 3, 90, 0]],
+      );
+    });
+
+    it("answers the changes only to the owner, and marks the ones that were put back", async () => {
+      const pageId = await newPage();
+      const added = await appendChatTurn(pool, OWNER, {
+        pageId,
+        input: "直して",
+        reply: "直しました。",
+        items: [],
+        result: "done",
+        changes: [{ pageId, change: "edited", version: 1, revision: 2, chars: 10, delta: 1 }],
+      });
+      assert.ok(added);
+      assert.equal((await getChatChanges(pool, OTHER, pageId, added.result.id)), null);
+      assert.equal((await getChatChanges(pool, OWNER, randomUUID(), added.result.id)), null);
+      assert.equal((await getChatChanges(pool, OWNER, pageId, added.result.id))?.length, 1);
+
+      assert.equal(await markChangesUndone(pool, OTHER, added.result.id, [pageId]), 0);
+      assert.equal(await markChangesUndone(pool, OWNER, added.result.id, [pageId]), 1);
+      // 戻したものは「戻すもの」には出ない（二度は戻さない）
+      assert.deepEqual(await getChatChanges(pool, OWNER, pageId, added.result.id), []);
+      assert.equal(await markChangesUndone(pool, OWNER, added.result.id, [pageId]), 0);
+      const all = await getChatChanges(pool, OWNER, pageId, added.result.id, { undone: true });
+      assert.ok(all?.[0]?.undoneAt);
+    });
+
+    it("records a turn that failed or stopped, with the short code", async () => {
+      const pageId = await newPage();
+      const stopped = await appendChatTurn(pool, OWNER, {
+        pageId,
+        input: "長いことをして",
+        reply: "",
+        items: [],
+        result: "stopped",
+        resultCode: "quota_exceeded",
+      });
+      assert.equal(stopped?.result.result, "stopped");
+      assert.equal(stopped?.result.resultCode, "quota_exceeded");
+      // 返答が無いときも発言は残る（何が起きたかが会話に出る）
+      assert.equal(stopped?.result.text, "（返答はありません）");
+      await assert.rejects(
+        () => appendChatTurn(pool, OWNER, { pageId, input: "x", reply: "y", items: [], result: "unknown" as "done" }),
+        TypeError,
+      );
+      await assert.rejects(
+        () => appendChatTurn(pool, OWNER, { pageId, input: "x", reply: "y", items: [], result: "done", resultCode: "NOT A CODE" }),
+        TypeError,
+      );
+    });
+
+    it("refuses a change without the version it could be undone to", async () => {
+      const pageId = await newPage();
+      await assert.rejects(
+        () => appendChatTurn(pool, OWNER, { pageId, input: "x", reply: "y", items: [], result: "done", changes: [{ pageId, change: "edited", revision: 2, chars: 1, delta: 1 }] }),
+        TypeError,
+      );
+      assert.deepEqual(await listConversations(pool, OWNER, pageId), []);
+    });
+
+    it("opens a workspace of the page, its parent and its subpages — and nothing else", async () => {
+      const parent = await store.createPage(OWNER, { title: "合成の録音", kind: "rec" });
+      const page = await store.createPage(OWNER, { title: "記事本文" });
+      const child = await store.createPage(OWNER, { title: "下書き" });
+      const far = await store.createPage(OWNER, { title: "別の場所" });
+      await pool.query("UPDATE pages SET parent = $2 WHERE id = $1", [page.id, parent.id]);
+      await pool.query("UPDATE pages SET parent = $2 WHERE id = $1", [child.id, page.id]);
+
+      const workspace = await listChatWorkspace(pool, OWNER, page.id);
+      assert.deepEqual(
+        workspace?.map((item) => [item.title, item.open]).sort(),
+        [
+          ["下書き", false],
+          ["合成の録音", false],
+          ["記事本文", true],
+        ].sort(),
+      );
+      assert.ok(!workspace?.some((item) => item.id === far.id));
+      // 他人のページ・無いページ・ゴミ箱の中は null
+      assert.equal(await listChatWorkspace(pool, OTHER, page.id), null);
+      assert.equal(await listChatWorkspace(pool, OWNER, randomUUID()), null);
+      assert.ok(await store.deletePage(OWNER, page.id));
+      assert.equal(await listChatWorkspace(pool, OWNER, page.id), null);
+    });
   });
 });

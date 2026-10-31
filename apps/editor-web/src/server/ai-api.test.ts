@@ -141,6 +141,10 @@ function memoryConversations(pages: MemoryStore | null) {
     adopted: null,
     version: null,
     adoptedAt: null,
+    items: null,
+    result: null,
+    resultCode: null,
+    changes: [],
     createdAt: new Date().toISOString(),
     ...extra,
   });

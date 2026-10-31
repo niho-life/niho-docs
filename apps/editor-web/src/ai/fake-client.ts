@@ -1,4 +1,4 @@
-import type { AnthropicClient, CompleteInput, Completion } from "./anthropic";
+import type { AnthropicClient, CompleteInput, Completion, ToolCall, Turn } from "./anthropic";
 
 /**
  * 偽物の 1 往復（`EDITOR_AI_MODE=fake`。開発と CI だけ。本番では config.ts が受け付けない）。
@@ -6,6 +6,9 @@ import type { AnthropicClient, CompleteInput, Completion } from "./anthropic";
  *
  * 返すのは compose.ts が読める JSON（見出し 1 つと段落 2 つ）。プロンプトの中身は読まず、
  * 「## 頼むこと」の次の行（手順と段階の名前）と資料の先頭だけを写す。
+ *
+ * AI チャット（`converse`）は道具を順に呼ぶ: list_pages → read_page → write_page → 返答。
+ * 本物と同じ道を通すための決まった動きで、書き足すのは `[fake]` の印を付けた 1 段落だけ。
  */
 
 export const FAKE_CLIENT_MODEL = "fake";
@@ -35,9 +38,65 @@ function countChars(text: string): number {
   return Array.from(text).length;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 最後に呼んだ道具の名前と、その結果（messages の並びから読む）。 */
+function lastTool(messages: readonly unknown[]): { name: string; result: unknown } | null {
+  let name: string | null = null;
+  for (const message of messages) {
+    if (!isRecord(message) || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (!isRecord(block)) continue;
+      if (block.type === "tool_use" && typeof block.name === "string") name = block.name;
+      if (block.type === "tool_result" && name !== null) {
+        let result: unknown = null;
+        try {
+          result = JSON.parse(String(block.content));
+        } catch {
+          result = null;
+        }
+        return { name, result };
+      }
+    }
+  }
+  return null;
+}
+
+const FAKE_LINE = "[fake] AI チャットが足した段落です。";
+
+/** 偽物の道具の呼び出し（id は決定的）。 */
+function callTool(name: string, input: unknown, step: number): ToolCall {
+  return { id: `fake-tool-${step}`, name, input };
+}
+
 /** 決定的な偽物の 1 往復。usage は送った文字数・返した文字数の 1/4（切り上げ）。 */
 export function createFakeClient(): AnthropicClient {
+  const usageOf = (sent: number, returned: number) => ({ model: FAKE_CLIENT_MODEL, inputTokens: Math.ceil(sent / 4), outputTokens: Math.ceil(returned / 4) });
+  const converse = async (input: { system: string; messages: unknown[]; signal?: AbortSignal }): Promise<Turn> => {
+    input.signal?.throwIfAborted();
+    const sent = countChars(input.system) + countChars(JSON.stringify(input.messages));
+    const last = lastTool(input.messages);
+    const usage = usageOf(sent, 64);
+    if (last === null) return { text: "", toolCalls: [callTool("list_pages", {}, 1)], stopReason: "tool_use", usage };
+    if (last.name === "list_pages") {
+      const pages = isRecord(last.result) && Array.isArray(last.result.pages) ? last.result.pages : [];
+      const open = pages.find((page) => isRecord(page) && page.open === true && page.writable === true) ?? pages[0];
+      const id = isRecord(open) && typeof open.id === "string" ? open.id : "";
+      return { text: "開いているページを読みます。", toolCalls: [callTool("read_page", { page_id: id }, 2)], stopReason: "tool_use", usage };
+    }
+    if (last.name === "read_page") {
+      const body = isRecord(last.result) ? last.result : {};
+      const id = typeof body.id === "string" ? body.id : "";
+      const markdown = typeof body.markdown === "string" ? body.markdown : "";
+      const next = markdown.trim().length > 0 ? `${markdown.trim()}\n\n${FAKE_LINE}` : FAKE_LINE;
+      return { text: "", toolCalls: [callTool("write_page", { page_id: id, markdown: next }, 3)], stopReason: "tool_use", usage };
+    }
+    return { text: "[fake] 本文に 1 段落足しました。元に戻せます。", toolCalls: [], stopReason: "end_turn", usage };
+  };
   return {
+    converse,
     async complete(input: CompleteInput): Promise<Completion> {
       input.signal?.throwIfAborted();
       const asked = head(askedFor(input.user), HEAD_CHARS) || "（頼むことなし）";
@@ -50,7 +109,7 @@ export function createFakeClient(): AnthropicClient {
         ],
       });
       const sent = countChars(input.system) + countChars(input.user);
-      return { text, usage: { model: FAKE_CLIENT_MODEL, inputTokens: Math.ceil(sent / 4), outputTokens: Math.ceil(countChars(text) / 4) } };
+      return { text, usage: usageOf(sent, countChars(text)) };
     },
   };
 }

@@ -31,6 +31,10 @@ function stubClient(reply: () => Promise<{ text: string; usage: { model: string;
       calls.push(input);
       return reply();
     },
+    // 段階の実行器は 1 往復だけを使う（道具つきの往復は AI チャット）
+    converse: async () => {
+      throw new Error("the step executor must not use converse");
+    },
   };
   return { client, calls };
 }

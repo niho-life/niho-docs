@@ -36,6 +36,20 @@ export type AiConversationSummary = {
   lastText: string | null;
 };
 
+/** 1 回の依頼で直した・作ったページ（旧アプリの TurnPageChange。migration 0023）。 */
+export type AiMessageChange = {
+  pageId: string;
+  title: string;
+  change: "edited" | "created";
+  /** 直す前の本文が残った版の番号（作ったページは null）。 */
+  version: number | null;
+  /** 依頼が書き終えたときの revision（人があとから直したかを見るため）。 */
+  revision: number;
+  chars: number;
+  delta: number;
+  undoneAt: string | null;
+};
+
 export type AiMessage = {
   id: string;
   seq: number;
@@ -50,8 +64,19 @@ export type AiMessage = {
   /** 採用の前の本文が残った版の番号（採用していなければ null）。 */
   version: number | null;
   adoptedAt: string | null;
+  /** AI チャットの作業の要約（提案の発言は null）。 */
+  items: unknown | null;
+  /** 依頼の結果（done・failed・stopped。提案の発言は null）。 */
+  result: AiMessageResult | null;
+  /** 止まった理由の短い code。 */
+  resultCode: string | null;
+  /** その依頼で直した・作ったページ。 */
+  changes: AiMessageChange[];
   createdAt: string;
 };
+
+export const AI_MESSAGE_RESULTS = ["done", "failed", "stopped"] as const;
+export type AiMessageResult = (typeof AI_MESSAGE_RESULTS)[number];
 
 export type AiConversation = { conversation: AiConversationSummary; messages: AiMessage[] };
 
@@ -104,8 +129,36 @@ type MessageRow = {
   adopted: unknown;
   version: number | null;
   adopted_at: Date | null;
+  items: unknown;
+  result: AiMessageResult | null;
+  result_code: string | null;
   created_at: Date;
 };
+
+type ChangeRow = {
+  message_id: string;
+  page_id: string;
+  title: string | null;
+  change: "edited" | "created";
+  version: number | null;
+  revision: number;
+  chars: number;
+  delta: number;
+  undone_at: Date | null;
+};
+
+function toChange(row: ChangeRow): AiMessageChange {
+  return {
+    pageId: row.page_id,
+    title: row.title ?? "",
+    change: row.change,
+    version: row.version,
+    revision: row.revision,
+    chars: row.chars,
+    delta: row.delta,
+    undoneAt: row.undone_at ? row.undone_at.toISOString() : null,
+  };
+}
 
 function toSummary(row: ConversationRow): AiConversationSummary {
   return {
@@ -118,7 +171,7 @@ function toSummary(row: ConversationRow): AiConversationSummary {
   };
 }
 
-function toMessage(row: MessageRow): AiMessage {
+function toMessage(row: MessageRow, changes: readonly ChangeRow[] = []): AiMessage {
   return {
     id: row.id,
     seq: row.seq,
@@ -129,6 +182,10 @@ function toMessage(row: MessageRow): AiMessage {
     adopted: row.adopted ?? null,
     version: row.version,
     adoptedAt: row.adopted_at ? row.adopted_at.toISOString() : null,
+    items: row.items ?? null,
+    result: row.result,
+    resultCode: row.result_code,
+    changes: changes.filter((change) => change.message_id === row.id).map(toChange),
     createdAt: row.created_at.toISOString(),
   };
 }
@@ -138,7 +195,13 @@ const SUMMARY_SELECT = `SELECT c.id, c.page_id, c.created_at, c.updated_at,
          (SELECT m.text FROM ai_messages m WHERE m.conversation_id = c.id ORDER BY m.seq DESC LIMIT 1) AS last_text
     FROM ai_conversations c`;
 
-const MESSAGE_SELECT = "SELECT id, seq, role, text, preset, proposal, adopted, version, adopted_at, created_at FROM ai_messages";
+const MESSAGE_COLUMNS = "id, seq, role, text, preset, proposal, adopted, version, adopted_at, items, result, result_code, created_at";
+const MESSAGE_SELECT = `SELECT ${MESSAGE_COLUMNS} FROM ai_messages`;
+
+/** 発言に紐づく「直した・作ったページ」（題名は今の題名。消えたページの行は無い）。 */
+const CHANGES_SELECT = `SELECT c.message_id, c.page_id, p.title, c.change, c.version, c.revision, c.chars, c.delta, c.undone_at
+    FROM ai_message_changes c
+    JOIN pages p ON p.id = c.page_id`;
 
 async function pageExists(db: Queryable, owner: OwnerId, pageId: string): Promise<boolean> {
   const result = await db.query<{ id: string }>("SELECT id FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL", [owner, pageId]);
@@ -168,7 +231,9 @@ export async function getConversation(db: Queryable, owner: OwnerId, pageId: str
     `SELECT * FROM (${MESSAGE_SELECT} WHERE conversation_id = $1 ORDER BY seq DESC LIMIT $2) AS recent ORDER BY seq`,
     [conversationId, CONVERSATION_MESSAGE_LIMIT],
   );
-  return { conversation: toSummary(row), messages: messages.rows.map(toMessage) };
+  const ids = messages.rows.map((message) => message.id);
+  const changes = ids.length === 0 ? { rows: [] } : await db.query<ChangeRow>(`${CHANGES_SELECT} WHERE c.message_id = ANY($1::uuid[]) ORDER BY c.created_at`, [ids]);
+  return { conversation: toSummary(row), messages: messages.rows.map((message) => toMessage(message, changes.rows)) };
 }
 
 /** 本人のこのページの提案の発言（採用の前に確かめる）。無ければ null。 */
@@ -176,14 +241,16 @@ export async function getAssistantMessage(db: Queryable, owner: OwnerId, pageId:
   assertOwner(owner);
   if (!isPageId(pageId) || !isPageId(messageId)) return null;
   const result = await db.query<MessageRow>(
-    `SELECT m.id, m.seq, m.role, m.text, m.preset, m.proposal, m.adopted, m.version, m.adopted_at, m.created_at
+    `SELECT ${MESSAGE_COLUMNS.split(", ").map((column) => `m.${column}`).join(", ")}
        FROM ai_messages m
       WHERE m.id = $3 AND m.role = 'assistant'
         AND EXISTS (SELECT 1 FROM ai_conversations c WHERE c.id = m.conversation_id AND c.owner = $1 AND c.page_id = $2)`,
     [owner, pageId, messageId],
   );
   const row = result.rows[0];
-  return row ? toMessage(row) : null;
+  if (!row) return null;
+  const changes = await db.query<ChangeRow>(`${CHANGES_SELECT} WHERE c.message_id = $1 ORDER BY c.created_at`, [row.id]);
+  return toMessage(row, changes.rows);
 }
 
 async function inTransaction<T>(db: Database, work: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -241,12 +308,12 @@ export async function appendTurn(db: Database, owner: OwnerId, input: AiTurnInpu
     const seq = next.rows[0]!.seq;
     const request = await client.query<MessageRow>(
       `INSERT INTO ai_messages (conversation_id, seq, role, text, preset) VALUES ($1, $2, 'user', $3, $4)
-       RETURNING id, seq, role, text, preset, proposal, adopted, version, adopted_at, created_at`,
+       RETURNING ${MESSAGE_COLUMNS}`,
       [conversationId, seq, input.request.text, preset],
     );
     const result = await client.query<MessageRow>(
       `INSERT INTO ai_messages (conversation_id, seq, role, text, proposal) VALUES ($1, $2, 'assistant', $3, $4::jsonb)
-       RETURNING id, seq, role, text, preset, proposal, adopted, version, adopted_at, created_at`,
+       RETURNING ${MESSAGE_COLUMNS}`,
       [conversationId, seq + 1, input.result.text, JSON.stringify(input.result.proposal)],
     );
     const summary = await client.query<ConversationRow>(
@@ -258,6 +325,180 @@ export async function appendTurn(db: Database, owner: OwnerId, input: AiTurnInpu
     );
     return { conversation: toSummary(summary.rows[0]!), request: toMessage(request.rows[0]!), result: toMessage(result.rows[0]!) };
   });
+}
+
+/** AI チャットが読み書きできるページ（作業場）。 */
+export type ChatWorkspacePage = { id: string; title: string; kind: string; parent: string | null; open: boolean };
+
+/** 作業場に入れるページの数の上限（開いているページ・その親・そのサブページ）。 */
+export const CHAT_WORKSPACE_LIMIT = 50;
+
+/**
+ * AI チャットが読み書きできるページ（開いているページ・その親・そのサブページ）。
+ * 旧アプリが会話ごとに作った「隔離した作業場」にあたるもので、ここに無いページは道具から触れない。
+ * ページが本人のものでない・無い・ゴミ箱の中なら null。
+ */
+export async function listChatWorkspace(db: Queryable, owner: OwnerId, pageId: string): Promise<ChatWorkspacePage[] | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId)) return null;
+  const result = await db.query<{ id: string; title: string; kind: string; parent: string | null }>(
+    `SELECT id, title, kind, parent
+       FROM pages
+      WHERE owner = $1 AND deleted_at IS NULL
+        AND (id = $2 OR parent = $2 OR id = (SELECT parent FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL))
+      ORDER BY (id = $2) DESC, created_at
+      LIMIT $3`,
+    [owner, pageId, CHAT_WORKSPACE_LIMIT],
+  );
+  const pages = result.rows.map((row) => ({ id: row.id, title: row.title, kind: row.kind, parent: row.parent, open: row.id === pageId }));
+  return pages.some((page) => page.open) ? pages : null;
+}
+
+/** 1 回の依頼で直した・作ったページ（記録するときの入力）。 */
+export type ChatChangeInput = {
+  pageId: string;
+  change: "edited" | "created";
+  /** 直す前の本文が残った版の番号（直したページは必須）。 */
+  version?: number | null;
+  /** 依頼が書き終えたときの revision。 */
+  revision: number;
+  chars: number;
+  delta: number;
+};
+
+/**
+ * AI チャットの 1 回の依頼（人の指示 → AI の作業と返答）。`items` は作業の要約、`changes` は直した・作ったページ。
+ * 提案（appendTurn）と違い、ページは依頼の中で既に書き換わっている（ここは記録だけ）。
+ */
+export type ChatTurnInput = {
+  pageId: string;
+  conversationId?: string | null;
+  input: string;
+  reply: string;
+  items: readonly unknown[];
+  result: AiMessageResult;
+  resultCode?: string | null;
+  changes?: readonly ChatChangeInput[];
+};
+
+/**
+ * 依頼を会話に足す（人の発言と AI の発言、直した・作ったページ）。ページが本人のものでない・無い、
+ * 渡した会話がこのページのものでなければ null。同じページを何度書いても 1 行で、版は最初の 1 つ（依頼の前の本文）。
+ */
+export async function appendChatTurn(db: Database, owner: OwnerId, input: ChatTurnInput): Promise<AiTurn | null> {
+  assertOwner(owner);
+  if (!isPageId(input.pageId)) return null;
+  if (input.conversationId != null && !isPageId(input.conversationId)) return null;
+  if (!isMessageText(input.input)) throw new TypeError("editor-store: message text must be 1..4000 characters");
+  const reply = isMessageText(input.reply) ? input.reply : "";
+  if (!(AI_MESSAGE_RESULTS as readonly string[]).includes(input.result)) throw new TypeError("editor-store: unknown chat result");
+  const code = input.resultCode ?? null;
+  if (code !== null && !/^[a-z0-9_]{1,64}$/.test(code)) throw new TypeError("editor-store: result code must be a short code");
+  if (!Array.isArray(input.items) || !isMessageJson({ items: input.items })) throw new TypeError("editor-store: items must be a small JSON array");
+  const changes = input.changes ?? [];
+  for (const change of changes) {
+    if (!isPageId(change.pageId)) throw new TypeError("editor-store: change page must be a page id");
+    if (change.change !== "edited" && change.change !== "created") throw new TypeError("editor-store: unknown change");
+    if (change.change === "edited" && !Number.isSafeInteger(change.version ?? Number.NaN)) throw new TypeError("editor-store: an edited page needs the version it can be undone to");
+    if (!Number.isSafeInteger(change.chars) || change.chars < 0 || !Number.isSafeInteger(change.delta)) throw new RangeError("editor-store: chars and delta must be integers");
+    if (!Number.isSafeInteger(change.revision) || change.revision < 1) throw new RangeError("editor-store: revision must be a positive integer");
+  }
+
+  return inTransaction(db, async (client) => {
+    const page = await client.query<{ id: string }>("SELECT id FROM pages WHERE owner = $1 AND id = $2 AND deleted_at IS NULL FOR SHARE", [owner, input.pageId]);
+    if (page.rows.length === 0) return null;
+
+    let conversationId: string;
+    if (input.conversationId == null) {
+      const created = await client.query<{ id: string }>("INSERT INTO ai_conversations (owner, page_id) VALUES ($1, $2) RETURNING id", [owner, input.pageId]);
+      conversationId = created.rows[0]!.id;
+    } else {
+      const existing = await client.query<{ id: string }>(
+        "SELECT id FROM ai_conversations WHERE owner = $1 AND page_id = $2 AND id = $3 FOR UPDATE",
+        [owner, input.pageId, input.conversationId],
+      );
+      if (existing.rows.length === 0) return null;
+      conversationId = existing.rows[0]!.id;
+    }
+
+    const next = await client.query<{ seq: number }>("SELECT coalesce(max(seq), 0) + 1 AS seq FROM ai_messages WHERE conversation_id = $1", [conversationId]);
+    const seq = next.rows[0]!.seq;
+    const request = await client.query<MessageRow>(
+      `INSERT INTO ai_messages (conversation_id, seq, role, text) VALUES ($1, $2, 'user', $3) RETURNING ${MESSAGE_COLUMNS}`,
+      [conversationId, seq, input.input],
+    );
+    const answer = await client.query<MessageRow>(
+      `INSERT INTO ai_messages (conversation_id, seq, role, text, items, result, result_code)
+       VALUES ($1, $2, 'assistant', $3, $4::jsonb, $5, $6) RETURNING ${MESSAGE_COLUMNS}`,
+      [conversationId, seq + 1, reply.length > 0 ? reply : "（返答はありません）", JSON.stringify(input.items), input.result, code],
+    );
+    const messageId = answer.rows[0]!.id;
+    for (const change of changes) {
+      // 同じ依頼で同じページを何度書いても 1 行（版は最初の 1 つ＝依頼の前の本文）
+      await client.query(
+        `INSERT INTO ai_message_changes (message_id, page_id, change, version, revision, chars, delta)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (message_id, page_id) DO UPDATE
+            SET chars = EXCLUDED.chars,
+                delta = ai_message_changes.delta + EXCLUDED.delta,
+                revision = EXCLUDED.revision`,
+        [messageId, change.pageId, change.change, change.change === "edited" ? change.version : null, change.revision, change.chars, change.delta],
+      );
+    }
+    const summary = await client.query<ConversationRow>(
+      `UPDATE ai_conversations SET updated_at = clock_timestamp() WHERE id = $1
+       RETURNING id, page_id, created_at, updated_at,
+                 (SELECT count(*) FROM ai_messages m WHERE m.conversation_id = ai_conversations.id) AS messages,
+                 (SELECT m.text FROM ai_messages m WHERE m.conversation_id = ai_conversations.id ORDER BY m.seq DESC LIMIT 1) AS last_text`,
+      [conversationId],
+    );
+    const written = await client.query<ChangeRow>(`${CHANGES_SELECT} WHERE c.message_id = $1 ORDER BY c.created_at`, [messageId]);
+    return {
+      conversation: toSummary(summary.rows[0]!),
+      request: toMessage(request.rows[0]!),
+      result: toMessage(answer.rows[0]!, written.rows),
+    };
+  });
+}
+
+/**
+ * 依頼で直した・作ったページ（「元に戻す」が読む）。本人のこのページの会話の依頼でなければ null。
+ * まだ戻していないものだけを返す（`undone` を渡すと戻したものも含む）。
+ */
+export async function getChatChanges(db: Queryable, owner: OwnerId, pageId: string, messageId: string, options: { undone?: boolean } = {}): Promise<AiMessageChange[] | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId) || !isPageId(messageId)) return null;
+  const found = await db.query<{ id: string }>(
+    `SELECT m.id FROM ai_messages m
+      WHERE m.id = $3 AND m.role = 'assistant'
+        AND EXISTS (SELECT 1 FROM ai_conversations c WHERE c.id = m.conversation_id AND c.owner = $1 AND c.page_id = $2)`,
+    [owner, pageId, messageId],
+  );
+  if (found.rows.length === 0) return null;
+  const changes = await db.query<ChangeRow>(
+    `${CHANGES_SELECT} WHERE c.message_id = $1 ${options.undone ? "" : "AND c.undone_at IS NULL"} ORDER BY c.created_at`,
+    [messageId],
+  );
+  return changes.rows.map(toChange);
+}
+
+/** 戻したページに印を付ける（戻し終えてから呼ぶ）。戻した件数を返す。 */
+export async function markChangesUndone(db: Queryable, owner: OwnerId, messageId: string, pageIds: readonly string[]): Promise<number> {
+  assertOwner(owner);
+  if (!isPageId(messageId) || pageIds.length === 0) return 0;
+  if (!pageIds.every((id) => isPageId(id))) throw new TypeError("editor-store: page ids must be page ids");
+  const result = await db.query(
+    `UPDATE ai_message_changes AS c
+        SET undone_at = clock_timestamp()
+      WHERE c.message_id = $2 AND c.page_id = ANY($3::uuid[]) AND c.undone_at IS NULL
+        AND EXISTS (
+          SELECT 1 FROM ai_messages m
+            JOIN ai_conversations v ON v.id = m.conversation_id
+           WHERE m.id = c.message_id AND v.owner = $1
+        )`,
+    [owner, messageId, [...pageIds]],
+  );
+  return result.rowCount ?? 0;
 }
 
 export type AdoptionInput = {
