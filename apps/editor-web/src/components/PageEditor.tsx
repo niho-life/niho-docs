@@ -180,7 +180,7 @@ export function PageEditor(props: PageEditorProps) {
  */
 function EditorScreen(props: ScreenProps) {
   const { page, shared, setShared, reopen } = props;
-  const { attachPage } = useEditorFrame();
+  const { attachPage, registerTools } = useEditorFrame();
   const initialLang = page.lang ?? DEFAULT_PAGE_LANG;
   const [title, setTitle] = useState(page.title);
   const [lang, setLang] = useState<PageLang>(initialLang);
@@ -566,7 +566,8 @@ function EditorScreen(props: ScreenProps) {
       {unreadable && <p role="alert">本文を読み込めませんでした。この画面では本文を変更しません。</p>}
       <div className="be">
         <EditorContent editor={editor} />
-        <PageChrome editor={editor} onAi={() => editor && openAi(selectionRange(editor.state))} />
+        {/* ヘッダーに常設の書式の帯（ShellTools）を出すため、本文の操作を枠へ渡す（#37 T9） */}
+        <PageChrome editor={editor} onAi={() => editor && openAi(selectionRange(editor.state))} onTools={registerTools} />
       </div>
       <AiLayer editor={editor} bridge={aiBridge} kind={page.kind ?? "note"} lang={page.lang ?? "ja"} request={ai} onClose={() => setAi(null)} />
     </div>

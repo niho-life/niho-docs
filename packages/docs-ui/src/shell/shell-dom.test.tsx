@@ -60,7 +60,7 @@ describe("メニュー（Esc で閉じ、キーボードで動く）", () => {
       <ShellSidebar
         items={[]}
         newMenu={{ open, onToggle: () => setOpen((v) => !v), onClose: () => setOpen(false), onPick }}
-        me={{ name: "Mika Sato", caption: "mika@example.com", initial: "M", open: account, items: shellAccountItems(), onToggle: () => setAccount((v) => !v), onClose: () => setAccount(false), onSelect: () => setAccount(false) }}
+        me={{ name: "Mika Sato", initial: "M", open: account, items: shellAccountItems(), onToggle: () => setAccount((v) => !v), onClose: () => setAccount(false), onSelect: () => setAccount(false) }}
       />
     );
   }

@@ -1,7 +1,16 @@
-import { DEFAULT_EDITOR_SETTINGS, SETTINGS_LIMITS, cleanSettingsPatch, settingsProblem, type EditorSettings, type EditorSettingsPatch, type SettingsRecipe } from "@niho/editor-store";
+import {
+  DEFAULT_EDITOR_SETTINGS,
+  SETTINGS_LIMITS,
+  cleanSettingsPatch,
+  recipesProblem,
+  settingsProblem,
+  type EditorSettings,
+  type EditorSettingsPatch,
+  type SettingsRecipe,
+} from "@niho/editor-store";
 import { describe, expect, it } from "vitest";
 import type { AuthProvider } from "../auth/types";
-import { DEFAULT_RECIPES } from "../steps/recipes";
+import { DEFAULT_RECIPES, toRecipeInputs, type RecipeDef } from "../steps/recipes";
 import { getSettings, patchSettings, type SettingsApiDeps, type SettingsDto } from "./settings-api";
 
 const ORIGIN = "http://editor.test";
@@ -23,16 +32,32 @@ function authAs(userId: string | null): AuthProvider {
   };
 }
 
-/** 本物と同じ決まりの、覚えておくだけの store（渡した項目を入れ替える・検証を通らない値は投げる）。 */
+/**
+ * 本物と同じ決まりの、覚えておくだけの store（渡した項目を入れ替える・検証を通らない値は投げる）。
+ * 手順は表と同じで、行が無い人の最初の読み出しで既定の 3 つを入れる（recipe-source.ts と同じ決まり）。
+ */
 function memoryStore() {
   const rows = new Map<string, EditorSettings>();
+  const recipeRows = new Map<string, RecipeDef[]>();
   return {
     rows,
+    recipeRows,
     get: async (owner: string) => structuredClone(rows.get(owner) ?? DEFAULT_EDITOR_SETTINGS),
     save: async (owner: string, patch: EditorSettingsPatch) => {
       if (settingsProblem(patch)) throw new TypeError("not storable");
       const next = { ...(rows.get(owner) ?? DEFAULT_EDITOR_SETTINGS), ...structuredClone(cleanSettingsPatch(patch)) };
       rows.set(owner, next);
+      return structuredClone(next);
+    },
+    recipes: async (owner: string) => {
+      const seeded = recipeRows.get(owner) ?? structuredClone(DEFAULT_RECIPES as readonly RecipeDef[]);
+      recipeRows.set(owner, seeded as RecipeDef[]);
+      return structuredClone(seeded) as RecipeDef[];
+    },
+    saveRecipes: async (owner: string, list: readonly RecipeDef[]) => {
+      if (recipesProblem(toRecipeInputs(list))) throw new TypeError("not storable");
+      const next = structuredClone(list) as RecipeDef[];
+      recipeRows.set(owner, next);
       return structuredClone(next);
     },
   };
@@ -134,12 +159,17 @@ describe("PATCH /api/settings", () => {
     // 1 つに手を入れてから、応答の `defaults` で置き換えて送ると、保存した写しが消えて既定に戻る
     const edited = effective(before).map((recipe) => (recipe.id === "tpl-2" ? { ...recipe, name: "議事録（短め）" } : recipe));
     const saved = await settingsOf(await write({ recipes: edited }, d));
-    expect(store.rows.get(OWNER)?.recipes.map((recipe) => recipe.id)).toEqual(["tpl-2"]);
+    // 既定の 3 つも行として保存される（手を入れた分だけではない）
+    expect(store.recipeRows.get(OWNER)?.map((recipe) => [recipe.id, recipe.name])).toEqual([
+      ["tpl-1", "記事制作"],
+      ["tpl-2", "議事録（短め）"],
+      ["tpl-3", DEFAULT_RECIPES[2]!.name],
+    ]);
     const reset = effective(saved).map((recipe) => (recipe.id === "tpl-2" ? { id: recipe.id, ...saved.recipes[1]!.defaults! } : recipe));
     const back = await settingsOf(await write({ recipes: reset }, d));
     expect(back.recipes.map((recipe) => recipe.modified)).toEqual([false, false, false]);
     expect(back.recipes[1]?.name).toBe("議事録");
-    expect(store.rows.get(OWNER)?.recipes).toEqual([]);
+    expect(store.recipeRows.get(OWNER)).toEqual(DEFAULT_RECIPES);
   });
 
   it("keeps an edited 手順 and reports it as modified; sending the default values back clears the saved copy", async () => {
@@ -156,12 +186,12 @@ describe("PATCH /api/settings", () => {
       ["tpl-3", false],
     ]);
     expect(saved.recipes[1]?.name).toBe("議事録（短め）");
-    // 保存するのは手を入れたものだけ
-    expect(store.rows.get(OWNER)?.recipes.map((recipe) => recipe.id)).toEqual(["tpl-2"]);
+    // 工程のプロファイルは画面が送らないので、表の値がそのまま残る
+    expect(store.recipeRows.get(OWNER)?.[1]?.steps.map((step) => step.profile)).toEqual(DEFAULT_RECIPES[1]!.steps.map((step) => step.profile));
 
     const back = await settingsOf(await write({ recipes: effective(before) }, d));
     expect(back.recipes.map((recipe) => recipe.modified)).toEqual([false, false, false]);
-    expect(store.rows.get(OWNER)?.recipes).toEqual([]);
+    expect(store.recipeRows.get(OWNER)).toEqual(DEFAULT_RECIPES);
   });
 
   it("adds and duplicates 手順 after the defaults, and removes one by leaving it out", async () => {

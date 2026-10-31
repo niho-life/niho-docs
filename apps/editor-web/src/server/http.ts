@@ -22,6 +22,8 @@ export type ApiErrorCode =
   | "forbidden"
   | "not_found"
   | "published"
+  | "too_deep"
+  | "cycle"
   | "payload_too_large"
   | "unrestorable"
   | "unavailable"
@@ -34,6 +36,10 @@ const STATUS: Record<ApiErrorCode, number> = {
   not_found: 404,
   // 公開中のページは削除しない（先に公開をやめる。設計 §12）
   published: 409,
+  // フォルダの段の上限（フォルダ › ページ › 録音のサブページ）を超える移動
+  too_deep: 409,
+  // 自分自身・自分の子孫の下へ入れる移動
+  cycle: 409,
   payload_too_large: 413,
   // 今の形では保存できない古い版には戻さない
   unrestorable: 422,

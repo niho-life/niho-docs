@@ -6,11 +6,12 @@ import "niho-docs-ui/styles/shell.css";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageKind, PageLang, PageSummary, StepStatus } from "@niho/editor-store";
-import { EditorShell, ShellHeader, ShellSheet, ShellSidebar, shellAccountItems, type NewPageKind } from "niho-docs-ui/shell";
-import { listPagesRequest } from "@/lib/pages-client";
+import { EditorShell, ShellHeader, ShellMobileToolbar, ShellSheet, ShellSidebar, ShellTools, shellAccountItems, type NewPageKind, type ShellToolAction } from "niho-docs-ui/shell";
+import type { PageChromeTools } from "niho-docs-ui/page/PageChrome";
+import { listPagesRequest, movePageRequest } from "@/lib/pages-client";
 import { headerStatus } from "@/lib/save-status";
 import { useShortcuts } from "@/lib/shortcuts";
-import { arrangeSidebarItems, searchRows, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
+import { arrangeSidebarItems, folderOptions, searchRows, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
 import { usePageHistory } from "@/lib/use-page-history";
 import { usePageMenu, type AttachedPage } from "@/lib/use-page-menu";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
@@ -83,6 +84,11 @@ export type EditorFrameApi = {
   attachPage: (page: AttachedPage) => () => void;
   /** 開いているページのエディタの「今すぐ保存して待つ」（公開のシートが、開く前と送る前に使う）。返す関数で外す。 */
   registerPageSaver: (saveNow: () => Promise<boolean>) => () => void;
+  /**
+   * 本文の操作（PageChrome）を枠に登録する。ヘッダーに常設の書式の帯（ShellTools）を出すために使う。
+   * ページを閉じるときは null（帯は出したままで、押しても何もしない）。
+   */
+  registerTools: (tools: PageChromeTools | null) => void;
   /** 公開のシートを開く（ページを開いている画面だけで出る）。 */
   openPublish: () => void;
 };
@@ -97,6 +103,7 @@ const FrameContext = createContext<EditorFrameApi>({
   pageSaved: noop,
   pageCreated: noop,
   registerPageSaver: () => noop,
+  registerTools: noop,
   pageRemoved: noop,
   stepPagesChanged: noop,
   attachPage: () => noop,
@@ -225,6 +232,10 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [list, setList] = useState<ListState>({ pages: initial.pages, next: initial.next, opened: null, details: null, gone: new Set() });
   const [now, setNow] = useState(initial.now);
   const [collapsed, setCollapsed] = useState(false);
+  // 閉じているフォルダ（木の段。開いているのが既定）
+  const [closedFolders, setClosedFolders] = useState<ReadonlySet<string>>(() => new Set());
+  // フォルダへ入れられなかったときの一言（情報パネルのフォルダの下）
+  const [moveNote, setMoveNote] = useState<string | null>(null);
   // 狭い画面で一覧を出している path（path が変われば閉じる）
   const [listFor, setListFor] = useState<string | null>(null);
   // 情報パネル: デスクトップで開いているか（ページを替えても持つ）と、狭い画面で開いている path（path が変われば閉じる）
@@ -238,6 +249,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const publishSaved = useRef<(id: string) => void>(() => undefined);
   const publishOpen = useRef<() => void>(() => undefined);
   const pageSaver = useRef<(() => Promise<boolean>) | null>(null);
+  // 本文の操作（PageChrome が登録する。ヘッダーの常設の帯が使う）
+  const [tools, setTools] = useState<PageChromeTools | null>(null);
   // ページを削除するたびに増やす。検索の結果は削除の前の答えのことがあり、読み込んでいない子ページはここでは分からないので、
   // サーバーにもう一度聞く（その間も、この画面で消したと分かっているページは結果から外す）
   const [removedTick, setRemovedTick] = useState(0);
@@ -342,6 +355,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           if (pageSaver.current === saveNow) pageSaver.current = null;
         };
       },
+      registerTools: (next) => setTools(next),
       pageRemoved: (id) => {
         setRemovedTick((tick) => tick + 1);
         setList((current) => {
@@ -399,7 +413,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   );
   const frame = useMemo<EditorFrameApi>(() => ({ narrow, ...api }), [narrow, api]);
 
-  const focusMore = useCallback(() => frameRoot.current?.querySelector<HTMLButtonElement>('.es-dt button[aria-haspopup="menu"]')?.focus(), []);
+  // 常設の書式の帯にも aria-haspopup="menu" のボタンがあるので、「その他」は名前で選ぶ
+  const focusMore = useCallback(() => frameRoot.current?.querySelector<HTMLButtonElement>('.es-dt button[aria-label="その他"]')?.focus(), []);
   // 「…」の「リンクで共有」と「履歴」のシート（保存してから開く）
   const share = usePageShare({ page: attached, current: () => attachedRef.current });
   const history = usePageHistory({
@@ -441,8 +456,17 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const found = usePageSearch(search.open ? search.value : "", { refresh: removedTick });
   const hits = useMemo(() => found.results.filter((hit) => !list.gone.has(hit.id)), [found.results, list.gone]);
   const items = useMemo(
-    () => (searching ? searchRows(hits, now) : arrangeSidebarItems(list.pages, { now })),
-    [searching, hits, list.pages, now],
+    () => (searching ? searchRows(hits, now) : arrangeSidebarItems(list.pages, { now, collapsed: closedFolders })),
+    [searching, hits, list.pages, now, closedFolders],
+  );
+  const toggleFolder = useCallback(
+    (id: string) =>
+      setClosedFolders((current) => {
+        const next = new Set(current);
+        if (!next.delete(id)) next.add(id);
+        return next;
+      }),
+    [],
   );
 
   const select = (id: string) => {
@@ -492,6 +516,52 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     [],
   );
   const saveFirst = useCallback(() => pageSaver.current?.() ?? Promise.resolve(true), []);
+  /**
+   * ページをフォルダへ入れる・出す（情報パネルの「フォルダ」）。先に一覧の行を動かし、届かなければ戻して一言。
+   * 本文・revision は変わらないので、開いているエディタには触らない。
+   */
+  const movePage = useCallback(async (id: string, parent: string | null) => {
+    setMoveNote(null);
+    let before: string | null | undefined;
+    setList((current) => {
+      before = current.pages.find((page) => page.id === id)?.parent ?? current.opened?.parent ?? null;
+      return {
+        ...current,
+        pages: current.pages.map((page) => (page.id === id ? { ...page, parent } : page)),
+        opened: current.opened?.id === id ? { ...current.opened, parent } : current.opened,
+      };
+    });
+    try {
+      await movePageRequest(id, parent);
+    } catch {
+      const back = before ?? null;
+      setList((current) => ({
+        ...current,
+        pages: current.pages.map((page) => (page.id === id ? { ...page, parent: back } : page)),
+        opened: current.opened?.id === id ? { ...current.opened, parent: back } : current.opened,
+      }));
+      setMoveNote("このフォルダには入れられませんでした");
+    }
+  }, []);
+  /**
+   * ヘッダーに常設する書式の帯（ShellTools）。開いているページの本文の操作（PageChrome が登録したもの）につなぐ。
+   * 「録音」は本文の操作ではないので枠が受け、録音から始める画面へ移る。ページを開いていないあいだは出さない。
+   */
+  const editorBar = useMemo(
+    () =>
+      tools
+        ? {
+            textType: tools.textType,
+            blockMenuOpen: tools.blockMenuOpen,
+            onAction: (action: ShellToolAction) => {
+              if (action === "record") router.push("/p/new?from=recording");
+              else tools.run(action);
+            },
+          }
+        : null,
+    [tools, router],
+  );
+
   const publishing = usePagePublish({
     pageId: openPage?.id ?? null,
     isArticle: openPage?.kind === "article",
@@ -552,6 +622,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     : undefined;
   const railPage = attached && attached.id !== null && attached.id === railId ? attached : null;
   const railShown = railSummary !== undefined && (narrow ? railFor === pathname : railOpenWide);
+  // 入れられるフォルダ（読み込んである上の段のページ）。入れ先が無く、いま上の段にいるなら「フォルダ」の節を出さない
+  const railFolders = useMemo(() => (railSummary ? folderOptions(list.pages, railSummary.id) : []), [railSummary, list.pages]);
   const toggleRail = () => {
     if (narrow) setRailFor(railShown ? null : pathname);
     else setRailOpenWide(!railShown);
@@ -563,12 +635,16 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         <EditorShell
           sidebarOpen={sidebarOpen}
           railOpen={railShown}
+          toolbar={editorBar && narrow ? <ShellMobileToolbar {...editorBar} /> : undefined}
           rail={
             railShown && railSummary ? (
               <InfoPanel
                 summary={railSummary}
                 page={railPage}
                 author={initial.me}
+                folders={railFolders.length > 0 || railSummary.parent !== null ? railFolders : undefined}
+                folderNote={moveNote}
+                onFolder={(parent) => void movePage(railSummary.id, parent)}
                 recordingSec={list.details?.id === railSummary.id ? list.details.recordingSec : null}
                 open={settingsOpen}
                 onToggle={() => setSettingsOpen((open) => !open)}
@@ -582,6 +658,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               items={items}
               currentId={currentId}
               onSelect={select}
+              onToggleFolder={toggleFolder}
               onCollapse={collapse}
               newMenu={{ open: newMenuOpen, onToggle: () => setNewMenuOpen((open) => !open), onClose: () => setNewMenuOpen(false), onPick: pickNew }}
               search={{
@@ -604,7 +681,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 ...initial.me,
                 open: meOpen,
                 current: settings !== undefined,
-                items: shellAccountItems(0, settings?.item),
+                items: shellAccountItems(0, settings?.item, initial.me.name),
                 onToggle: () => setMeOpen((open) => !open),
                 onClose: () => setMeOpen(false),
                 onSelect: selectAccount,
@@ -615,6 +692,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
             <ShellHeader
               title={title}
               plain={settings !== undefined}
+              tools={editorBar && !narrow ? <ShellTools {...editorBar} /> : undefined}
               showListButton={!sidebarOpen}
               onToggleList={() => (narrow ? setListFor(pathname) : setCollapsed(false))}
               status={attached ? headerStatus(attached.status, publishing.status) : publishing.status}

@@ -3,6 +3,7 @@ import { getEditorSettings } from "@niho/editor-store";
 import { StoreUnavailable } from "@/components/Notice";
 import { SettingsView } from "@/components/SettingsView";
 import { getPool } from "@/server/db";
+import { ownerRecipes } from "@/server/recipe-source";
 import { requireSession } from "@/server/session";
 import { settingsDto } from "@/server/settings-api";
 import { settingsFacts } from "@/settings/facts";
@@ -20,6 +21,10 @@ export default async function SettingsPage() {
   const session = await requireSession("/settings");
   const pool = getPool();
   if (!pool) return <StoreUnavailable />;
-  const [settings, facts] = await Promise.all([getEditorSettings(pool, session.userId), settingsFacts(session)]);
-  return <SettingsView initial={settingsDto(settings)} facts={facts} />;
+  const [settings, recipes, facts] = await Promise.all([
+    getEditorSettings(pool, session.userId),
+    ownerRecipes(pool, session.userId),
+    settingsFacts(session),
+  ]);
+  return <SettingsView initial={settingsDto(settings, recipes)} facts={facts} />;
 }
