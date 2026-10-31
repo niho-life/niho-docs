@@ -30,8 +30,10 @@ const RUN_ROUTE = "POST /api/internal/steps/run";
 const SWEEP_ROUTE = "POST /api/internal/steps/sweep";
 /** run の本文の上限（`{ runId, stepIndex }` だけ）。 */
 export const RUN_BODY_LIMIT = 1024;
-/** 1 回の掃除で拾う数（期限切れ・queued それぞれ）。残りは次の回（5 分後）。 */
+/** 1 回の読み込みで拾う数（期限切れ・queued それぞれ）。 */
 export const SWEEP_LIMIT = 100;
+/** queued を続きから読む回数の上限（1 回の掃除で SWEEP_LIMIT × この数まで。attempt の期限 300 秒に収める）。届かない分は警告に出す。 */
+export const SWEEP_MAX_PAGES = 10;
 const MAX_STEP_INDEX = 2_147_483_647;
 const BEARER_PATTERN = /^Bearer ([A-Za-z0-9._-]{1,8192})$/i;
 
@@ -88,9 +90,24 @@ export function runStepTask(request: Request, deps: StepsWorkerDeps): Promise<Re
   });
 }
 
+/** queued の attempt を、古い順に続きから読んで全て（SWEEP_MAX_PAGES まで）。古い分が queued のまま残っても、後ろの分に届く。 */
+async function listAllQueued(steps: StepSweepStore): Promise<AttemptRef[]> {
+  const all: AttemptRef[] = [];
+  let after: Pick<AttemptRef, "runId" | "stepIndex"> | undefined;
+  for (let page = 0; page < SWEEP_MAX_PAGES; page += 1) {
+    const batch = await steps.listQueuedAttempts(after ? { limit: SWEEP_LIMIT, after } : { limit: SWEEP_LIMIT });
+    all.push(...batch);
+    const last = batch[batch.length - 1];
+    if (batch.length < SWEEP_LIMIT || !last) return all;
+    after = { runId: last.runId, stepIndex: last.stepIndex };
+  }
+  console.warn("editor-web: sweep read only the oldest queued steps", { route: SWEEP_ROUTE, read: all.length });
+  return all;
+}
+
 /**
  * POST /api/internal/steps/sweep — Cloud Scheduler が 5 分おきに呼ぶ掃除。本文は読まない。
- * (a) lease の切れた実行中の段階を queued に戻し（sweepExpiredLeases）、(b) 進行中の run の queued の段階を全て、同じ task の名前で積み直す。
+ * (a) lease の切れた実行中の段階を queued に戻し（sweepExpiredLeases）、(b) 進行中の run の queued の段階を古い順に続きから読み（1 回の掃除で SWEEP_LIMIT × SWEEP_MAX_PAGES まで）、同じ task の名前で積み直す。
  * 名前で重複が除かれるので、まだ積まれていれば ALREADY_EXISTS（数えない）、積み込みに失敗して消えていれば新しく積まれる。
  * 応答は新しく積んだ数。積み込みに失敗したものがあれば、残りを積んだうえで 500（次の回でまた拾う）。
  */
@@ -102,7 +119,7 @@ export function sweepStepTasks(request: Request, deps: StepsWorkerDeps): Promise
     if (!steps) return errorResponse("unavailable");
     const queue = deps.queue(checked.config);
     const expired = await steps.sweepExpiredLeases({ limit: SWEEP_LIMIT });
-    const queued = await steps.listQueuedAttempts({ limit: SWEEP_LIMIT });
+    const queued = await listAllQueued(steps);
     // (a) で戻したものは (b) にも出る。名前（世代を含む）で 1 つにする
     const targets = new Map<string, AttemptRef>();
     for (const ref of [...expired, ...queued]) targets.set(taskName(ref.runId, ref.stepIndex, ref.generation), ref);

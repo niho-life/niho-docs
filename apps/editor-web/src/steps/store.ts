@@ -59,7 +59,7 @@ export function pgStepRunStore(db: StepRunsDb): StepRunStore {
 /** 定期の掃除（worker の sweep の route）が使う操作。期限切れの lease を queued に戻し、queued の一覧を読む。 */
 export type StepSweepStore = {
   sweepExpiredLeases(options?: { limit?: number }): Promise<AttemptRef[]>;
-  listQueuedAttempts(options?: { limit?: number }): Promise<AttemptRef[]>;
+  listQueuedAttempts(options?: { limit?: number; after?: Pick<AttemptRef, "runId" | "stepIndex"> }): Promise<AttemptRef[]>;
 };
 
 export function pgStepSweepStore(db: StepRunsDb): StepSweepStore {

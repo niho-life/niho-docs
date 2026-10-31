@@ -698,6 +698,15 @@ describe("PostgreSQL queued attempts for the sweep", { skip: databaseUrl === und
     // 上限は 1〜1000 に丸める
     assert.deepEqual(await listQueuedAttempts(pool, { limit: 0 }), expected.slice(0, 1));
     assert.deepEqual(await listQueuedAttempts(pool, { limit: 5000 }), expected);
+    // 続きから（前の回の最後の次）。続きが無ければ空、最後まで読めば終わり
+    assert.deepEqual(await listQueuedAttempts(pool, { limit: 1, after: expected[0]! }), expected.slice(1, 2));
+    assert.deepEqual(await listQueuedAttempts(pool, { after: expected[1]! }), expected.slice(2));
+    assert.deepEqual(await listQueuedAttempts(pool, { after: expected[2]! }), []);
+    // 形の合わない続きは何も返さない
+    assert.deepEqual(await listQueuedAttempts(pool, { after: { runId: expected[0]!.runId, stepIndex: -1 } }), []);
+    assert.deepEqual(await listQueuedAttempts(pool, { after: { runId: "not-a-uuid", stepIndex: 0 } }), []);
+    // 続きの run が消えていれば何も返さない（次の掃除は先頭から読み直す）
+    assert.deepEqual(await listQueuedAttempts(pool, { after: { runId: "00000000-0000-4000-8000-000000000000", stepIndex: 0 } }), []);
     // 読むだけ（状態を変えない）
     assert.deepEqual(await listQueuedAttempts(pool), expected);
   });

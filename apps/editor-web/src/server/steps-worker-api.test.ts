@@ -7,7 +7,7 @@ import { MemoryStepRunStore } from "../steps/memory-store";
 import { MemoryTaskQueue, taskName, type TaskQueue } from "../steps/queue";
 import { findRecipe } from "../steps/recipes";
 import { verifyGoogleOidc, type OidcVerifyResult } from "./google-oidc";
-import { RUN_BODY_LIMIT, SWEEP_LIMIT, runStepTask, sweepStepTasks, type StepsWorkerDeps } from "./steps-worker-api";
+import { RUN_BODY_LIMIT, SWEEP_LIMIT, SWEEP_MAX_PAGES, runStepTask, sweepStepTasks, type StepsWorkerDeps } from "./steps-worker-api";
 
 // 合成の値だけ（本物のプロジェクト・URL・メール・トークンを入れない）
 const CONFIG: CloudTasksConfig = {
@@ -41,7 +41,12 @@ function setup(options: { executor?: StepExecutor; queue?: TaskQueue; config?: C
   const store = new MemoryStepRunStore();
   const sweep: SweepFake = { expired: [], queued: [] };
   const sweepExpiredLeases = vi.fn(async () => sweep.expired);
-  const listQueuedAttempts = vi.fn(async () => sweep.queued);
+  // 古い順の一覧を、after（前の回の最後）の次から limit 件
+  const listQueuedAttempts = vi.fn(async (options?: { limit?: number; after?: Pick<AttemptRef, "runId" | "stepIndex"> }) => {
+    const after = options?.after;
+    const start = after ? sweep.queued.findIndex((item) => item.runId === after.runId && item.stepIndex === after.stepIndex) + 1 : 0;
+    return sweep.queued.slice(start, start + (options?.limit ?? 100));
+  });
   const workerStore = Object.assign(store, { sweepExpiredLeases, listQueuedAttempts });
   const queue = options.queue ?? new MemoryTaskQueue();
   const verify = fakeVerifier();
@@ -324,6 +329,32 @@ describe("POST /api/internal/steps/sweep", () => {
     // もう一度呼んでも、積み済みのものは積まない（冪等）
     await expectJson(await sweepCall(deps).response, 200, { requeued: 0 });
     expect((queue as MemoryTaskQueue).size).toBe(0);
+  });
+
+  it("reads the queued steps page by page, so old ones that stay queued do not hide the newer ones", async () => {
+    const { deps, sweep, queue, listQueuedAttempts } = setup();
+    // 古い 100 件は Cloud Tasks に積まれたまま（名前の重複）。その後ろの 3 件は積み込みに失敗して消えている
+    const stuck = Array.from({ length: SWEEP_LIMIT }, (_, index) => ref(index % 3, 0));
+    const lost = [ref(0, 0), ref(1, 4), ref(2, 0)];
+    sweep.queued = [...stuck, ...lost];
+    for (const item of stuck) await queue.enqueue({ name: taskName(item.runId, item.stepIndex, item.generation), runId: item.runId, stepIndex: item.stepIndex });
+    (queue as MemoryTaskQueue).drain();
+
+    await expectJson(await sweepCall(deps).response, 200, { requeued: 3 });
+    expect(listQueuedAttempts).toHaveBeenCalledTimes(2);
+    expect(listQueuedAttempts).toHaveBeenNthCalledWith(1, { limit: SWEEP_LIMIT });
+    expect(listQueuedAttempts).toHaveBeenNthCalledWith(2, { limit: SWEEP_LIMIT, after: { runId: stuck[SWEEP_LIMIT - 1]!.runId, stepIndex: stuck[SWEEP_LIMIT - 1]!.stepIndex } });
+    expect((queue as MemoryTaskQueue).drain().map((task) => task.runId)).toEqual(lost.map((item) => item.runId));
+  });
+
+  it("stops reading after SWEEP_MAX_PAGES pages and says so", async () => {
+    const { deps, sweep, listQueuedAttempts } = setup();
+    sweep.queued = Array.from({ length: SWEEP_LIMIT * (SWEEP_MAX_PAGES + 1) }, (_, index) => ref(index % 3, 0));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await sweepCall(deps).response;
+    expect(listQueuedAttempts).toHaveBeenCalledTimes(SWEEP_MAX_PAGES);
+    expect(warn).toHaveBeenCalledWith("editor-web: sweep read only the oldest queued steps", { route: "POST /api/internal/steps/sweep", read: SWEEP_LIMIT * SWEEP_MAX_PAGES });
+    warn.mockRestore();
   });
 
   it("does not read the body", async () => {
