@@ -18,6 +18,8 @@ export type TranscriptionSweepStore = {
   failStale: (options: { olderThanSec: number; now: Date }) => Promise<string[]>;
   /** まだ queued の run（積み直す対象。`olderThan` より前に作られたものだけ）。 */
   listQueued: (options: { olderThan: Date; limit: number }) => Promise<{ id: string; generation: number }[]>;
+  /** 積み直す前に世代を 1 つ進める（新しい世代。queued でなくなっていれば null）。 */
+  requeue: (runId: string, generation: number) => Promise<number | null>;
 };
 
 /** 実行の準備（エンジン・保存先・DB・積み直し先が揃ったもの）。 */
@@ -116,10 +118,12 @@ export function runTranscriptionTask(request: Request, deps: TranscriptionWorker
  * POST /api/internal/transcription/sweep — Cloud Scheduler が 5 分おきに呼ぶ掃除。本文は読まない。
  * (a) 時間切れ ＋ 余裕を過ぎた有効な run を失敗にする（running は `engine_timeout`、queued は `internal`。実行する側が落ちた・
  *     積めなかったまま残ったもの。音声は消さないので「もう一度」ができる）。
- * (b) まだ queued の run（60 秒より前に作られたもの）を、開始と同じ task の名前で積み直す。名前で重複が除かれるので、まだ積まれて
- *     いれば ALREADY_EXISTS（数えない）、積み込みに失敗して消えていれば新しく積まれる。
+ * (b) まだ queued の run（60 秒より前に作られたもの）を積み直す。**積む前に世代を 1 つ進める**（requeue）ので、task の名前は
+ *     前の task と必ず別になる。Cloud Tasks は消した task の名前を最大 24 時間使わせないため、同じ名前で積み直すと「まだ積まれて
+ *     いる（ALREADY_EXISTS）」と「試行を使い切って消えた」の区別がつかず、取りこぼした run がその間だまって止まる。
+ *     世代を進められなかった run（その間に claim された・終わった）は積まない（数えない）。
  * (a) を先にするので、(b) で失敗にした run を積み直すことはない。応答は失敗にした数と新しく積んだ数。
- * 積み込みに失敗したものがあれば、残りを積んだうえで 500（次の回でまた拾う）。
+ * 積み込みに失敗したものがあれば、残りを積んだうえで 500（次の回でまた拾う。世代は進んだままなので、次も新しい名前で積める）。
  */
 export function sweepTranscriptionRuns(request: Request, deps: TranscriptionWorkerDeps): Promise<Response> {
   return guarded(SWEEP_ROUTE, async () => {
@@ -136,7 +140,10 @@ export function sweepTranscriptionRuns(request: Request, deps: TranscriptionWork
     let failure: string | undefined;
     for (const run of queued) {
       try {
-        const result = await runner.queue.enqueue({ name: transcriptionTaskName(run.id, run.generation), runId: run.id });
+        // 世代を進めてから積む（進められなければ、その run はもう queued ではない）
+        const generation = await runner.sweep.requeue(run.id, run.generation);
+        if (generation === null) continue;
+        const result = await runner.queue.enqueue({ name: transcriptionTaskName(run.id, generation), runId: run.id });
         if (!result.deduplicated) requeued += 1;
       } catch (error) {
         unqueued += 1;

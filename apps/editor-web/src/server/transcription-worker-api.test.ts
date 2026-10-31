@@ -52,6 +52,8 @@ function setup(
     queued?: QueuedRun[];
     stale?: string[];
     enqueue?: () => Promise<{ deduplicated: boolean }>;
+    /** 世代を進められない run の id（その間に claim された・終わった）。 */
+    lost?: string[];
   } = {},
 ) {
   const execute = vi.fn(async (): Promise<ExecuteRunOutcome> => options.outcome ?? { status: "succeeded" });
@@ -59,16 +61,20 @@ function setup(
   const listQueued = vi.fn(async ({ olderThan, limit }: { olderThan: Date; limit: number }) =>
     (options.queued ?? []).filter((run) => run.createdAt < olderThan.getTime()).slice(0, limit),
   );
+  // 本物と同じ約束: queued のままなら世代を 1 つ進めて返し、そうでなければ null
+  const requeue = vi.fn<TranscriptionSweepStore["requeue"]>(async (runId, generation) =>
+    (options.lost ?? []).includes(runId) ? null : generation + 1,
+  );
   const enqueue = vi.fn<TranscriptionQueue["enqueue"]>(options.enqueue ?? (async () => ({ deduplicated: false })));
   const verify = fakeVerifier();
-  const runner: TranscriptionWorkerRunner = { execute, sweep: { failStale, listQueued }, queue: { enqueue }, timeoutSec: TIMEOUT_SEC };
+  const runner: TranscriptionWorkerRunner = { execute, sweep: { failStale, listQueued, requeue }, queue: { enqueue }, timeoutSec: TIMEOUT_SEC };
   const deps: TranscriptionWorkerDeps = {
     config: () => (options.config === undefined ? CONFIG : options.config),
     verify,
     runner: () => (options.runner === "none" ? null : runner),
     now: () => NOW,
   };
-  return { deps, execute, failStale, listQueued, enqueue, verify };
+  return { deps, execute, failStale, listQueued, requeue, enqueue, verify };
 }
 
 /** 本文を読まれたかどうかを数える要求（highWaterMark 0 なので、読まれるまで pull されない）。 */
@@ -192,18 +198,57 @@ describe("the transcription worker routes", () => {
       { id: RUN_ID, generation: 0, createdAt: NOW - 10 * 60_000 },
       { id: OTHER_RUN_ID, generation: 0, createdAt: NOW - 5 * 60_000 },
     ];
-    const { deps, failStale, listQueued, enqueue } = setup({ queued, stale: ["3b0f2c5e-9a1e-4a7f-8c2d-5e6f7a8b9c01"] });
+    const { deps, failStale, listQueued, requeue, enqueue } = setup({ queued, stale: ["3b0f2c5e-9a1e-4a7f-8c2d-5e6f7a8b9c01"] });
     const response = await sweepTranscriptionRuns(sweepRequest().request, deps);
     expect(response.status).toBe(200);
     expect(await jsonOf(response)).toEqual({ failed: 1, requeued: 2 });
     // 取り残しの判定は、時間切れそのものではなく時間切れ ＋ 余裕（実行中の run を横から奪わない）
     expect(failStale).toHaveBeenCalledWith({ olderThanSec: TIMEOUT_SEC + STALE_MARGIN_SECONDS, now: new Date(NOW) });
     expect(listQueued).toHaveBeenCalledWith({ olderThan: new Date(NOW - REQUEUE_GRACE_MS), limit: SWEEP_LIMIT });
-    // 開始が積むのと同じ名前（世代を含む）なので、まだ積まれていれば Cloud Tasks が重複として拒む
-    expect(enqueue.mock.calls.map((call) => call[0])).toEqual([
-      { name: `${RUN_ID}-0`, runId: RUN_ID },
-      { name: `${OTHER_RUN_ID}-0`, runId: OTHER_RUN_ID },
+    // 積む前に世代が進むので、名前は前の task と必ず別になる（消えた task の名前は最大 24 時間ふさがる）
+    expect(requeue.mock.calls).toEqual([
+      [RUN_ID, 0],
+      [OTHER_RUN_ID, 0],
     ]);
+    expect(enqueue.mock.calls.map((call) => call[0])).toEqual([
+      { name: `${RUN_ID}-1`, runId: RUN_ID },
+      { name: `${OTHER_RUN_ID}-1`, runId: OTHER_RUN_ID },
+    ]);
+  });
+
+  it("requeues a run whose task used up its attempts, under a name the deleted task does not hold", async () => {
+    // 3 回の配信を使い切った task は Cloud Tasks から消えるが、その名前（<run>-0）は最大 24 時間ふさがる。
+    // 同じ名前で積み直すと ALREADY_EXISTS が返り、消えた task と生きている task の区別がつかない（run が 24 時間止まる）。
+    const queued = [{ id: RUN_ID, generation: 0, createdAt: NOW - 20 * 60_000 }];
+    const taken = new Set([`${RUN_ID}-0`]);
+    const { deps, requeue, enqueue } = setup({
+      queued,
+      enqueue: async () => {
+        throw new Error("the fake queue is replaced below");
+      },
+    });
+    enqueue.mockImplementation(async (task) => {
+      if (taken.has(task.name)) return { deduplicated: true };
+      taken.add(task.name);
+      return { deduplicated: false };
+    });
+    const response = await sweepTranscriptionRuns(sweepRequest().request, deps);
+    expect(response.status).toBe(200);
+    // 消えた名前ではなく、世代を進めた新しい名前で積まれる（＝この回で拾い直せている）
+    expect(requeue).toHaveBeenCalledWith(RUN_ID, 0);
+    expect(enqueue).toHaveBeenCalledWith({ name: `${RUN_ID}-1`, runId: RUN_ID });
+    expect(await jsonOf(response)).toEqual({ failed: 0, requeued: 1 });
+  });
+
+  it("does not enqueue a run that stopped being queued while the sweep was reading", async () => {
+    const queued = [
+      { id: RUN_ID, generation: 0, createdAt: NOW - 10 * 60_000 },
+      { id: OTHER_RUN_ID, generation: 0, createdAt: NOW - 9 * 60_000 },
+    ];
+    const { deps, enqueue } = setup({ queued, lost: [RUN_ID] });
+    const response = await sweepTranscriptionRuns(sweepRequest().request, deps);
+    expect(await jsonOf(response)).toEqual({ failed: 0, requeued: 1 });
+    expect(enqueue.mock.calls.map((call) => call[0])).toEqual([{ name: `${OTHER_RUN_ID}-1`, runId: OTHER_RUN_ID }]);
   });
 
   it("leaves a run that was just created to the start that is still enqueueing it", async () => {
@@ -215,7 +260,7 @@ describe("the transcription worker routes", () => {
   });
 
   it("does not count a task that is already queued as requeued", async () => {
-    const queued = [{ id: RUN_ID, generation: 0, createdAt: NOW - 10 * 60_000 }];
+    const queued = [{ id: RUN_ID, generation: 1, createdAt: NOW - 10 * 60_000 }];
     const { deps } = setup({ queued, enqueue: async () => ({ deduplicated: true }) });
     const response = await sweepTranscriptionRuns(sweepRequest().request, deps);
     expect(response.status).toBe(200);

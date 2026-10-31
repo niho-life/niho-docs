@@ -251,13 +251,13 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 
 **鍵**は AI（§10）と同じ手順です。版を無効にして `deploy.sh --no-build`（ログに `transcription: off`）。回すときは新しい版を足して配備し、古い版を無効にします。
 
-**呼び出し口**を止めるときは、`deploy.env` の `TRANSCRIBE_MODE` を空にして `deploy.sh --no-build`（開始は 503、worker の route は 404 になる）。あわせて掃除を止めるなら `gcloud scheduler jobs pause niho-editor-transcribe-sweep --location <region>`（戻すときは `resume`）。`transcribe-infra.sh` を流し直しても、止めた状態は保たれます。積まれている task を止めるなら `gcloud tasks queues pause niho-editor-transcribe --location <region>`（任意。止めなくても worker の route が 404 を返し、3 回の試行で消える。run は queued のまま残り、時間切れ ＋ 5 分を過ぎたら掃除が失敗にする）。
+**呼び出し口**を止めるときは、`deploy.env` の `TRANSCRIBE_MODE` を空にして `deploy.sh --no-build`（開始は 503、worker の route は 404 になる）。あわせて掃除を止めるなら `gcloud scheduler jobs pause niho-editor-transcribe-sweep --location <region>`（戻すときは `resume`）。`transcribe-infra.sh` を流し直しても、止めた状態は保たれます。積まれている task を止めるなら `gcloud tasks queues pause niho-editor-transcribe --location <region>`（任意。止めなくても worker の route が 404 を返し、3 回の試行で消える。run は queued のまま残るが、掃除も 404 になるので積み直されず、呼び出し口を戻したときに掃除が拾う）。
 
 ### 呼び出し口の構成（`TRANSCRIBE_MODE=cloud-tasks`）
 
 ```text
 画面 ── POST /api/pages/{id}/recording/transcribe ──▶ niho-editor（受付: run を queued で作り、task を積む）
-                                               │ tasks.create（名前 = <run>-<世代>。同じ名前は ALREADY_EXISTS ＝積み済み）
+                                               │ tasks.create（名前 = <run>-<世代>。世代は claim と積み直しのたびに進む）
                                                ▼
                                   Cloud Tasks キュー niho-editor-transcribe
                                                │ POST /api/internal/transcription/run（OIDC: niho-editor-tasks、audience = run.app の URL）
@@ -266,7 +266,7 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 
 Cloud Scheduler niho-editor-transcribe-sweep ── 5 分おき POST /api/internal/transcription/sweep（同じ OIDC）──▶ niho-editor
     (a) 時間切れ ＋ 5 分を過ぎた有効な run を失敗にする（running は engine_timeout、queued は internal）
-    (b) まだ queued の run（1 分より前に作られたもの）を同じ名前で積み直す（積み済みなら重複で無視される）
+    (b) まだ queued の run（1 分より前に作られたもの）を、世代を 1 つ進めた新しい名前で積み直す
 ```
 
 | 資源 | 名前（既定） | 内容 |
@@ -297,6 +297,7 @@ Cloud Scheduler niho-editor-transcribe-sweep ── 5 分おき POST /api/intern
 | Cloud Run の 1 要求 | 時間切れ ＋ 2 分（既定 1320 秒。`TRANSCRIBE_MODE` が空なら 300 秒。上限 3600 秒） | `deploy.sh` の `--timeout`（`lib.sh` の `service_request_timeout`） |
 | 1 つの task（`dispatchDeadline`） | 時間切れ ＋ 2 分（上限 1800 秒＝Cloud Tasks の決まり） | アプリが積むときに（`src/transcription/cloud-tasks.ts`） |
 | 掃除が取り残しと見なす | 時間切れ ＋ 5 分 | `src/server/transcription-worker-api.ts` の `STALE_MARGIN_SECONDS` |
+| 消した task の名前が空くまで | 最大 24 時間（Cloud Tasks の決まり） | 待たずに済むよう、掃除は積む前に run の世代を 1 つ進める（`requeueRun`） |
 
 `TRANSCRIBE_TIMEOUT_SEC` を 1700 秒より長くすると、task の上限（1800 秒）が先に来ます。その場合 Cloud Tasks は task を失敗と見て積み直しますが、run は `running` のままなので claim できず、2 本目は何もせず終わります（二重に起こすことはない）。長い音声を扱うときも、まず音声の上限（`apps/editor-web/src/recording/audio-limits.ts`）に収まるかを見てください。超えたら保存の前に断ります。クラウドに置いた音声は 30 日で消えます（バケットのライフサイクル規則）。
 
@@ -309,7 +310,7 @@ Cloud Scheduler niho-editor-transcribe-sweep ── 5 分おき POST /api/intern
 
 ### 失敗の見方
 
-- **Cloud Tasks のキュー**（コンソールの Cloud Tasks → `niho-editor-transcribe`）: 積まれている数と試行の回数。worker の route が 200 以外を返した task は 3 回まで試され、その後消える。run は queued のまま残り、掃除が拾う（ただし Cloud Tasks は同じ名前を最大 1 時間使わせないので、拾われるのはその後。それまでに時間切れ ＋ 5 分を過ぎれば、掃除が失敗にする）。
+- **Cloud Tasks のキュー**（コンソールの Cloud Tasks → `niho-editor-transcribe`）: 積まれている数と試行の回数。worker の route が 200 以外を返した task は 3 回まで試され、その後消える。run は queued のまま残り、**次の掃除（5 分以内）がそのまま拾い直す**。**Cloud Tasks は消した task の名前を最大 24 時間使わせない**ので、掃除は積む前に run の世代を 1 つ進め、前の task とは別の名前（`<run>-<世代>`）で積む。それでも拾えないまま時間切れ ＋ 5 分を過ぎれば、掃除が失敗にする（画面から「もう一度」）。
 - **Cloud Run のログ**（短い code だけ。トークン・本文・クレームの値・音声・鍵は出さない）:
   - `editor-web: transcription worker request refused`: 検証に通らなかった（`code` は `missing_token`・`bad_audience`・`bad_email`・`expired`・`bad_signature`・`jwks_unavailable` など）。Scheduler・Cloud Tasks からの要求でこれが出るなら、`EDITOR_TRANSCRIBE_WORKER_URL` と `--oidc-token-audience`、`TASKS_SA` の食い違いを疑う。
   - `editor-web: transcription dispatch failed`: 開始が task を積めなかった（run は失敗にして、画面から「もう一度」ができる）。実行 ID の `roles/cloudtasks.enqueuer` と、キューが止まっていないかを見る。

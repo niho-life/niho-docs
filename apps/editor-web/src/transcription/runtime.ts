@@ -1,5 +1,5 @@
 import "server-only";
-import { failRun, listQueuedRuns, sweepStaleRuns, type Connectable, type Queryable } from "@niho/editor-store";
+import { failRun, listQueuedRuns, requeueRun, sweepStaleRuns, type Connectable, type Queryable } from "@niho/editor-store";
 import type { TranscriptionWorkerRunner } from "../server/transcription-worker-api";
 import { getStorage } from "../storage/runtime";
 import type { ObjectStorage } from "../storage/types";
@@ -98,6 +98,7 @@ export function getTranscriptionWorkerRunner(pool: Connectable & Queryable, env:
     sweep: {
       failStale: ({ olderThanSec, now }) => sweepStaleRuns(pool, now, olderThanSec),
       listQueued: (options) => listQueuedRuns(pool, options),
+      requeue: (runId, generation) => requeueRun(pool, runId, generation),
     },
     queue: transcriptionQueue(config, parts.timeoutMs),
     timeoutSec: Math.ceil(parts.timeoutMs / 1000),

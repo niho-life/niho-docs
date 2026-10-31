@@ -17,6 +17,7 @@ import {
   finishRun,
   latestRun,
   listQueuedRuns,
+  requeueRun,
   sweepStaleRuns,
   transcriptionStatus,
   type EnqueueTranscriptionInput,
@@ -137,6 +138,7 @@ describe("transcription runs without a database", () => {
       assert.equal(await claimRun(untouchable, id), null, id);
       assert.equal(await finishRun(untouchable, id, 1, { segments: RESULT, durationSec: null }), "stale", id);
       assert.equal(await failRun(untouchable, id, 1, "internal"), false, id);
+      assert.equal(await requeueRun(untouchable, id, 0), null, id);
       assert.equal(await transcriptionStatus(untouchable, OWNER, id), null, id);
       assert.equal(await latestRun(untouchable, OWNER, id), null, id);
     }
@@ -162,6 +164,8 @@ describe("transcription runs without a database", () => {
     await assert.rejects(() => sweepStaleRuns(untouchable, new Date(Number.NaN), 60), TypeError);
     await assert.rejects(() => listQueuedRuns(untouchable, { olderThan: new Date(Number.NaN) }), TypeError);
     await assert.rejects(() => listQueuedRuns(untouchable, { olderThan: "2026-10-31" as never }), TypeError);
+    await assert.rejects(() => requeueRun(untouchable, id, -1), TypeError);
+    await assert.rejects(() => requeueRun(untouchable, id, 1.5), TypeError);
   });
 });
 
@@ -490,35 +494,63 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
   });
 
   it("lists the runs that are still queued, oldest first, without the ones a start may still be enqueueing", async () => {
+    // 掃除は表の全体を読む（1 人のページに絞らない）ので、前のテストが残した queued の run もいっしょに返る。
+    // ここで確かめるのは、このテストが作った run についての並びと有無。2 時間・1 時間前にずらすので、
+    // この 2 つがいちばん古い queued になる（他のテストの run はこの実行の中で作られた＝数分以内）。
     const olderPage = await uploadedRecording(pool);
     const older = await enqueueTranscription(pool, OWNER, olderPage, run());
     assert.ok(older?.status === "created");
     const newerPage = await uploadedRecording(pool);
     const newer = await enqueueTranscription(pool, OWNER, newerPage, run());
     assert.ok(newer?.status === "created");
-    // 掃除が拾うのは、積んでいる最中でない（少し前に作られた）run だけ
-    await pool.query("UPDATE transcription_runs SET created_at = created_at - interval '10 minutes' WHERE id = $1", [older.run.id]);
-    await pool.query("UPDATE transcription_runs SET created_at = created_at - interval '5 minutes' WHERE id = $1", [newer.run.id]);
+    await pool.query("UPDATE transcription_runs SET created_at = created_at - interval '2 hours' WHERE id = $1", [older.run.id]);
+    await pool.query("UPDATE transcription_runs SET created_at = created_at - interval '1 hour' WHERE id = $1", [newer.run.id]);
     const runningPage = await uploadedRecording(pool);
     const running = await claimed(pool, runningPage);
+    const mine = new Set([older.run.id, newer.run.id, running.id]);
+    const minesOf = (rows: { id: string }[]) => rows.filter((item) => mine.has(item.id)).map((item) => item.id);
 
-    const queued = await listQueuedRuns(pool, { olderThan: new Date() });
+    const queued = await listQueuedRuns(pool, { olderThan: new Date(), limit: 1000 });
+    assert.deepEqual(minesOf(queued), [older.run.id, newer.run.id], "oldest first, and a claimed run is not in the list");
+    // まだ claim も積み直しもされていないので世代 0（開始が積んだ task と同じ名前）
     assert.deepEqual(
-      queued.map((item) => item.id),
-      [older.run.id, newer.run.id],
-      "oldest first, and a claimed run is not in the list",
+      queued.filter((item) => mine.has(item.id)).map((item) => item.generation),
+      [0, 0],
     );
-    // queued の run はまだ claim されていないので、世代 0（task の名前が開始と同じになる）
-    assert.deepEqual(new Set(queued.map((item) => item.generation)), new Set([0]));
-    assert.ok(!queued.some((item) => item.id === running.id));
 
-    const grace = new Date(Date.now() - 7 * 60 * 1000);
-    assert.deepEqual((await listQueuedRuns(pool, { olderThan: grace })).map((item) => item.id), [older.run.id], "newer than the grace period is left alone");
+    // 積んでいる最中（olderThan より後に作られた）run は触らない
+    const grace = new Date(Date.now() - 90 * 60 * 1000);
+    assert.deepEqual((await listQueuedRuns(pool, { olderThan: grace, limit: 1000 })).map((item) => item.id), [older.run.id], "newer than the grace period is left alone");
     assert.deepEqual((await listQueuedRuns(pool, { olderThan: new Date(), limit: 1 })).map((item) => item.id), [older.run.id], "the limit takes the oldest");
 
     // 失敗・成功した run は積み直さない
     assert.equal(await failRun(pool, older.run.id, 0, "internal"), true);
-    assert.deepEqual((await listQueuedRuns(pool, { olderThan: new Date() })).map((item) => item.id), [newer.run.id]);
+    assert.deepEqual(minesOf(await listQueuedRuns(pool, { olderThan: new Date(), limit: 1000 })), [newer.run.id]);
+    // 後ろのテストに、時刻をずらした queued の run を残さない
+    assert.equal(await failRun(pool, newer.run.id, 0, "internal"), true);
+  });
+
+  it("moves the generation of a queued run on so the sweep can enqueue it under a name the deleted task does not hold", async () => {
+    const pageId = await uploadedRecording(pool);
+    const created = await enqueueTranscription(pool, OWNER, pageId, run());
+    assert.ok(created?.status === "created");
+    const runId = created.run.id;
+
+    // 1 度目: 世代 0 → 1（開始が積んだ task の名前 <run>-0 は、消えても最大 24 時間ふさがる）
+    assert.equal(await requeueRun(pool, runId, 1), null, "the generation has to match");
+    assert.equal(await requeueRun(pool, runId, 0), 1);
+    assert.equal(await requeueRun(pool, runId, 1), 2, "every sweep gives a name that was never used");
+    assert.deepEqual((await listQueuedRuns(pool, { olderThan: new Date(Date.now() + 1000), limit: 1000 })).find((item) => item.id === runId)?.generation, 2);
+    // 状態は queued のままなので、積んだ task はそのまま claim できる（世代は claim でさらに進む）
+    assert.equal((await latestRun(pool, OWNER, pageId))?.status, "queued");
+    const claim = await claimRun(pool, runId);
+    assert.equal(claim?.generation, 3);
+
+    // claim 済み・終わった run は積み直さない
+    assert.equal(await requeueRun(pool, runId, 3), null);
+    assert.equal(await failRun(pool, runId, 3, "internal"), true);
+    assert.equal(await requeueRun(pool, runId, 3), null);
+    assert.equal(await requeueRun(pool, randomUUID(), 0), null, "a run that is not there");
   });
 
   it("keeps the invariants when the code is bypassed", async () => {

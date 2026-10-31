@@ -25,6 +25,8 @@ import type { OwnerId, PageLang, Queryable } from "./types.ts";
  *
  * 状態遷移は step-runs.ts と同じ流儀で、すべて「世代（generation）と状態を条件にした UPDATE」で行う。claim のたびに世代が進み、
  * 確定・失敗は claim のときの世代と一致して running のときだけ通る（掃除のあとに遅れて返った実行の結果で上書きしない）。
+ * 掃除が積み直すときも世代を進める（requeueRun）。実行の口（Cloud Tasks）の task の名前に世代が入るので、消えた task の名前
+ * （Cloud Tasks は最大 24 時間は同じ名前を作らせない）とぶつからず、取りこぼした run をすぐ積み直せる。
  * 1 つのページで有効な run（queued・running）は 1 つだけ（部分 unique index と、録音の行の FOR UPDATE）。
  * 段落を書くのは replace の run か、段落が空の録音だけ（直した文章を失わせない）。
  * 読み書きは全て本人の・ゴミ箱でないページだけ（claimRun・finishRun・failRun は実行する側が run の id で呼ぶ）。
@@ -336,8 +338,9 @@ UPDATE transcription_runs
        finished_at = GREATEST(clock_timestamp(), started_at)
  WHERE id = $1 AND generation = $2 AND status = 'running'`;
 
-// $1 run id / $2 generation / $3 error code。queued の run は世代 0 のままなので、世代 0 を渡すと「claim される前」の run だけを失敗にできる
-// （積めなかったとき）。claim のあとは世代が 1 以上なので、世代 0 の呼び出しは何もしない。
+// $1 run id / $2 generation / $3 error code。作ったばかりの queued の run は世代 0 なので、世代 0 を渡すと「一度も claim も積み直しも
+// されていない」run だけを失敗にできる（積めなかったとき）。claim のあと・掃除が積み直したあとは世代が 1 以上なので、
+// 世代 0 の呼び出しは何もしない（その run は掃除が拾う）。
 const FAIL_SQL = `
 UPDATE transcription_runs
    SET status = 'failed',
@@ -486,6 +489,29 @@ export async function listQueuedRuns(db: Queryable, options: { olderThan: Date; 
   const limit = Math.max(1, Math.min(options.limit ?? 100, LIST_QUEUED_LIMIT_MAX));
   const result = await db.query<{ id: string; generation: number }>(LIST_QUEUED_SQL, [olderThan.toISOString(), limit]);
   return result.rows.map((row) => ({ id: row.id, generation: row.generation }));
+}
+
+// $1 run id / $2 generation。まだ claim されていない run の世代だけを 1 つ進める（状態は queued のまま）。
+const REQUEUE_SQL = `
+UPDATE transcription_runs
+   SET generation = generation + 1
+ WHERE id = $1 AND generation = $2 AND status = 'queued'
+RETURNING generation`;
+
+/**
+ * 掃除が積み直す前に、まだ claim されていない run の世代を 1 つ進める。新しい世代を返す（queued でない・世代が違う・無い・
+ * 不正な id なら null＝積み直さない）。状態は queued のままなので、積んだ task は今までと同じように claim できる。
+ *
+ * 世代を進めるのは、task の名前（`<run>-<世代>`）を前の task と別にするため。**Cloud Tasks は消した task の名前を最大 24 時間
+ * 使わせない**ので、同じ名前で積み直すと「まだ積まれている」と区別がつかず、取りこぼした run がその間だまって止まる
+ * （試行を使い切って task が消えた・積み込みが途中で落ちた、など）。世代が進めば名前が変わるので、次の掃除でそのまま拾える。
+ * 手順（step-runs.ts）の attempt も、同じ理由で世代を task の名前に入れている。
+ */
+export async function requeueRun(db: Queryable, runId: string, generation: number): Promise<number | null> {
+  if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError("editor-store: generation must be a non-negative integer");
+  if (typeof runId !== "string" || !isPageId(runId)) return null;
+  const row = (await db.query<{ generation: number }>(REQUEUE_SQL, [runId, generation])).rows[0];
+  return row ? row.generation : null;
 }
 
 /**

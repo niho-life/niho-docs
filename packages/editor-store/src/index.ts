@@ -138,6 +138,7 @@ export {
   isTranscriptionTerm,
   latestRun,
   listQueuedRuns,
+  requeueRun,
   sweepStaleRuns,
   transcriptionStatus,
   type ClaimedTranscription,

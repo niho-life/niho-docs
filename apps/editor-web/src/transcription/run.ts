@@ -81,7 +81,7 @@ export async function executeRun(deps: ExecuteRunDeps): Promise<ExecuteRunOutcom
   try {
     claim = await deps.store.claimRun(deps.runId);
   } catch (error) {
-    // claim できたか分からない: claim される前（世代 0）なら失敗にする。claim 済みなら世代が合わず何もしない（掃除が拾う）
+    // claim できたか分からない: 一度も claim も積み直しもされていない（世代 0）なら失敗にする。claim 済み・掃除が積み直したあとは世代が合わず何もしない（掃除が拾う）
     logFailure("internal", error);
     await deps.store.failRun(deps.runId, 0, "internal").catch(() => false);
     return { status: "failed", errorCode: "internal" };
