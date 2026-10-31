@@ -89,7 +89,8 @@ describe("migration files", () => {
   it("contains no records, secrets, credentials, real addresses, or token columns", async () => {
     for (const file of await readMigrations()) {
       const sql = file.sql;
-      assert.doesNotMatch(sql, /\bINSERT\s+INTO\b|\bCOPY\b/i, `${file.name} must not carry records`);
+      // COPY は文としてだけ見る（0008 の値 'copy-on-import' は文ではない）
+      assert.doesNotMatch(sql, /\bINSERT\s+INTO\b|\bCOPY\s/i, `${file.name} must not carry records`);
       assert.doesNotMatch(sql, /-----BEGIN [A-Z ]*PRIVATE KEY-----/);
       assert.doesNotMatch(sql, /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i, "credential URL");
       assert.doesNotMatch(sql, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i, "e-mail address");
