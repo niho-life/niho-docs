@@ -16,6 +16,7 @@ import {
   isIdempotencyKey,
   isStepErrorCode,
   listQueuedAttempts,
+  requeueAttempt,
   listRun,
   readStepInput,
   refreshStale,
@@ -709,5 +710,38 @@ describe("PostgreSQL queued attempts for the sweep", { skip: databaseUrl === und
     assert.deepEqual(await listQueuedAttempts(pool, { after: { runId: "00000000-0000-4000-8000-000000000000", stepIndex: 0 } }), []);
     // 読むだけ（状態を変えない）
     assert.deepEqual(await listQueuedAttempts(pool), expected);
+  });
+
+  it("moves the generation of a queued attempt on so the sweep can enqueue it under a name the deleted task does not hold", async () => {
+    const { run } = await newRun();
+    const ref = { runId: run.id, stepIndex: 0, generation: 0 };
+
+    assert.equal(await requeueAttempt(pool, { ...ref, generation: 1 }), null, "the generation has to match");
+    assert.equal(await requeueAttempt(pool, ref), 1);
+    assert.equal(await requeueAttempt(pool, { ...ref, generation: 1 }), 2, "every sweep gives a name that was never used");
+    // state は queued のまま。tries も動かない（積み直しは試行ではない）
+    const row = (await pool.query<{ state: string; tries: number; generation: number }>(
+      "SELECT state, tries, generation FROM step_attempts WHERE run_id = $1 AND step_index = 0",
+      [run.id],
+    )).rows[0];
+    assert.deepEqual(row, { state: "queued", tries: 0, generation: 2 });
+    // 一覧は（前のテストが残した分も含めて）表の全体を読むので、この run の分だけを見る
+    assert.deepEqual(
+      (await listQueuedAttempts(pool, { limit: 1000 })).filter((item) => item.runId === run.id),
+      [{ runId: run.id, stepIndex: 0, generation: 2 }],
+    );
+
+    // 積んだ task はそのまま claim できる（世代は claim でさらに進む）
+    const claim = await claimOk(run.id, 0);
+    assert.equal(claim.generation, 3);
+    // claim 済み・取消・無い attempt は積み直さない
+    assert.equal(await requeueAttempt(pool, { ...ref, generation: 3 }), null);
+    const canceled = await newRun();
+    assert.equal((await cancelRun(pool, OWNER, canceled.parent, canceled.run.id))?.state, "canceled");
+    assert.equal(await requeueAttempt(pool, { runId: canceled.run.id, stepIndex: 0, generation: 0 }), null);
+    assert.equal(await requeueAttempt(pool, { runId: randomUUID(), stepIndex: 0, generation: 0 }), null);
+    assert.equal(await requeueAttempt(pool, { runId: "not-a-uuid", stepIndex: 0, generation: 0 }), null);
+    await assert.rejects(() => requeueAttempt(pool, { ...ref, generation: -1 }), TypeError);
+    await assert.rejects(() => requeueAttempt(pool, { ...ref, stepIndex: 1.5, generation: 0 }), TypeError);
   });
 });

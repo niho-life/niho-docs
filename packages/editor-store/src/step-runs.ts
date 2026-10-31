@@ -714,9 +714,34 @@ export async function sweepExpiredLeases(db: StepRunsDb, options: { limit?: numb
   return requeue;
 }
 
+// $1 run id / $2 step index / $3 generation。まだ claim されていない attempt の世代だけを 1 つ進める（state は queued のまま）。
+const REQUEUE_ATTEMPT_SQL = `
+UPDATE step_attempts
+   SET generation = generation + 1
+ WHERE run_id = $1 AND step_index = $2 AND generation = $3 AND state = 'queued'
+RETURNING generation`;
+
 /**
- * queued の attempt（run が進行中のものだけ）。定期の掃除が、同じ task の名前（世代を含む）で積み直す対象
- * （積み込みの失敗・失われた task を拾う。まだ積まれていれば、名前の重複で無視される）。古い run から、1 回に上限つき。読むだけ。
+ * 掃除が積み直す前に、まだ claim されていない attempt の世代を 1 つ進める。新しい世代を返す（queued でない・世代が違う・
+ * 無い・不正な id なら null＝積み直さない）。state は queued のままなので、積んだ task は今までと同じように claim できる。
+ *
+ * 世代を進めるのは、task の名前（`<run>-<段階>-<世代>`）を前の task と別にするため。**Cloud Tasks は消した task の名前を
+ * 最大 24 時間使わせない**ので、同じ名前で積み直すと「まだ積まれている」と区別がつかず、取りこぼした段階がその間だまって
+ * 止まる（worker が 503 を返しているあいだに再試行を使い切って task が消えた、積み込みが途中で落ちた、など）。
+ * claim・lease 切れの戻しで世代が進む attempt はこれに当たらない（死んだ task の名前より先に進んでいる）ので、
+ * 進めるのは「一度も claim されていない queued」だけ。文字起こし（#36）の `requeueRun` と同じ作法。
+ */
+export async function requeueAttempt(db: Queryable, ref: AttemptRef): Promise<number | null> {
+  if (!Number.isSafeInteger(ref.generation) || ref.generation < 0) throw new TypeError("editor-store: generation must be a non-negative integer");
+  if (!Number.isSafeInteger(ref.stepIndex) || ref.stepIndex < 0) throw new TypeError("editor-store: stepIndex must be a non-negative integer");
+  if (typeof ref.runId !== "string" || !isPageId(ref.runId)) return null;
+  const row = (await db.query<{ generation: number }>(REQUEUE_ATTEMPT_SQL, [ref.runId, ref.stepIndex, ref.generation])).rows[0];
+  return row ? row.generation : null;
+}
+
+/**
+ * queued の attempt（run が進行中のものだけ）。定期の掃除が、世代を 1 つ進めた task の名前で積み直す対象
+ * （積み込みの失敗・失われた task を拾う。requeueAttempt で世代を進めてから積む）。古い run から、1 回に上限つき。読むだけ。
  * 続きは `after`（前の回の最後の `runId`・`stepIndex`）の次から。古い 100 件が queued のまま残っても、後ろの attempt に届く。
  * `after` の run が無くなっていれば（物理削除）何も返さない（次の掃除は先頭から読み直す）。
  */

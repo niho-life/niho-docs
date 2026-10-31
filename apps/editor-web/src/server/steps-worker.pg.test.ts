@@ -175,23 +175,28 @@ describe.skipIf(databaseUrl === undefined)("Cloud Tasks worker with PostgreSQL",
     expect(tasks.take()).toEqual([]);
   });
 
-  it("requeues a lost task and an expired lease from the sweep, under the same task names, and finishes the run", async () => {
+  it("requeues a lost task and an expired lease from the sweep, under names no deleted task holds, and finishes the run", async () => {
     const { tasks, deliver, sweep, start, view } = wire();
     const { parent, runId } = await start("tpl-2");
 
-    // 積んだ task が失われた（積み込みのあとに消えた）: 掃除が同じ名前（世代 0）で積み直す
+    // 積んだ task が失われた（再試行を使い切って消えた・積み込みのあとに消えた）。消えた名前（世代 0）は Cloud Tasks が
+    // 最大 24 時間ふさぐので、掃除は世代を 1 つ進めた名前で積み直す
     const [first] = tasks.take();
     expect(first && shortName(first)).toBe(taskName(runId, 0, 0));
     tasks.lose(first!);
     expect(await sweep()).toBe(1);
     const [again] = tasks.take();
-    expect(again && shortName(again)).toBe(taskName(runId, 0, 0));
-    // まだ積まれている間は、もう一度掃除しても重複（ALREADY_EXISTS）で増えない
-    expect(await sweep()).toBe(0);
-    expect(tasks.take()).toEqual([]);
+    expect(again && shortName(again)).toBe(taskName(runId, 0, 1));
+    // まだ積まれている間に掃除が重なると、さらに進めた名前でもう 1 つ積まれる（消えた task と区別できないので、
+    // 名前の重複には頼らない）。二重に実行はされない: 先に届いた方が claim し、後の方は何もしない
+    expect(await sweep()).toBe(1);
+    const [duplicate] = tasks.take();
+    expect(duplicate && shortName(duplicate)).toBe(taskName(runId, 0, 2));
     expect(await deliver(again!)).toBe("completed");
+    expect(await deliver(duplicate!)).toBe("skipped");
 
-    // 次の段階を実行していた worker が落ちた（claim したまま lease が切れた）: 世代を進めた名前で積み直す
+    // 次の段階を実行していた worker が落ちた（claim したまま lease が切れた）: claim で世代が進んでいるので、
+    // 掃除はその世代のまま積み直す（落ちた task の名前は claim の前の世代なので、ぶつからない）
     const [second] = tasks.take();
     expect(second && shortName(second)).toBe(taskName(runId, 1, 0));
     const claimed = await pgStepRunStore(pool).claimAttempt(runId, 1);

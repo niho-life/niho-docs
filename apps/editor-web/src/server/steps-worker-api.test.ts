@@ -35,11 +35,11 @@ function fakeVerifier() {
   });
 }
 
-type SweepFake = { expired: AttemptRef[]; queued: AttemptRef[] };
+type SweepFake = { expired: AttemptRef[]; queued: AttemptRef[]; claimed: string[] };
 
 function setup(options: { executor?: StepExecutor; queue?: TaskQueue; config?: CloudTasksConfig | null; store?: "none" } = {}) {
   const store = new MemoryStepRunStore();
-  const sweep: SweepFake = { expired: [], queued: [] };
+  const sweep: SweepFake = { expired: [], queued: [], claimed: [] };
   const sweepExpiredLeases = vi.fn(async () => sweep.expired);
   // 古い順の一覧を、after（前の回の最後）の次から limit 件
   const listQueuedAttempts = vi.fn(async (options?: { limit?: number; after?: Pick<AttemptRef, "runId" | "stepIndex"> }) => {
@@ -47,7 +47,9 @@ function setup(options: { executor?: StepExecutor; queue?: TaskQueue; config?: C
     const start = after ? sweep.queued.findIndex((item) => item.runId === after.runId && item.stepIndex === after.stepIndex) + 1 : 0;
     return sweep.queued.slice(start, start + (options?.limit ?? 100));
   });
-  const workerStore = Object.assign(store, { sweepExpiredLeases, listQueuedAttempts });
+  // 本物と同じ約束: queued のままなら世代を 1 つ進めて返し、そうでなければ null
+  const requeueAttempt = vi.fn(async (ref: AttemptRef) => (sweep.claimed.includes(ref.runId) ? null : ref.generation + 1));
+  const workerStore = Object.assign(store, { sweepExpiredLeases, listQueuedAttempts, requeueAttempt });
   const queue = options.queue ?? new MemoryTaskQueue();
   const verify = fakeVerifier();
   const steps = vi.fn(() => (options.store === "none" ? null : workerStore));
@@ -59,7 +61,7 @@ function setup(options: { executor?: StepExecutor; queue?: TaskQueue; config?: C
     queue: () => queue,
     executor: () => options.executor ?? fakeExecutor,
   };
-  return { store, sweep, sweepExpiredLeases, listQueuedAttempts, queue, verify, steps, deps };
+  return { store, sweep, sweepExpiredLeases, listQueuedAttempts, requeueAttempt, queue, verify, steps, deps };
 }
 
 async function startRun(store: MemoryStepRunStore, recipe: "tpl-1" | "tpl-2" = "tpl-1") {
@@ -308,44 +310,67 @@ describe("POST /api/internal/steps/run", () => {
 describe("POST /api/internal/steps/sweep", () => {
   const ref = (stepIndex: number, generation: number, runId = randomUUID()): AttemptRef => ({ runId, stepIndex, generation });
 
-  it("requeues expired leases and queued steps under their task names, once each, and counts only new tasks", async () => {
-    const { deps, sweep, queue, sweepExpiredLeases, listQueuedAttempts } = setup();
+  it("requeues an expired lease under its own generation, and a never-claimed queued step under a new one", async () => {
+    const { deps, sweep, queue, sweepExpiredLeases, listQueuedAttempts, requeueAttempt } = setup();
     const expired = ref(1, 2);
-    const alive = ref(0, 0);
-    const lost = ref(2, 1);
+    const queued = ref(0, 0);
     sweep.expired = [expired];
     // (a) で queued に戻したものは (b) にも出る
-    sweep.queued = [expired, alive, lost];
-    // alive は Cloud Tasks に積まれたまま（同じ名前で重複になる）
-    await queue.enqueue({ name: taskName(alive.runId, 0, 0), runId: alive.runId, stepIndex: 0 });
-    (queue as MemoryTaskQueue).drain();
+    sweep.queued = [expired, queued];
 
     await expectJson(await sweepCall(deps).response, 200, { requeued: 2 });
     expect(sweepExpiredLeases).toHaveBeenCalledWith({ limit: SWEEP_LIMIT });
     expect(listQueuedAttempts).toHaveBeenCalledWith({ limit: SWEEP_LIMIT });
+    // lease の切れた段階は claim で世代が進んでいる（落ちた task の名前は claim の前の世代）ので、そのまま積む
+    expect(requeueAttempt).toHaveBeenCalledTimes(1);
+    expect(requeueAttempt).toHaveBeenCalledWith(queued);
     expect((queue as MemoryTaskQueue).drain()).toEqual([
       { name: taskName(expired.runId, 1, 2), runId: expired.runId, stepIndex: 1 },
-      { name: taskName(lost.runId, 2, 1), runId: lost.runId, stepIndex: 2 },
+      { name: taskName(queued.runId, 0, 1), runId: queued.runId, stepIndex: 0 },
     ]);
-    // もう一度呼んでも、積み済みのものは積まない（冪等）
-    await expectJson(await sweepCall(deps).response, 200, { requeued: 0 });
-    expect((queue as MemoryTaskQueue).size).toBe(0);
+  });
+
+  it("requeues a step whose task used up its retries, under a name the deleted task does not hold", async () => {
+    // 5 回の配信を使い切った task は Cloud Tasks から消えるが、その名前（<run>-<段階>-0）は最大 24 時間ふさがる。
+    // 同じ名前で積み直すと ALREADY_EXISTS が返り、消えた task と生きている task の区別がつかない（段階が 24 時間止まる）。
+    const { deps, sweep, queue, requeueAttempt } = setup();
+    const stranded = ref(0, 0);
+    sweep.queued = [stranded];
+    // 消えた task の名前は、まだキューが覚えている（同じ名前なら重複として拒まれる）
+    await queue.enqueue({ name: taskName(stranded.runId, 0, 0), runId: stranded.runId, stepIndex: 0 });
+    (queue as MemoryTaskQueue).drain();
+
+    await expectJson(await sweepCall(deps).response, 200, { requeued: 1 });
+    expect(requeueAttempt).toHaveBeenCalledWith(stranded);
+    // 消えた名前ではなく、世代を進めた新しい名前で積まれる（＝この回で拾い直せている）
+    expect((queue as MemoryTaskQueue).drain()).toEqual([{ name: taskName(stranded.runId, 0, 1), runId: stranded.runId, stepIndex: 0 }]);
+  });
+
+  it("does not enqueue a queued step that stopped being queued while the sweep was reading", async () => {
+    const { deps, sweep, queue } = setup();
+    const taken = ref(0, 0);
+    const still = ref(1, 0);
+    sweep.queued = [taken, still];
+    sweep.claimed = [taken.runId];
+
+    await expectJson(await sweepCall(deps).response, 200, { requeued: 1 });
+    expect((queue as MemoryTaskQueue).drain()).toEqual([{ name: taskName(still.runId, 1, 1), runId: still.runId, stepIndex: 1 }]);
   });
 
   it("reads the queued steps page by page, so old ones that stay queued do not hide the newer ones", async () => {
     const { deps, sweep, queue, listQueuedAttempts } = setup();
-    // 古い 100 件は Cloud Tasks に積まれたまま（名前の重複）。その後ろの 3 件は積み込みに失敗して消えている
-    const stuck = Array.from({ length: SWEEP_LIMIT }, (_, index) => ref(index % 3, 0));
-    const lost = [ref(0, 0), ref(1, 4), ref(2, 0)];
-    sweep.queued = [...stuck, ...lost];
-    for (const item of stuck) await queue.enqueue({ name: taskName(item.runId, item.stepIndex, item.generation), runId: item.runId, stepIndex: item.stepIndex });
-    (queue as MemoryTaskQueue).drain();
+    const older = Array.from({ length: SWEEP_LIMIT }, (_, index) => ref(index % 3, 0));
+    const newer = [ref(0, 0), ref(1, 4), ref(2, 0)];
+    sweep.queued = [...older, ...newer];
 
-    await expectJson(await sweepCall(deps).response, 200, { requeued: 3 });
+    await expectJson(await sweepCall(deps).response, 200, { requeued: SWEEP_LIMIT + newer.length });
     expect(listQueuedAttempts).toHaveBeenCalledTimes(2);
     expect(listQueuedAttempts).toHaveBeenNthCalledWith(1, { limit: SWEEP_LIMIT });
-    expect(listQueuedAttempts).toHaveBeenNthCalledWith(2, { limit: SWEEP_LIMIT, after: { runId: stuck[SWEEP_LIMIT - 1]!.runId, stepIndex: stuck[SWEEP_LIMIT - 1]!.stepIndex } });
-    expect((queue as MemoryTaskQueue).drain().map((task) => task.runId)).toEqual(lost.map((item) => item.runId));
+    expect(listQueuedAttempts).toHaveBeenNthCalledWith(2, { limit: SWEEP_LIMIT, after: { runId: older[SWEEP_LIMIT - 1]!.runId, stepIndex: older[SWEEP_LIMIT - 1]!.stepIndex } });
+    // 後ろの 3 件にも届いている（古い分が queued のまま残っても隠れない）
+    const enqueued = (queue as MemoryTaskQueue).drain();
+    expect(enqueued).toHaveLength(SWEEP_LIMIT + newer.length);
+    expect(enqueued.slice(-newer.length)).toEqual(newer.map((item) => ({ name: taskName(item.runId, item.stepIndex, item.generation + 1), runId: item.runId, stepIndex: item.stepIndex })));
   });
 
   it("stops reading after SWEEP_MAX_PAGES pages and says so", async () => {
@@ -366,21 +391,30 @@ describe("POST /api/internal/steps/sweep", () => {
     expect(call.pulls.count).toBe(0);
   });
 
-  it("treats Cloud Tasks' ALREADY_EXISTS as already queued", async () => {
+  it("never asks Cloud Tasks for a name it has already used, so ALREADY_EXISTS cannot hide a deleted task", async () => {
+    // 本物のキューで、一度使った名前は（消えたあとでも）ALREADY_EXISTS を返す Cloud Tasks を模す
     const created = new Set<string>();
+    const refused: string[] = [];
     const google = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
       if (String(input) === METADATA_TOKEN_URL) return Response.json({ access_token: "synthetic-access-token", expires_in: 3599 });
       const name = (JSON.parse(String(init.body)) as { task: { name: string } }).task.name;
-      if (created.has(name)) return Response.json({ error: { code: 409, status: "ALREADY_EXISTS", message: "synthetic" } }, { status: 409 });
+      if (created.has(name)) {
+        refused.push(name);
+        return Response.json({ error: { code: 409, status: "ALREADY_EXISTS", message: "synthetic" } }, { status: 409 });
+      }
       created.add(name);
       return Response.json({ name });
     }) as unknown as typeof fetch;
     const queue = new CloudTasksQueue(CONFIG, { fetch: google });
     const { deps, sweep } = setup({ queue });
-    sweep.queued = [ref(0, 0), ref(1, 0), ref(0, 3)];
+    const attempts = [ref(0, 0), ref(1, 0), ref(0, 3)];
+    sweep.queued = attempts;
+    // 掃除のたびに世代が進むので、毎回ぜんぶ新しい名前で積める（止まらない）
     await expectJson(await sweepCall(deps).response, 200, { requeued: 3 });
-    await expectJson(await sweepCall(deps).response, 200, { requeued: 0 });
-    expect(created.size).toBe(3);
+    sweep.queued = attempts.map((item) => ({ ...item, generation: item.generation + 1 }));
+    await expectJson(await sweepCall(deps).response, 200, { requeued: 3 });
+    expect(created.size).toBe(6);
+    expect(refused).toEqual([]);
   });
 
   it("keeps requeueing the rest when one fails, then answers 500 with a short code in the log", async () => {
@@ -396,7 +430,7 @@ describe("POST /api/internal/steps/sweep", () => {
     const items = [ref(0, 0), ref(1, 0), ref(2, 0)];
     sweep.queued = items;
     await expectJson(await sweepCall(deps).response, 500, { error: "internal" });
-    expect(enqueued).toEqual([taskName(items[0]!.runId, 0, 0), taskName(items[2]!.runId, 2, 0)]);
+    expect(enqueued).toEqual([taskName(items[0]!.runId, 0, 1), taskName(items[2]!.runId, 2, 1)]);
     expect(logged()).toContain("tasks_http_503");
     for (const item of items) expect(logged()).not.toContain(item.runId);
   });
