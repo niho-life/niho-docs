@@ -15,6 +15,7 @@ import {
   type RecordingSnapshot,
 } from "@/lib/recording-client";
 import { durationLabel, readTimestampsPreference, shellSegments, shellSpeakers, writeTimestampsPreference } from "@/lib/recording-view";
+import { RecordingTranscription } from "./RecordingTranscription";
 
 /** 直した段落の文章（まだ保存されていない）。held は、保存に失敗したか競合した段落で、もう一度確定するまで送らない。 */
 type Draft = { text: string; held: boolean };
@@ -28,6 +29,8 @@ type Load = { state: "loading" } | { state: "ready" } | { state: "missing" } | {
  *   すべて止めておき、もう一度確定する（か「もう一度保存」）と送る。最新に合わせた版の上に、確かめないまま重ねて書かない。
  * - 書いている途中（まだ確定していない入力）も「保存待ち」で、閉じようとしたらブラウザの確認を出す。
  * - 再生は無い（音声は後段）。時刻の表示は端末ごとの好み。
+ * - 音声のある録音（#36 段 3b-1）は、文字起こしの開始と状態（RecordingTranscription）を上に出す。段落がまだ無ければ段落の欄は出さない。
+ *   文字起こしが済んだら録音を読み直し、下書きは捨てる（置き換えは確かめてから始めている。前の段落の位置の下書きを新しい段落に重ねない）。
  */
 export function RecordingTranscript({ pageId }: { pageId: string }) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
@@ -158,6 +161,20 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
       }
     });
 
+  /** 文字起こしが済んだ・段落がすでにあると断られた: 録音を読み直す（保存の列のあとに）。 */
+  const reloadAfterTranscription = useCallback(() => {
+    void enqueue(async () => {
+      try {
+        const next = await getRecording(pageId);
+        applyDrafts({});
+        applySnapshot(next);
+        setNotice(null);
+      } catch (error) {
+        setNotice(recordingErrorMessage(error, "load"));
+      }
+    });
+  }, [pageId, enqueue, applyDrafts, applySnapshot]);
+
   const held = Object.values(drafts).filter((draft) => draft.held).length;
   const unsaved = typing || Object.keys(drafts).length > 0;
   // 保存されていない文章があるまま閉じようとしたら、ブラウザの確認を出す
@@ -195,6 +212,10 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
 
   const status = saving ? "saving" : held > 0 ? "held" : unsaved ? "pending" : "saved";
   const statusText = { saving: "保存中", held: `保存されていない段落が ${held} つあります`, pending: "保存待ち", saved: "保存済み" }[status];
+  const { audio } = snapshot.recording;
+  const hasSegments = snapshot.recording.segments.length > 0;
+  // 音声から作った録音で、まだ文字起こしの段落が無い: 段落の欄（直す・話者・時刻）は出さず、開始と状態だけ
+  const showSegments = hasSegments || audio === null;
   return (
     <section
       aria-label="文字起こし"
@@ -213,24 +234,29 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
         if (!composing.current) setTyping(false);
       }}
     >
-      <ShellRecording
-        segments={shellSegments(snapshot.recording, Object.fromEntries(Object.entries(drafts).map(([index, draft]) => [index, draft.text])))}
-        speakers={shellSpeakers(snapshot.speakers)}
-        position={durationLabel(snapshot.recording)}
-        editing={editing}
-        onToggleEdit={() => setEditing((value) => !value)}
-        onSegmentChange={onSegmentChange}
-        onRenameSpeaker={(id, name) => speakerAction((base) => renameSpeaker(pageId, base.recording.revision, Number(id), name), "rename")}
-        onMergeSpeakers={(from, into) => speakerAction((base) => mergeSpeakers(pageId, base.recording.revision, Number(from), Number(into)), "merge")}
-        showTimestamps={showTimestamps}
-        onTimestamps={() => {
-          const next = !showTimestamps;
-          setShowTimestamps(next);
-          writeTimestampsPreference(next);
-        }}
-      />
+      {audio && (
+        <RecordingTranscription pageId={pageId} audio={audio} hasTranscript={hasSegments} onSucceeded={reloadAfterTranscription} onHasTranscript={reloadAfterTranscription} />
+      )}
+      {showSegments && (
+        <ShellRecording
+          segments={shellSegments(snapshot.recording, Object.fromEntries(Object.entries(drafts).map(([index, draft]) => [index, draft.text])))}
+          speakers={shellSpeakers(snapshot.speakers)}
+          position={durationLabel(snapshot.recording)}
+          editing={editing}
+          onToggleEdit={() => setEditing((value) => !value)}
+          onSegmentChange={onSegmentChange}
+          onRenameSpeaker={(id, name) => speakerAction((base) => renameSpeaker(pageId, base.recording.revision, Number(id), name), "rename")}
+          onMergeSpeakers={(from, into) => speakerAction((base) => mergeSpeakers(pageId, base.recording.revision, Number(from), Number(into)), "merge")}
+          showTimestamps={showTimestamps}
+          onTimestamps={() => {
+            const next = !showTimestamps;
+            setShowTimestamps(next);
+            writeTimestampsPreference(next);
+          }}
+        />
+      )}
       <p role="status" aria-live="polite" data-save-state={status}>
-        {statusText}
+        {showSegments && statusText}
         {held > 0 && (
           <>
             {" "}

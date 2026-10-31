@@ -98,6 +98,7 @@ function stepsFor(page: GalleryPage): { root: GalleryPage; steps: ShellStep[] } 
 /**
  * web: editor-web が今つないでいる形の情報パネル（#34 第 3 段。肩書なし・書き出しは Markdown だけ・ページを削除。
  * 手順と AI の節は出さない）。note: 言語を保存できなかったときの一言を出す。
+ * newrec で web: editor-web の「録音から」（#36 段 3b-1。取り込める形式の長い一言と、音声を選んだときの「取り込む」）。
  */
 export type ScreenForced = { sidebar?: boolean; rail?: boolean; pick?: ShellDest; conn?: boolean; page?: string; web?: boolean; note?: boolean } & TranscriptForced;
 
@@ -296,7 +297,9 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
       <RecordingStart
         how={how}
         onHow={setHow}
-        file={{ name: "dinner-1029.m4a", detail: "14:38 · 32 MB · 別のファイルを選ぶ" }}
+        // web: まだ選んでいない状態で、editor-web が出す取り込める形式の一言（長い方）を見せる
+        file={forced.web ? undefined : { name: "dinner-1029.m4a", detail: "14:38 · 32 MB · 別のファイルを選ぶ" }}
+        fileHint={forced.web ? ".m4a .mp3 .wav .aac .ogg .flac .webm、文字起こし済みの .vtt も" : undefined}
         background={background}
         onBackground={setBackground}
         people={[
