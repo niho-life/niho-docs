@@ -38,7 +38,7 @@ describe("proxy", () => {
 
   it("skips the API, static assets and prefetches", () => {
     const [rule] = config.matcher;
-    expect(rule?.source).toBe("/((?!api|_next/static|_next/image|favicon.ico).*)");
+    expect(rule?.source).toBe("/((?!api|v1/|_next/static|_next/image|favicon.ico).*)");
     expect(rule?.missing).toEqual(
       expect.arrayContaining([
         { type: "header", key: "next-router-prefetch" },
@@ -54,12 +54,12 @@ describe("proxy", () => {
     expect(response.headers.get("location")).toBeNull();
   });
 
-  it("runs for every screen (the login screen needs the CSP too), not for /api, static files or the favicon", () => {
+  it("runs for every screen (the login screen needs the CSP too), not for /api, the public API (/v1/), static files or the favicon", () => {
     const matches = (url: string) => unstable_doesMiddlewareMatch({ config, url });
-    for (const path of ["/", "/p/new", "/p/6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11", "/settings", "/destinations/my-site", "/auth/login", "/no-such-route"]) {
+    for (const path of ["/", "/p/new", "/p/6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11", "/settings", "/destinations/my-site", "/auth/login", "/no-such-route", "/v1"]) {
       expect(matches(`http://editor.test${path}`), path).toBe(true);
     }
-    for (const path of ["/api", "/api/pages", "/_next/static/chunks/x.js", "/_next/image", "/favicon.ico"]) {
+    for (const path of ["/api", "/api/pages", "/v1/exp/published.json", "/v1/preview/pv_x.json", "/_next/static/chunks/x.js", "/_next/image", "/favicon.ico"]) {
       expect(matches(`http://editor.test${path}`), path).toBe(false);
     }
   });

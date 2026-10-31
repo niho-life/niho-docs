@@ -52,6 +52,9 @@ export type DraftPageRow = {
   lead: string | null;
   coverAssetId: string | null;
   content: Block[];
+  /** 保存の版（pages.revision）と保存の時刻（pages.updated_at）。公開 API のプレビューが下書きの version・時刻に使う。 */
+  revision: number;
+  savedAt: string;
 };
 
 /** ページの資産（公開に要る値だけ。bucket の位置は返さない）。 */
@@ -181,6 +184,8 @@ type DraftPageDbRow = {
   lead: string | null;
   cover: string | null;
   blocks: Block[];
+  revision: number;
+  updated_at: Date;
 };
 
 /**
@@ -190,7 +195,7 @@ type DraftPageDbRow = {
 export async function getDraftPage(db: Queryable, pageId: string, options: { lock?: boolean } = {}): Promise<DraftPageRow | null> {
   if (!isPageId(pageId)) return null;
   const result = await db.query<DraftPageDbRow>(
-    `SELECT id, owner, title, lang, lead, cover, blocks
+    `SELECT id, owner, title, lang, lead, cover, blocks, revision, updated_at
        FROM pages
       WHERE id = $1 AND deleted_at IS NULL${options.lock === true ? "\n      FOR NO KEY UPDATE" : ""}`,
     [pageId],
@@ -205,6 +210,8 @@ export async function getDraftPage(db: Queryable, pageId: string, options: { loc
     lead: row.lead,
     coverAssetId: row.cover,
     content: row.blocks,
+    revision: row.revision,
+    savedAt: iso(row.updated_at),
   };
 }
 
@@ -813,6 +820,9 @@ export async function readPublishedForHandle(db: Queryable, handle: string, page
 // ---------------------------------------------------------------------------
 // プレビューの token（平文は持たない。SHA-256 の 16 進だけ）
 
+/** token に結んだ著者（契約の Author と同じ形。0010）。名前は空白だけでなく 256 文字まで、url は https。 */
+export type PreviewTokenAuthor = { name: string; handle: string | null; url: string | null };
+
 export type PreviewTokenRow = {
   sha256: string;
   pageId: string;
@@ -822,9 +832,23 @@ export type PreviewTokenRow = {
   issuedAt: string;
   /** 発行から 15 分以内（表の CHECK）。 */
   expiresAt: string;
+  /** 発行したときの本人の著者。無い（0010 より前の token・名前の無い本人）は null。 */
+  author: PreviewTokenAuthor | null;
 };
 
-type PreviewTokenDbRow = { sha256: string; page_id: string; owner: string; handle: string; issued_at: Date; expires_at: Date };
+type PreviewTokenDbRow = {
+  sha256: string;
+  page_id: string;
+  owner: string;
+  handle: string;
+  issued_at: Date;
+  expires_at: Date;
+  author_name: string | null;
+  author_handle: string | null;
+  author_url: string | null;
+};
+
+const PREVIEW_TOKEN_COLUMNS = "sha256, page_id, owner, handle, issued_at, expires_at, author_name, author_handle, author_url";
 
 function toPreviewToken(row: PreviewTokenDbRow): PreviewTokenRow {
   return {
@@ -834,24 +858,25 @@ function toPreviewToken(row: PreviewTokenDbRow): PreviewTokenRow {
     handle: row.handle,
     issuedAt: iso(row.issued_at),
     expiresAt: iso(row.expires_at),
+    author: row.author_name === null ? null : { name: row.author_name, handle: row.author_handle, url: row.author_url },
   };
 }
 
 /**
  * プレビューの token を記録する。ページが owner の（ゴミ箱に無い）ページでなければ何も書かずに null。
- * 有効期限が発行から 15 分を超える・発行より前なら表の CHECK で失敗する。
+ * 有効期限が発行から 15 分を超える・発行より前、著者の形が表の CHECK（0009）に合わないなら失敗する。
  */
 export async function createPreviewToken(db: Queryable, row: PreviewTokenRow): Promise<PreviewTokenRow | null> {
   if (!SHA256_PATTERN.test(row.sha256)) throw new TypeError("editor-store: preview token hash must be a SHA-256 hex digest");
   if (publishDestOfHandle(row.handle) === null) throw new TypeError("editor-store: preview token handle is not a readable handle");
   if (!isPageId(row.pageId)) return null;
   const result = await db.query<PreviewTokenDbRow>(
-    `INSERT INTO preview_tokens (sha256, page_id, owner, handle, issued_at, expires_at)
-     SELECT $1, p.id, p.owner, $4, $5, $6
+    `INSERT INTO preview_tokens (${PREVIEW_TOKEN_COLUMNS})
+     SELECT $1, p.id, p.owner, $4, $5, $6, $7, $8, $9
        FROM pages p
       WHERE p.id = $2 AND p.owner = $3 AND p.deleted_at IS NULL
-     RETURNING sha256, page_id, owner, handle, issued_at, expires_at`,
-    [row.sha256, row.pageId, row.ownerId, row.handle, row.issuedAt, row.expiresAt],
+     RETURNING ${PREVIEW_TOKEN_COLUMNS}`,
+    [row.sha256, row.pageId, row.ownerId, row.handle, row.issuedAt, row.expiresAt, row.author?.name ?? null, row.author?.handle ?? null, row.author?.url ?? null],
   );
   const inserted = result.rows[0];
   return inserted ? toPreviewToken(inserted) : null;
@@ -864,7 +889,7 @@ export async function createPreviewToken(db: Queryable, row: PreviewTokenRow): P
 export async function findPreviewToken(db: Queryable, sha256: string, now?: string): Promise<PreviewTokenRow | null> {
   if (!SHA256_PATTERN.test(sha256)) return null;
   const result = await db.query<PreviewTokenDbRow>(
-    `SELECT t.sha256, t.page_id, t.owner, t.handle, t.issued_at, t.expires_at
+    `SELECT t.sha256, t.page_id, t.owner, t.handle, t.issued_at, t.expires_at, t.author_name, t.author_handle, t.author_url
        FROM preview_tokens t
        JOIN pages p ON p.id = t.page_id AND p.owner = t.owner
       WHERE t.sha256 = $1 AND t.expires_at > COALESCE($2::timestamptz, clock_timestamp()) AND p.deleted_at IS NULL`,

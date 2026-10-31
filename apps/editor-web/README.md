@@ -35,13 +35,15 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | `EDITOR_STEPS_QUEUE` | `cloud-tasks` のキュー（`projects/<p>/locations/<l>/queues/<q>`） |
 | `EDITOR_STEPS_WORKER_URL` | `cloud-tasks` の worker の基点（`https://<host>`。path なし）。task の宛先と OIDC の audience |
 | `EDITOR_STEPS_INVOKER_SA` | `cloud-tasks` の task と掃除の OIDC トークンの身元（`<name>@<project>.iam.gserviceaccount.com`）。worker の route はこの 1 つだけを通す |
-| `EDITOR_STUB_ROLES` | stub の方式だけ。NIHO の役割の代わり（カンマ区切り）。未設定なら `writer,kamakura`（両方の面に出せる）、空なら役割なし。niho の方式では読まず、役割の契約（#42）まで面には出せない |
-| `EDITOR_DESTINATION_DECLARATIONS` | 任意。面の宣言の取得先 `{"exp": url, "niho": url}`（https だけ）。60 秒だけ持ち ETag で確かめ直す（5 秒・64 KiB まで。redirect は同じ host の https だけ）。未設定なら stub は同梱の dev 用の宣言（`src/publish/dev-declarations.ts`）、niho は「いまは公開できません」。値が読めなければどちらも宣言なし |
-| `EDITOR_ASSET_ORIGIN` | 任意。公開版の写真の URL の origin（https の origin だけ）。写真は `${origin}/assets/${sha256}.${ext}`。未設定・不正なら写真のあるページは公開できない（422。シートでは押せない） |
+| `EDITOR_FACE_CREDENTIALS` | 任意（secret）。公開 API を NIHO の面が読むサービス間の資格。JSON の配列 `[{ "audience": "exp"\|"niho", "sha256": "<token の SHA-256 の小文字 hex>", "expiresAt": "<ISO 8601 UTC>" }]`。token の平文は置かない。未設定・不正（1 つでも形が違う）なら面は誰も読めない（不正は起動時と最初の要求で「不正」とだけログ）。署名つきのサービス間 token の契約ができるまでの暫定 |
+| `EDITOR_PUBLIC_API_RATE_LIMIT_PER_MINUTE` | 任意。公開 API の資格（の SHA-256）ごとの 1 分の要求数の上限（instance ごと）。未設定・不正は 600 |
+| `EDITOR_STUB_ROLES` | stub の方式だけ。NIHO の役割の代わり（カンマ区切り）。未設定なら `writer,kamakura`（両方の面に出せる）、空なら役割なし。niho の方式では読まず、役割の契約（#42）まで面には出せない（公開もプレビューの発行も） |
+| `EDITOR_DESTINATION_DECLARATIONS` | 任意。面の宣言の取得先 `{"exp": url, "niho": url}`（https だけ）。60 秒だけ持ち ETag で確かめ直す（5 秒・64 KiB まで。redirect は同じ host の https だけ）。未設定なら stub は同梱の dev 用の宣言（`src/publish/dev-declarations.ts`）、niho は「いまは公開できません」。値が読めなければどちらも宣言なし。公開 API のプレビューも、まだ公開していない面の URL をここから作る（宣言が無ければ 404） |
+| `EDITOR_ASSET_ORIGIN` | 任意。公開版の写真の URL の origin（https の origin だけ）。写真は `${origin}/assets/${sha256}.${ext}`。未設定・不正なら写真のあるページは公開できない（422。シートでは押せない）。公開 API のプレビューの写真も同じ URL（未設定なら写真のある下書きのプレビューは 503） |
 | `EDITOR_STORAGE` | 任意。資産（音声）の保存先。`fake`（メモリの偽物。開発・CI だけで、`NODE_ENV=production` では起動しない）・`gcs`・`off`。未設定は本番 `off`（音声の API は 503 `storage_unavailable`）、それ以外は `fake`。未知の値は起動しない |
 | `EDITOR_ASSETS_BUCKET` | `EDITOR_STORAGE=gcs` のとき必須。資産の bucket 名（無い・規則に合わなければ起動しない。値は表示しない） |
 
-確認のコマンド: `typecheck`・`lint`・`test`（vitest）・`build`・`test:startup`（build の後。本番の起動の守り）・`test:e2e`（`DATABASE_URL` と migration が要る。`next dev` を起動して API と画面を確かめ、作った行は消す）。
+確認のコマンド: `typecheck`・`lint`・`test`（vitest。`TEST_DATABASE_URL` があれば `*.pg.test.ts` も専用の schema で動く）・`build`・`test:startup`（build の後。本番の起動の守り）・`test:e2e`（`DATABASE_URL` と migration、build が要る。`next dev` を起動して API と画面を確かめ、公開 API は本番の build で確かめる。作った行・schema は消す）。packages を入れ直したあとは `.next` を消してから（`rm -rf .next`）build・e2e をする。
 
 ## 決まっていること
 
@@ -62,11 +64,11 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
   - 足すだけの候補（要約・見出しをつける・Add headings・記事にできそうな部分・Check facts to confirm）は、モデルが既存の文の変更を返しても捨てる。長いページは段落の切れ目で約 4,000 文字ずつに分けて頼み、30,000 文字を超える範囲は 413 `too_large`（範囲を選んで頼む）。
   - 本物のモデル（`src/ai/anthropic.ts`）: 呼ぶのは固定の `https://api.anthropic.com/v1/messages` だけ（設定で変えられない。転送も追わない）。本文は `<untrusted_data>` の中だけに入れ、規則は system に置く。応答の最初の text ブロックを JSON として読む（コードフェンスは外す）。読めない・空・途中で切れた（`stop_reason: "max_tokens"`）応答と、HTTP の失敗・時間切れは 502 `ai_failed`（読めない・途中で切れた応答の使用量は数える）。自動の再試行はしない。`temperature` は送らない（claude-sonnet-5-5 など新しいモデルは既定以外の値を断る）。鍵・プロンプト・本文はエラーとログに出さない（ログは失敗の種類と HTTP ステータスだけ）。テストは差し替えた `fetch` だけで、本物の API は CI でも手元でも呼ばない。
   - 使用量は表 `ai_usage`（migration 0005。owner × 月）に原子的に足す。金額は docs-core の単価表の見込み（偽物・単価不明は 0）。上限以上はモデルを呼ぶ前に 429 `quota_exceeded`、上限の 80% 以上で `nearLimit`。モデルの失敗・検証に通らない出力は 502 `ai_failed`（使った分は記録する）。
-- **索引に載せない**: 全ての応答に `X-Robots-Tag: noindex, nofollow`（`next.config.ts`）、全ページに `<meta name="robots" content="noindex, nofollow">`。`robots.txt` は Disallow を付けない（クロールを止めると noindex が読まれない）。
+- **索引に載せない**: 全ての応答に `X-Robots-Tag: noindex, nofollow`（`next.config.ts`）、全ページに `<meta name="robots" content="noindex, nofollow">`。`robots.txt` は Disallow を付けない（クロールを止めると noindex が読まれない）。公開 API の `/v1/*` だけは契約どおり `X-Robots-Tag: noindex` を handler が付ける（Next は config の header があると route の値を捨てるので、全体の規則から `/v1/` を外している）。
 - **本文**: niho-docs-ui の `BlockEditor`（TipTap）を使い、`blocks` は TipTap の doc の `content`（ブロックの配列）をそのまま保存する。サーバーが見るのは「`type` を持つ object の配列で、大きさと深さが上限の内側」だけ。**限定 AST としての厳密な検証（許すブロックの種類・HTML の正規化）は #33。**
 - **React を 1 本にする**: `.npmrc` の `install-links=true` で packages/* を node_modules に複製して入れる。docs-ui の側の node_modules（React 18）を拾わず、react・TipTap はこの app の 1 本に解決する（`src/components/PageEditor.test.tsx` が確かめる）。packages を書き換えたら `npm install` し直し、`apps/editor-web/.next` も消す（packages の version が同じだと webpack の cache が古い版を使い続け、`next build` は警告だけで通って実行時に 500 になる。CI は毎回新しい checkout なので影響しない）。
 - **bundler は webpack**（`--webpack`）: docs-core は `./types.js` で `./types.ts` を指す書き方で、Turbopack は node_modules の中のこれを解決しないため。`experimental.extensionAlias` で `.js` を `.ts` にも当てる。
-- **packages/editor-store**: migration（`migrations/NNNN_*.sql`、BEGIN/COMMIT で包み辞書順）と `EditorStore`。全てのクエリが `owner` と `deleted_at IS NULL` で絞る。`page_versions` には保存・上書き・戻す直前の本文を書く。`assets` は表だけで、書くコードはまだ無い。公開（公開版・転送・接続・鍵・プレビューの token）の表は `0009_publications.sql`、SQL は `src/publications.ts`。
+- **packages/editor-store**: migration（`migrations/NNNN_*.sql`、BEGIN/COMMIT で包み辞書順）と `EditorStore`。全てのクエリが `owner` と `deleted_at IS NULL` で絞る。`page_versions` には保存・上書き・戻す直前の本文を書く。`assets` は表だけで、書くコードはまだ無い。公開（公開版・転送・接続・鍵・プレビューの token）の表は `0009_publications.sql`（プレビューの token に結ぶ著者の列は `0010_preview_token_author.sql`）、SQL は `src/publications.ts`。
 
 ## 検索（#35）
 
@@ -171,6 +173,19 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **ブラウザが先に取るキー**: ページは keydown を `preventDefault` できるときだけ勝てる。⌘N（Ctrl+N）はブラウザのタブでは新しいウィンドウが開き、ページに届かない（そのときは一覧の「＋」から）。Firefox の Ctrl+Shift+P（プライベートウィンドウ）も届かない見込み。どちらも実ブラウザ・インストールした PWA の窓では確かめていない。
 - **公開のシートの開き方**: ヘッダーの「公開」、⌘⇧P、ページから `useEditorFrame().openPublish()`。シートの中身（発信先・条件・URL・更新・やめる）は `src/components/PagePublish.tsx`（#39）。⌘⇧P は `src/lib/shortcuts.ts` の判定で、シートが開いているあいだは ⌘N・⌘K を効かせない。
 
+## 公開 API v1（#40）
+
+発信先（NIHO Experience・NIHO・本人のサイト）が公開版を読む API。契約は [editor-publish-api-v1.md](../../docs/security/editor-publish-api-v1.md) と `@niho/editor-publish-contract`。データは Postgres（`DATABASE_URL` が無ければ `/v1/*` もプレビューの発行も 503 `temporarily_unavailable`）。
+
+- **経路**: `src/app/v1/[...path]/route.ts`（GET・HEAD。他のメソッドも handler に渡して 400 ＋ `Allow: GET, HEAD`）。`/v1/{handle}/published.json`・`/v1/{handle}/published/{id}.json`・`/v1/preview/{token}.json`。`src/proxy.ts` は `/v1/` を通さない（CSP の nonce も戻り先の header も要らない。ログインへも移さない）。
+- **handler**（`src/public-api/handler.ts`）: 判定の順・404 の同一性・410 の `movedTo`・ETag と `If-None-Match`（認証が先）・header・requestId つきのエラー・query の検証・プレビューの規則を契約どおりにし、返す直前に契約の検証器（`requireProjection`）で自己検証する（通らなければ 503）。資格・token は SHA-256 にしてから引き、ログ・例外には入れない。cursor は不透明（位置と一覧の範囲に結んだ印つき。書き換え・別の handle や include の cursor は 400。印は鍵を使わないので偽造は防がないが、cursor は権限を持たない）。
+- **データの port**: `src/public-api/source.ts` の `PublicApiSource`（鍵 → handle、一覧の keyset、handle × id の公開版、プレビュー token の拘束、現在の下書き）。Postgres の実装は `src/public-api/pg-source.ts`（SQL は packages/editor-store の `publications.ts`）。失効・解除・公開をやめた・移動は、記録されていれば時刻によらず効く（時計がずれても失効した鍵で読めない側に倒す）。期限は要求の時刻と比べる。面の資格は `EDITOR_FACE_CREDENTIALS`。
+- **プレビューの中身**: 現在の下書き（ページ・資産・公開・公開版を 1 つの読み取りの transaction で読む）から `buildSnapshot` で組み、version と時刻はページの保存の版（`revision`）と時刻（`updated_at`）。その handle に公開している（やめたものも含む）ページは、その公開の設定と、いまの公開版の URL を使う。公開していない handle では、URL を発信先の宣言（本人のサイトは接続の設定、面は `EDITOR_DESTINATION_DECLARATIONS`。stub は同梱の dev 用）から作る（無ければ 404）。著者は token に結んだもの（発行したときの本人。公開・更新が本人の名前で組むのと同じ）で、token に著者が無ければいまの公開版の著者（どちらも無ければ 404）。写真の URL は公開と同じ `EDITOR_ASSET_ORIGIN`（未設定なら写真のある下書きのプレビューは 503）。配線は公開のシート（#39）の部品（`src/publish/config.ts`・`ports.ts`）を `src/server/deps.ts` の `publicApiDeps` でつなぐ。
+- **rate limit**: 資格の SHA-256 ごとの 1 分の固定窓、instance ごと（instance が増えると全体の上限も増える）。超えたら 429 ＋ `Retry-After`。
+- **プレビューの発行**: `POST /api/pages/{id}/preview-token`（本文 `{ handle }`。本人だけ・同じ origin だけ）。201 `{ token, expiresAt, url }`。ページは本人の・ゴミ箱でないもの、handle は本人が役割で出せる面か本人の解除していない接続（どちらも満たさなければ同じ 404）。15 分、保存はハッシュと著者だけ（`PreviewTokenStore`。表は `preview_tokens`）。NIHO の役割と著者は公開のシート（#39）と同じ（`roleReaderOf`・`sessionAuthors`）: stub は `EDITOR_STUB_ROLES`（既定で両方の面に出せる）、niho は役割の契約（#42）まで面へは出せない（本人のサイトの接続へは出せる）。著者は session の名前で、無い・token に結べない形（256 文字を超える、url が https でない、など）なら著者なしで発行する（migration 0009。発行の前の token も著者なし）。
+- **テスト**: `src/public-api/handler.test.ts` が production の handler（＋メモリの `PublicApiSource`）と契約の参照モデル（テスト専用）を、cases.json の全シナリオと合成の world（400 個 × 60 要求、各一覧の cursor の全走査）で突き合わせ、status・header・本文がバイト単位で同じことを確かめる（cursor の文字列だけは違ってよい）。`src/public-api/pg-source.pg.test.ts` は同じ公開・接続の操作をメモリの store と Postgres の store で行い、両方の応答が同じことを確かめる。`test:e2e` は本番の build と実 DB で、鍵・面の資格・410・304・HEAD・プレビューの発行と読み取り（token の著者・stub の役割での面・`EDITOR_ASSET_ORIGIN` の写真の URL）・header を確かめる。
+- **Vary**: Next は App Router の全ての応答の Vary に自分の header（`rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch`）を足すので、実際の値はそれに `Authorization` を続けたもの（契約の文言は `Vary: Authorization`。オーナーの判断待ち）。
+
 ## まだやらないこと
 
-見た目（#48）、版・履歴・オフライン・画像・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、公開 API（#40）、鍵の画面（#41）、公開の知らせ（録音は公開版に含まれない、など）の表示と、本人のサイトが 2 つ以上のときの選び方（#39 の後）、録音の開始（#36）、検索の絞り込み（#35）、発信先・役割とつながり・設定の中身（#41・#42 とその後）、AI の画面・固有名詞の設定（#38 の後段）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。
+見た目（#48）、版・履歴・オフライン・画像・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、プレビューを開く画面（token の発行は API だけ。#40 の後）、鍵の画面（#41）、公開の知らせ（録音は公開版に含まれない、など）の表示と、本人のサイトが 2 つ以上のときの選び方（#39 の後）、録音の開始（#36）、検索の絞り込み（#35）、発信先・役割とつながり・設定の中身（#41・#42 とその後）、AI の画面・固有名詞の設定（#38 の後段）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。
