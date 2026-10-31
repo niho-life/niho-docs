@@ -252,7 +252,31 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 3. `scripts/editor-deploy/set-transcribe-key.sh` — 端末で実行すると、入力を画面に出さずに鍵を求める。パスワード管理の CLI から渡すときは `<鍵を出すコマンド> | scripts/editor-deploy/set-transcribe-key.sh`。
 4. `deploy.env` に `TRANSCRIBE_MODE=cloud-tasks`（任意で `TRANSCRIBE_TIMEOUT_SEC`）。
 5. `scripts/editor-deploy/deploy.sh --no-build` — `DEEPGRAM_API_KEY`（Secret の `latest`）・`EDITOR_TRANSCRIBE_ENGINE=deepgram` と、呼び出し口の 4 つの環境変数が付く。要求の上限も時間切れに合わせて上がる。smoke で worker の route が OIDC トークンなしで 401 を返すことを確かめる。
-6. 短い音声を 1 つ起こして、段落と話者が出ることを確かめる。
+6. 短い音声を 1 つ起こして、段落と話者が出ることを確かめる。**これは今できない**（下の「実地の確認」）。
+
+### 実地の確認（niho-app #19459 の接続が出てから）
+
+**本番で音声を 1 本通した確認は、まだ取れていません。** 画面から音声を上げるには本人のセッションが要りますが、`niho` モードは niho-app [#19459](https://github.com/niho-coliving/niho-app/issues/19459) の接続の契約が出るまで fail-closed で、**誰もログインできません**（§5 のとおり。`/auth/login/start` は `/auth/login?error=unavailable` へ戻る）。`stub` へ落とす経路は本番にはありません。ブラウザを変えても同じで、API を直に叩くにもセッションが要ります。
+
+**代わりに取れている確認**（2026-11-01 の配備、revision `niho-editor-00004-ntd`）:
+
+| 確かめたこと | どう確かめたか |
+| --- | --- |
+| エンジンと呼び出し口の両方が入った | `deploy.sh` のログに `transcription: on (deepgram)` と `transcription dispatcher: cloud-tasks (queue niho-editor-transcribe, sweep niho-editor-transcribe-sweep)` |
+| 鍵が形として通っている | 起動時検査（`checkStartupConfig`）は鍵が無い・形が不正なら port を開く前に終了する。revision が traffic を受けている＝通っている |
+| 内部 route が本番に居る | 配備前は 404、配備後は 401（`/api/internal/transcription/run`・`/sweep`、トークンなし） |
+| OIDC が実際に効いている | Cloud Scheduler の掃除が **200**（配備前は 404）。403 や 401 ではないので、audience と `niho-editor-tasks` の一致、route、DB、掃除の処理まで通っている |
+| 設定が噛み合っている | Cloud Run の要求の上限が 1320 秒（＝時間切れ 1200 ＋ 2 分）、キューは 3 回・60〜300 秒・同時 3 本、Scheduler の audience は run.app の URL |
+
+**接続が出たら、これだけ確かめれば完了と言えます**:
+
+1. 本人でログインし、録音ページに**短い音声（30 秒ほど）**を上げて「文字起こし」を押す。状態が `queued` → `running` → `succeeded` と進む。
+2. **段落と話者**が本文に入る（話者を分けた場合は 1 始まりの番号、名前は空）。長さが入る。
+3. わざと失敗させて、**音声が残り「もう一度」ができる**こと。エンジンを入れたまま、形は合うが Deepgram が受け付けない鍵の版（でたらめな 1 行。`set-transcribe-key.sh` で足す）で配備する。起動時検査は鍵の形しか見ないので配備は通る。音声を上げて「文字起こし」を押すと、run が `failed` になり、`errorCode`（Deepgram の 401 は `engine_unavailable` に写される）が画面に出て、音声は消えない。確かめたら**正しい鍵をもう一度入れて版を足し、配備し直してから**「もう一度」を押し、`succeeded` まで進むこと。なお、鍵の版を無効にして配備しても失敗の経路は通らない（エンジンが `off` になり、開始が 503 `transcription_unavailable` で断られるだけで、run が作られない）。
+4. 時間切れの扱いと、Cloud Run の要求の上限との順序。**時間切れは音声の長さではなく、エンジンが返すまでにかかった時間**（`TRANSCRIBE_TIMEOUT_SEC`、既定 1200 秒）で決まる。20 分を超える音声でも、その間に返れば成功するので、長い音声を上げても `engine_timeout` になるとは限らない。確かめるのは次の 2 つ。
+   - **順序**: Cloud Run の要求の上限が時間切れより先に切れないこと。`gcloud run services describe niho-editor --region <region> --format='value(spec.template.spec.timeoutSeconds)'` が 1320（＝時間切れ 1200 ＋ 2 分）になっている。
+   - **`engine_timeout` になること**: 時間切れの扱い自体は `run.test.ts`（エンジンの応答を遅らせるテスト）で固定してある。本番で実際に見るなら、`deploy.env` の `TRANSCRIBE_TIMEOUT_SEC=60`（下限）で配備し、処理に 60 秒より長くかかる音声を上げる。60 秒以内に返れば成功するので、起きなくても失敗ではない。確かめたら `TRANSCRIBE_TIMEOUT_SEC` を戻して配備し直す。
+5. 掃除が効くこと: 実行中の run を DB で `running` のまま古くして、5 分以内に `engine_timeout` で失敗にされる（または queued の run が積み直される）。
 
 ### 無効にする・回す
 
