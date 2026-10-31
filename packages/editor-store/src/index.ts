@@ -67,6 +67,7 @@ export {
   type RecordingSource,
   type UpdateRecordingResult,
 } from "./recordings.ts";
+export * from "./publications.ts";
 export {
   AUDIO_OBJECT_PREFIX,
   audioInfo,
