@@ -2,7 +2,15 @@ import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import type { ClientBase } from "pg";
 
-/** migration のファイル名の規則（4 桁の番号で始まる .sql。辞書順に適用する）。 */
+/**
+ * migration のファイル名の規則（数字 4 桁で始まる .sql。**辞書順に適用する**）。
+ *
+ * 2 つの形が混在する。どちらもこのパターンに合い、辞書順では "0" < "2" なので連番 → 日時の順に並ぶ。
+ * - `0001_…`〜（連番）: 履歴。**名前を変えない**（適用済みの名前が editor_store_migrations の主キー）。
+ * - `YYYYMMDDHHMMSS_…`（日時。これから作るもの）: `npm -C packages/editor-store run new-migration -- <名前>`
+ *   が付ける。人が番号を選ぶと並行作業で取り合いになるため（実際に #90/#93 が 0008、#100/#93 が 0009 で
+ *   衝突した）。同じ秒に 2 つできても名前が違うので両方入り、順序も決まる。
+ */
 export const MIGRATION_FILE_PATTERN = /^\d{4}.*\.sql$/;
 
 /** 適用済みの migration を記録する表（search_path の先頭の schema に作る）。 */
