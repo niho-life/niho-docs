@@ -114,6 +114,7 @@ exportMarkdown(blocks, { boxes: "quote" }) // Google ドキュメントへ渡す
 「…」›「Google ドキュメントへ」
   └ まだ届いていない変更を保存（flush）→ POST /api/pages/{id}/export/google-doc { exportId }
       本文はサーバーが保存済みの blocks から作る（ブラウザは本文を送らない）
+      題名はページの題名。**500 文字まで入るので、API の上限 200（UTF-16）で切る**（断らない。`googleDocTitle`）
       ├ completed → 文書を新しいタブで開く（URL は documentId から組み立てる）
       ├ drive_reconnect_required / 未接続 → /google-docs/connect?next=… へ案内
       │    「接続する」→ POST /api/google-docs/connect → API の authorizationUrl を検証して 303
