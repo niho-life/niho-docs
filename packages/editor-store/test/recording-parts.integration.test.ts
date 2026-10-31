@@ -17,6 +17,7 @@ import {
   RECORDING_CANDIDATES_MAX,
   addRecordingCandidate,
   adoptRecordingCandidate,
+  deleteRecordingCandidate,
   getRecordingCandidate,
   listRecordingCandidates,
 } from "../src/recording-candidates.ts";
@@ -428,6 +429,39 @@ describe("transcript candidates on PostgreSQL（別のエンジンの案）", { 
     for (let n = 3; n <= RECORDING_CANDIDATES_MAX; n += 1) assert.ok((await add(page, `案 ${n}`))?.status === "created", `案 ${n}`);
     assert.deepEqual(await add(page, "溢れる案"), { status: "too_many" });
     assert.equal((await listRecordingCandidates(pool, OWNER, page)).length, RECORDING_CANDIDATES_MAX);
+  });
+
+  it("要らない案は消せる（採用中・実行中は消せない。実行の行も一緒に消える）", async () => {
+    const page = await transcribed();
+    const added = await add(page, "Fake");
+    assert.ok(added?.status === "created");
+    const primary = added.candidates[0]!.id;
+    const second = added.candidate.id;
+
+    // 実行が走っている間は消せない
+    const created = await enqueueTranscription(pool, OWNER, page, run({ candidate: second }));
+    assert.ok(created?.status === "created");
+    assert.deepEqual(await deleteRecordingCandidate(pool, OWNER, page, second), { status: "running" });
+    // 採用中は消せない
+    assert.deepEqual(await deleteRecordingCandidate(pool, OWNER, page, primary), { status: "adopted" });
+
+    const claimed = await claimRun(pool, created.run.id);
+    await finishRun(pool, created.run.id, claimed!.generation, { segments: [{ start: 0, end: 7, text: "別のエンジンの段落", speaker: 1 }], durationSec: 610 });
+    const removed = await deleteRecordingCandidate(pool, OWNER, page, second);
+    assert.ok(removed && removed.status === "ok");
+    assert.deepEqual(
+      removed.candidates.map((item) => item.id),
+      [primary],
+    );
+    // その案に書く実行の行も消える（FK の CASCADE）
+    assert.equal((await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM transcription_runs WHERE id = $1", [created.run.id])).rows[0]!.n, 0);
+    // 正本は触らない
+    assert.equal((await getRecording(pool, OWNER, page))?.revision, 2);
+
+    // 別の人・無い案・不正な id・ゴミ箱
+    assert.equal(await deleteRecordingCandidate(pool, OTHER, page, primary), null);
+    assert.equal(await deleteRecordingCandidate(pool, OWNER, page, randomUUID()), null);
+    assert.equal(await deleteRecordingCandidate(pool, OWNER, page, "not-a-uuid"), null);
   });
 
   it("ページを消すと、音声の行と案も消える", async () => {

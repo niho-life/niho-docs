@@ -6,6 +6,7 @@ import type { TranscriptionDispatcher } from "../transcription/dispatch";
 import {
   addCandidateRoute,
   adoptCandidateRoute,
+  deleteCandidateRoute,
   getCandidateRoute,
   retryCandidateRoute,
   type CandidatesApiDeps,
@@ -61,6 +62,7 @@ const run: TranscriptionRunView = {
 
 type Behaviour = {
   recording?: Recording | null;
+  remove?: Awaited<ReturnType<CandidatesStore["deleteCandidate"]>>;
   candidates?: RecordingCandidateView[];
   full?: RecordingCandidate | null;
   add?: Awaited<ReturnType<CandidatesStore["addCandidate"]>>;
@@ -91,6 +93,12 @@ function memoryStore(behaviour: Behaviour = {}) {
     adoptCandidate: async () => {
       calls.push("adoptCandidate");
       return behaviour.adopt === undefined ? { status: "ok", recording: recording({ revision: 3 }), candidates: [view({ adopted: false }), view({ name: "Fake", adopted: true })] } : behaviour.adopt;
+    },
+    deleteCandidate: async (_owner, _pageId, candidateId) => {
+      calls.push("deleteCandidate");
+      if (behaviour.remove !== undefined) return behaviour.remove;
+      listed = listed.filter((item) => item.id !== candidateId);
+      return { status: "ok", candidates: listed };
     },
     enqueue: async (_owner, _pageId, input) => {
       calls.push(`enqueue:${input.candidate ?? "none"}`);
@@ -145,6 +153,8 @@ const get = (d: CandidatesApiDeps, candidateId: string) =>
   getCandidateRoute(request("GET", `/api/pages/${PAGE}/recording/candidates/${candidateId}`), PAGE, candidateId, d);
 const adopt = (d: CandidatesApiDeps, candidateId: string, headers: Record<string, string> = {}) =>
   adoptCandidateRoute(request("POST", `/api/pages/${PAGE}/recording/candidates/${candidateId}/adopt`, undefined, headers), PAGE, candidateId, d);
+const remove = (d: CandidatesApiDeps, candidateId: string, headers: Record<string, string> = {}) =>
+  deleteCandidateRoute(request("DELETE", `/api/pages/${PAGE}/recording/candidates/${candidateId}`, undefined, headers), PAGE, candidateId, d);
 const retry = (d: CandidatesApiDeps, candidateId: string, headers: Record<string, string> = {}) =>
   retryCandidateRoute(request("POST", `/api/pages/${PAGE}/recording/candidates/${candidateId}/transcribe`, undefined, headers), PAGE, candidateId, d);
 
@@ -265,6 +275,23 @@ describe("GET・採用・もう一度（/recording/candidates/{candidateId}）",
     expect((await adopt(deps("user-a", memoryStore({ adopt: null }).store), id)).status).toBe(404);
     expect((await adopt(deps(null, store), id)).status).toBe(401);
     expect((await adopt(deps("user-a", store), id, { origin: "http://evil.test" })).status).toBe(403);
+  });
+
+  it("案を消すと、残った案を返す（採用中・実行中は 409）", async () => {
+    const { store, calls } = memoryStore({ candidates: [view(), view({ id, name: "Fake", adopted: false })] });
+    const response = await remove(deps("user-a", store), id);
+    expect(response.status).toBe(200);
+    expect((await response.json()).candidates.map((item: { name: string }) => item.name)).toEqual(["Deepgram"]);
+    expect(calls).toEqual(["deleteCandidate"]);
+
+    for (const status of ["adopted", "running"] as const) {
+      const refused = await remove(deps("user-a", memoryStore({ remove: { status } }).store), id);
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toEqual({ error: status });
+    }
+    expect((await remove(deps("user-a", memoryStore({ remove: null }).store), id)).status).toBe(404);
+    expect((await remove(deps(null, store), id)).status).toBe(401);
+    expect((await remove(deps("user-a", store), id, { origin: "http://evil.test" })).status).toBe(403);
   });
 
   it("「もう一度」はその案の実行を積む（始められない理由は 409）", async () => {

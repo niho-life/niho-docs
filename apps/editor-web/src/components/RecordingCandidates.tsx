@@ -5,6 +5,7 @@ import {
   RecordingRequestError,
   addCandidate,
   adoptCandidate,
+  deleteCandidate,
   getCandidate,
   recordingErrorMessage,
   retryCandidate,
@@ -40,6 +41,7 @@ function detailOf(candidate: RecordingCandidateSummary): string {
  * - 「別の案を作る」で案を足し、その案の文字起こしを始める（設定のエンジンで作る。エンジンが増えたら選べるようにする）。
  * - 「見る」でその案の本文を読み、上の文字起こし（採用中の案）と見比べる。
  * - 「採用する」で正本に写す。それまでの本文（画面で直した分も）は、採用中だった案に残る。
+ * - 要らなくなった案は「消す」（1 回確かめてから）。採用中の案と、作っている途中の案は消せない。
  * - 案がまだ 1 つも無い録音では、「別の案を作る」を押したときに、いまの文字起こしが 1 つ目の案になる。
  */
 export function RecordingCandidates({
@@ -60,9 +62,11 @@ export function RecordingCandidates({
   const [message, setMessage] = useState<Message | null>(null);
   const [busy, setBusy] = useState(false);
   const [shown, setShown] = useState<RecordingCandidateFull | null>(null);
+  // 「消す」を押した案（1 回確かめる）
+  const [confirming, setConfirming] = useState<string | null>(null);
   const locked = busy || disabled === true;
 
-  const guard = async (action: "candidate" | "adopt", job: () => Promise<Message | null>) => {
+  const guard = async (action: "candidate" | "adopt" | "delete_candidate", job: () => Promise<Message | null>) => {
     if (locked) return;
     setBusy(true);
     try {
@@ -95,6 +99,15 @@ export function RecordingCandidates({
       onSnapshot(next);
       setShown(null);
       return { kind: "info", text: `${candidate.name} を採用しました` };
+    });
+
+  const remove = (candidate: RecordingCandidateSummary) =>
+    guard("delete_candidate", async () => {
+      await deleteCandidate(pageId, candidate.id);
+      setConfirming(null);
+      if (shown?.id === candidate.id) setShown(null);
+      onChanged();
+      return { kind: "info", text: `${candidate.name} を消しました` };
     });
 
   const retry = (candidate: RecordingCandidateSummary) =>
@@ -135,6 +148,23 @@ export function RecordingCandidates({
                 <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-disabled={locked || undefined} onClick={() => void retry(candidate)}>
                   もう一度
                 </button>
+              )}
+              {/* 採用中・作っている途中は消せない（server も断る） */}
+              {!candidate.adopted && candidate.state !== "pending" && confirming !== candidate.id && (
+                <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-disabled={locked || undefined} onClick={() => setConfirming(candidate.id)}>
+                  消す
+                </button>
+              )}
+              {confirming === candidate.id && (
+                <span role="group" aria-label="案を消す" style={ROW_STYLE}>
+                  <span className="es-note">この案を消しますか</span>
+                  <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-disabled={locked || undefined} onClick={() => void remove(candidate)}>
+                    消す
+                  </button>
+                  <button type="button" className="es-btn es-btn--quiet es-btn--sm" onClick={() => setConfirming(null)}>
+                    やめる
+                  </button>
+                </span>
               )}
             </li>
           ))}

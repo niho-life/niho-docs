@@ -30,6 +30,7 @@ import type { OwnerId, PageLang, Queryable } from "./types.ts";
  * - 採用を切り替えるときは、まず画面で直した今の本文を**採用中の案に書き戻し**、それから選んだ案を正本に写す（直した文章を失わせない）。
  * - 案の状態（作っている・できた・失敗した）は列に持たず、有効な run（queued・running）と段落の有無から決める
  *   （実行の表と二重に持たない）。
+ * - 要らなくなった案は消せる（採用中の案と、実行が走っている案は消せない）。
  * 読み書きは全て本人の・ゴミ箱でないページだけ（別の人・存在しない・不正な id・削除済み・録音の無いページは null）。
  */
 
@@ -393,6 +394,75 @@ export async function adoptRecordingCandidate(
       if (!saved) throw new Error("editor-store: recording disappeared while adopting a candidate");
       await client.query("COMMIT");
       return { status: "ok", recording: toRecording(saved), candidates: await listRecordingCandidates(client, owner, pageId) };
+    } catch (error) {
+      await rollback(client);
+      if (isInvalidTextRepresentation(error)) return null;
+      throw error;
+    }
+  } finally {
+    client.release();
+  }
+}
+
+export type DeleteRecordingCandidateResult =
+  | { status: "ok"; candidates: RecordingCandidateView[] }
+  /** 採用中の案は消せない（正本の出どころなので、別の案を採用してから消す）。 */
+  | { status: "adopted" }
+  /** その案の文字起こしが走っている（終わるか失敗するまで消せない）。 */
+  | { status: "running" };
+
+// $1 owner / $2 page id / $3 candidate id。採用中でない案だけを消す（実行は FK の CASCADE で消える）。
+const DELETE_CANDIDATE_SQL = "DELETE FROM page_recording_candidates WHERE owner = $1 AND page_id = $2 AND id = $3 AND NOT adopted";
+
+/**
+ * 案を消す（旧版に無い操作。見比べて要らなくなった案を片づける）。
+ * - その案が無い（別の人・存在しない・不正な id・削除済みのページ）: null
+ * - 採用中: adopted（何も消さない）/ その案の実行が走っている: running（何も消さない）
+ * 消すと、その案に書く実行の行も一緒に消える（0024 の FK の CASCADE）。正本（page_recordings）は触らない。
+ */
+export async function deleteRecordingCandidate(
+  pool: Connectable,
+  owner: OwnerId,
+  pageId: string,
+  candidateId: string,
+): Promise<DeleteRecordingCandidateResult | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId) || !isPageId(candidateId)) return null;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    try {
+      const candidate = (
+        await client.query<{ adopted: boolean; running: boolean }>(
+          `SELECT c.adopted,
+                  EXISTS (
+                    SELECT 1 FROM transcription_runs AS t
+                     WHERE t.candidate = c.id AND t.status IN ('queued', 'running')
+                  ) AS running
+             FROM page_recording_candidates AS c
+             JOIN pages AS p ON p.owner = c.owner AND p.id = c.page_id
+            WHERE c.owner = $1 AND c.page_id = $2 AND c.id = $3 AND p.deleted_at IS NULL
+              FOR UPDATE OF c`,
+          [owner, pageId, candidateId],
+        )
+      ).rows[0];
+      if (!candidate) {
+        await rollback(client);
+        return null;
+      }
+      if (candidate.adopted) {
+        await rollback(client);
+        return { status: "adopted" };
+      }
+      if (candidate.running) {
+        await rollback(client);
+        return { status: "running" };
+      }
+      await client.query(DELETE_CANDIDATE_SQL, [owner, pageId, candidateId]);
+      await client.query(TOUCH_PAGE_SQL, [owner, pageId]);
+      await client.query("COMMIT");
+      return { status: "ok", candidates: await listRecordingCandidates(client, owner, pageId) };
     } catch (error) {
       await rollback(client);
       if (isInvalidTextRepresentation(error)) return null;

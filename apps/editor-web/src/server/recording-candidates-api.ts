@@ -2,6 +2,7 @@ import type {
   AddRecordingCandidateInput,
   AddRecordingCandidateResult,
   AdoptRecordingCandidateResult,
+  DeleteRecordingCandidateResult,
   EnqueueTranscriptionInput,
   EnqueueTranscriptionResult,
   OwnerId,
@@ -18,7 +19,7 @@ import { transcriptionRunBody } from "./transcription-api";
 import { errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 
 /**
- * 文字起こしの案（#36 段 3b-4）の API: 案を作って実行を積む・案を読む・案を採用する・案にもう一度実行する。
+ * 文字起こしの案（#36 段 3b-4）の API: 案を作って実行を積む・案を読む・案を採用する・案にもう一度実行する・案を消す。
  * 旧 NIHO docs の candidateSets の工程 1（同じ音声を別のエンジンで起こして見比べ、採用する案を選ぶ）に当たる。
  *
  * - 作る: いまの文字起こしを 1 つ目の案として台帳に載せ（まだ無ければ）、空の案を足して、その案に書く実行を積む（202）。
@@ -39,6 +40,7 @@ export type CandidatesStore = {
   getCandidate: (owner: OwnerId, pageId: string, candidateId: string) => Promise<RecordingCandidate | null>;
   addCandidate: (owner: OwnerId, pageId: string, input: AddRecordingCandidateInput) => Promise<AddRecordingCandidateResult | null>;
   adoptCandidate: (owner: OwnerId, pageId: string, candidateId: string) => Promise<AdoptRecordingCandidateResult | null>;
+  deleteCandidate: (owner: OwnerId, pageId: string, candidateId: string) => Promise<DeleteRecordingCandidateResult | null>;
   enqueue: (owner: OwnerId, pageId: string, input: EnqueueTranscriptionInput) => Promise<EnqueueTranscriptionResult | null>;
   failRun: (runId: string, generation: number, errorCode: TranscriptionErrorCode) => Promise<boolean>;
 };
@@ -199,6 +201,24 @@ export function adoptCandidateRoute(request: Request, id: string, candidateId: s
     if (!result) return notFoundResponse();
     if (result.status === "not_ready") return jsonResponse(409, { error: "not_ready" });
     return jsonResponse(200, { ...withSpeakers(result.recording), candidates: result.candidates.map(candidateBody) });
+  });
+}
+
+/**
+ * DELETE /api/pages/{id}/recording/candidates/{candidateId} — 要らなくなった案を消す。
+ * 200 `{ candidates }`。採用中は 409 `{ error: "adopted" }`、実行が走っていれば 409 `{ error: "running" }`。
+ */
+export function deleteCandidateRoute(request: Request, id: string, candidateId: string, deps: CandidatesApiDeps): Promise<Response> {
+  return guarded("DELETE /api/pages/[id]/recording/candidates/[candidateId]", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    const result = await store.deleteCandidate(session.userId, id, candidateId);
+    if (!result) return notFoundResponse();
+    if (result.status !== "ok") return jsonResponse(409, { error: result.status });
+    return jsonResponse(200, { candidates: result.candidates.map(candidateBody) });
   });
 }
 

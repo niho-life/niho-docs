@@ -1,5 +1,5 @@
 import { candidatesDeps } from "@/server/deps";
-import { getCandidateRoute } from "@/server/recording-candidates-api";
+import { deleteCandidateRoute, getCandidateRoute } from "@/server/recording-candidates-api";
 
 export const dynamic = "force-dynamic";
 
@@ -9,4 +9,10 @@ type Context = { params: Promise<{ id: string; candidateId: string }> };
 export async function GET(request: Request, context: Context): Promise<Response> {
   const { id, candidateId } = await context.params;
   return getCandidateRoute(request, id, candidateId, candidatesDeps);
+}
+
+/** 要らなくなった案を消す（採用中・実行中は消せない）。 */
+export async function DELETE(request: Request, context: Context): Promise<Response> {
+  const { id, candidateId } = await context.params;
+  return deleteCandidateRoute(request, id, candidateId, candidatesDeps);
 }

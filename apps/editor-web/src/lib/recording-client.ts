@@ -128,7 +128,7 @@ function timeoutSignal(): AbortSignal | undefined {
   return typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : undefined;
 }
 
-async function request(path: string, method: "GET" | "POST" | "PATCH", body?: unknown): Promise<unknown> {
+async function request(path: string, method: "GET" | "POST" | "PATCH" | "DELETE", body?: unknown): Promise<unknown> {
   const signal = timeoutSignal();
   let response: Response;
   try {
@@ -261,8 +261,13 @@ export async function retryCandidate(pageId: string, candidateId: string): Promi
   await request(`${candidatePath(pageId, candidateId)}/transcribe`, "POST");
 }
 
+/** 要らなくなった案を消す（採用中・実行中は消せない）。応答は残った案。 */
+export async function deleteCandidate(pageId: string, candidateId: string): Promise<RecordingCandidateSummary[]> {
+  return candidatesOf(await request(candidatePath(pageId, candidateId), "DELETE"));
+}
+
 /** 失敗が起きた操作（同じ reason でも、何についての失敗かで文言が替わる）。 */
-export type RecordingAction = "load" | "import" | "edit" | "rename" | "merge" | "append" | "candidate" | "adopt";
+export type RecordingAction = "load" | "import" | "edit" | "rename" | "merge" | "append" | "candidate" | "adopt" | "delete_candidate";
 
 export const CONFLICT_MESSAGE = "別の場所で先に直されました。最新に合わせました";
 
@@ -285,6 +290,8 @@ const REASON_MESSAGES: Record<string, string> = {
   audio_not_ready: "音声の取り込みが終わっていません。",
   audio_expired: "音声は削除されました。",
   has_transcript: "文字起こしがすでにあります。",
+  adopted: "採用中の案は消せません。別の案を採用してから消してください。",
+  running: "この案は作っている途中です。できてから消してください。",
   transcription_unavailable: "いまは文字起こしを始められません。少ししてから、もう一度試してください。",
 };
 
@@ -295,7 +302,7 @@ export function recordingErrorMessage(error: unknown, action: RecordingAction): 
   if (status === 409) {
     // 案の 409 は競合ではなく、始められない・採用できない理由
     const message = reason ? REASON_MESSAGES[reason] : undefined;
-    if ((action === "candidate" || action === "adopt") && message) return message;
+    if ((action === "candidate" || action === "adopt" || action === "delete_candidate") && message) return message;
     return CONFLICT_MESSAGE;
   }
   if (status === 0) return "つながりませんでした。ネットワークを確かめて、もう一度試してください。";

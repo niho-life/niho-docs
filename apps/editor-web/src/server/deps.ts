@@ -4,6 +4,7 @@ import {
   addRecordingCandidate,
   adoptRecordingCandidate,
   audioInfo,
+  deleteRecordingCandidate,
   completeAudioPart,
   completeAudioUpload,
   completeImageUpload,
@@ -119,6 +120,7 @@ export const candidatesDeps: CandidatesApiDeps = {
       getCandidate: (owner, pageId, candidateId) => getRecordingCandidate(pool, owner, pageId, candidateId),
       addCandidate: (owner, pageId, input) => addRecordingCandidate(pool, owner, pageId, input),
       adoptCandidate: (owner, pageId, candidateId) => adoptRecordingCandidate(pool, owner, pageId, candidateId),
+      deleteCandidate: (owner, pageId, candidateId) => deleteRecordingCandidate(pool, owner, pageId, candidateId),
       enqueue: (owner, pageId, input) => enqueueTranscription(pool, owner, pageId, input),
       failRun: (runId, generation, errorCode) => failRun(pool, runId, generation, errorCode),
     };

@@ -151,6 +151,47 @@ describe("RecordingCandidates（文字起こしの案）", () => {
     expect(alertText()).toBe("この案はまだできていません。できてから採用できます。");
   });
 
+  it("要らない案は、1 回確かめてから消せる（採用中・作っている途中は出さない）", async () => {
+    const other = candidate({ id: SECOND, name: "開発の偽物", adopted: false });
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      expect(path).toBe(`/api/pages/${PAGE_ID}/recording/candidates/${SECOND}`);
+      expect(init?.method).toBe("DELETE");
+      return json(200, { candidates: [candidate()] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onChanged = vi.fn();
+    await mount([candidate(), other, candidate({ id: "33333333-3333-4333-8333-333333333333", adopted: false, state: "pending", segmentCount: 0 })], { onChanged });
+    // 採用中の案と、作っている途中の案には「消す」を出さない
+    const rows = [...container!.querySelectorAll("[data-candidate]")];
+    const labels = (row: Element) => [...row.querySelectorAll("button")].map((button) => button.textContent?.trim());
+    expect(labels(rows[0]!)).toEqual(["見る"]);
+    expect(labels(rows[1]!)).toEqual(["見る", "採用する", "消す"]);
+    expect(labels(rows[2]!)).toEqual([]);
+
+    await click("消す");
+    expect(rows[1]!.textContent).toContain("この案を消しますか");
+    // やめれば消さない
+    await click("やめる");
+    expect(fetchMock).not.toHaveBeenCalled();
+    await click("消す");
+    await act(async () => [...rows[1]!.querySelectorAll("button")].find((button) => button.textContent?.trim() === "消す")!.click());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    expect(statusText()).toContain("開発の偽物 を消しました");
+  });
+
+  it("採用中の案を消そうとしたら、server の理由を出す", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => json(409, { error: "adopted" })),
+    );
+    await mount([candidate(), candidate({ id: SECOND, adopted: false })]);
+    // 1 回目で確かめる欄が開き（行の「消す」は欄の「消す」に替わる）、2 回目で送る
+    await click("消す");
+    await click("消す");
+    expect(alertText()).toBe("採用中の案は消せません。別の案を採用してから消してください。");
+  });
+
   it("できなかった案は「もう一度」で作り直せる", async () => {
     const failed = candidate({ id: SECOND, name: "開発の偽物", adopted: false, state: "failed", segmentCount: 0, preview: [] });
     const fetchMock = vi.fn(async (path: string) => {
