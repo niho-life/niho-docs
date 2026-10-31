@@ -4,7 +4,7 @@ import { isPageId } from "./store.ts";
 import type { OwnerId, Queryable } from "./types.ts";
 
 /**
- * 本文の画像（#33。migrations/0009_image_assets.sql）。
+ * 本文の画像（#33。migrations/0011_image_assets.sql）。
  *
  * 流れ（音声（#36 段 2a）と同じ二段）: 開始（startImageUpload）で assets の行（kind = 'image'・upload_status = 'uploading'・
  * consent = false）を作る → ブラウザが保存先へ直接アップロードする → 完了（completeImageUpload）で、保存先にある object の

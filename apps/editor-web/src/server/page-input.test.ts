@@ -15,9 +15,9 @@ const paragraph = (text: string) => ({ type: "paragraph", content: [{ type: "tex
 describe("parseCreatePage", () => {
   it("accepts an empty page and the documented fields", () => {
     expect(parseCreatePage({})).toEqual({ ok: true, value: {} });
-    expect(parseCreatePage({ kind: "journal", title: "題名", lang: "en", blocks: [paragraph("本文")] })).toEqual({
+    expect(parseCreatePage({ kind: "article", title: "題名", lang: "en", blocks: [paragraph("本文")] })).toEqual({
       ok: true,
-      value: { kind: "journal", title: "題名", lang: "en", blocks: [paragraph("本文")] },
+      value: { kind: "article", title: "題名", lang: "en", blocks: [paragraph("本文")] },
     });
   });
 

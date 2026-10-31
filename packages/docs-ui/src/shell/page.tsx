@@ -149,7 +149,7 @@ export function ShellPage(props: ShellPageProps) {
       )}
       {props.kicker && <p className="es-kick">{props.kicker.toUpperCase()}</p>}
       <h1
-        className={`es-tt${ja ? " es-ja" : ""}${props.kind === "journal" ? " es-tt--journal" : ""}`}
+        className={`es-tt${ja ? " es-ja" : ""}`}
         data-ph="無題"
         // 題名が空のときは、見えている「無題」（::before のプレースホルダー）を見出しの名前にする（空の h1 にしない）
         aria-label={props.title ? undefined : "無題"}

@@ -51,14 +51,14 @@ async function count(pool: PgPool, owner: string): Promise<number> {
   return (await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM assets WHERE owner = $1", [owner])).rows[0]!.n;
 }
 
-describe("0009 on a database that has 0001 to 0008", { skip: databaseUrl === undefined }, () => {
+describe("0011 on a database that has 0001 to 0010", { skip: databaseUrl === undefined }, () => {
   let pool: PgPool;
   let drop: () => Promise<void>;
   let dir: string;
 
   before(async () => {
-    ({ pool, drop } = await withSchema("image0009"));
-    dir = await mkdtemp(join(tmpdir(), "editor-store-0009-"));
+    ({ pool, drop } = await withSchema("image0011"));
+    dir = await mkdtemp(join(tmpdir(), "editor-store-0011-"));
   });
 
   after(async () => {
@@ -70,13 +70,13 @@ describe("0009 on a database that has 0001 to 0008", { skip: databaseUrl === und
     const migrations = fileURLToPath(defaultMigrationsDir);
     const dirUrl = pathToFileURL(`${dir}/`);
     const names = (await readMigrations()).map((file) => file.name);
-    const earlier = names.filter((name) => name < "0009");
+    const earlier = names.filter((name) => name < "0011");
     assert.ok(earlier.includes("0001_editor_store.sql") && earlier.includes("0008_recording_audio.sql"));
     for (const name of earlier) await copyFile(join(migrations, name), join(dir, name));
     const client = await pool.connect();
     try {
       assert.deepEqual((await applyMigrations(client, dirUrl)).applied, earlier);
-      // 0009 の前に入っていた資産（音声）
+      // 0011 の前に入っていた資産（音声）
       const page = (await pool.query<{ id: string }>("INSERT INTO pages (owner, kind) VALUES ($1, 'rec') RETURNING id", [OWNER])).rows[0]!.id;
       const assetId = randomUUID();
       await pool.query(
@@ -86,9 +86,9 @@ describe("0009 on a database that has 0001 to 0008", { skip: databaseUrl === und
       );
       const before = (await pool.query("SELECT * FROM assets WHERE id = $1", [assetId])).rows[0]!;
 
-      await copyFile(join(migrations, "0009_image_assets.sql"), join(dir, "0009_image_assets.sql"));
+      await copyFile(join(migrations, "0011_image_assets.sql"), join(dir, "0011_image_assets.sql"));
       const second = await applyMigrations(client, dirUrl);
-      assert.deepEqual(second.applied, ["0009_image_assets.sql"]);
+      assert.deepEqual(second.applied, ["0011_image_assets.sql"]);
       assert.deepEqual(second.skipped, earlier);
 
       const afterRow = (await pool.query("SELECT * FROM assets WHERE id = $1", [assetId])).rows[0]!;

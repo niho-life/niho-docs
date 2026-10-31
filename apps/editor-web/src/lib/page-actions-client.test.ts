@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PageActionError,
+  deletePageRequest,
   duplicatePageRequest,
   getPageShare,
+  listPageVersions,
   pageExportUrl,
+  restorePageVersion,
   rotatePageShare,
   startPageShare,
   stopPageShare,
@@ -61,14 +64,78 @@ describe("page actions client", () => {
     }
   });
 
-  it("duplicates a page and returns the new id", async () => {
+  it("duplicates a page and returns the new id, title and kind (for the top of the list)", async () => {
     const newId = "7f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d12";
-    const fetchMock = mockFetch(201, { page: { id: newId, title: "合成のコピー" } });
-    expect(await duplicatePageRequest(ID)).toBe(newId);
+    const fetchMock = mockFetch(201, { page: { id: newId, title: "合成のコピー", kind: "rec", blocks: [] } });
+    expect(await duplicatePageRequest(ID)).toEqual({ id: newId, title: "合成のコピー", kind: "rec" });
     expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${ID}/duplicate`, { method: "POST", credentials: "same-origin", cache: "no-store" });
-    mockFetch(201, { page: { id: "not-a-uuid" } });
+    // 読めない種類は note として扱う（複製はできているので失敗にしない）
+    mockFetch(201, { page: { id: newId, title: "", kind: "unknown" } });
+    expect(await duplicatePageRequest(ID)).toEqual({ id: newId, title: "", kind: "note" });
+    mockFetch(201, { page: { id: "not-a-uuid", title: "x" } });
+    await expect(duplicatePageRequest(ID)).rejects.toMatchObject({ status: 500 });
+    mockFetch(201, { page: { id: newId } });
     await expect(duplicatePageRequest(ID)).rejects.toMatchObject({ status: 500 });
     mockFetch(404, { error: "not_found" });
     await expect(duplicatePageRequest(ID)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("deletes a page with DELETE (204), and keeps the status and code of a refusal", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(deletePageRequest(ID)).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${ID}`, expect.objectContaining({ method: "DELETE", credentials: "same-origin", cache: "no-store" }));
+    // 応答が来ないまま待ち続けない
+    expect((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].signal).toBeInstanceOf(AbortSignal);
+
+    mockFetch(409, { error: "published" });
+    await expect(deletePageRequest(ID)).rejects.toMatchObject({ name: "PageActionError", status: 409, code: "published" });
+    mockFetch(404, { error: "not_found" });
+    await expect(deletePageRequest(ID)).rejects.toMatchObject({ status: 404, code: "not_found" });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>", { status: 502 })));
+    await expect(deletePageRequest(ID)).rejects.toMatchObject({ status: 502, code: null });
+    const encoded = mockFetch(404, { error: "not_found" });
+    await expect(deletePageRequest("../trash")).rejects.toThrow(PageActionError);
+    expect(encoded).toHaveBeenCalledWith("/api/pages/..%2Ftrash", expect.anything());
+  });
+  it("lists the versions newest first as the server sent them, and refuses a malformed list", async () => {
+    const rows = [
+      { version: 3, reason: "restore", createdAt: "2026-01-03T00:00:00.000Z", blockCount: 2 },
+      { version: 2, reason: "ai", createdAt: "2026-01-02T00:00:00.000Z", blockCount: 0 },
+      { version: 1, reason: "autosave", createdAt: "2026-01-01T00:00:00.000Z", blockCount: 1 },
+    ];
+    const fetchMock = mockFetch(200, { versions: rows.map((row) => ({ ...row, blocks: ["dropped"] })) });
+    expect(await listPageVersions(ID)).toEqual(rows);
+    expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${ID}/versions`, { method: "GET", credentials: "same-origin", cache: "no-store" });
+    mockFetch(200, { versions: [] });
+    expect(await listPageVersions(ID)).toEqual([]);
+    for (const versions of [undefined, null, [{ ...rows[0], version: 0 }], [{ ...rows[0], blockCount: -1 }], [{ ...rows[0], reason: 1 }], [{ ...rows[0], createdAt: null }], ["x"]]) {
+      mockFetch(200, { versions });
+      await expect(listPageVersions(ID)).rejects.toMatchObject({ name: "PageActionError", status: 500 });
+    }
+    mockFetch(404, { error: "not_found" });
+    await expect(listPageVersions(ID)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("restores a version with the base revision (JSON, same origin, with a time limit) and returns the restored page", async () => {
+    const restored = { id: ID, title: "合成の題名", blocks: [{ type: "paragraph" }], revision: 8, updatedAt: "2026-01-04T00:00:00.000Z" };
+    const fetchMock = mockFetch(200, { page: { ...restored, kind: "note", lang: "ja", parent: null } });
+    expect(await restorePageVersion(ID, 2, 7)).toEqual(restored);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`/api/pages/${ID}/versions/2/restore`);
+    expect(init).toMatchObject({ method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" } });
+    expect(JSON.parse(String(init.body))).toEqual({ baseRevision: 7 });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+
+    // 競合・戻せない版・無い版は status と code を持つ
+    for (const [status, error] of [[409, "conflict"], [422, "unrestorable"], [404, "not_found"], [401, "unauthorized"]] as const) {
+      mockFetch(status, { error, page: restored });
+      await expect(restorePageVersion(ID, 2, 7)).rejects.toMatchObject({ name: "PageActionError", status, code: error });
+    }
+    // 形の違う応答・別のページの応答は使わない
+    for (const page of [undefined, { ...restored, id: "7f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d12" }, { ...restored, revision: 0 }, { ...restored, blocks: null }, { ...restored, title: 1 }]) {
+      mockFetch(200, { page });
+      await expect(restorePageVersion(ID, 2, 7)).rejects.toMatchObject({ status: 500 });
+    }
   });
 });

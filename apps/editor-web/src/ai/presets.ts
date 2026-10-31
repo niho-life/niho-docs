@@ -50,17 +50,15 @@ const NOTE: readonly PresetId[] = ["tidy", "summarize", "headings", "toEnglish"]
  */
 export function presetsFor(kind: PageKind, lang: PageLang): Preset[] {
   const ids: readonly PresetId[] =
-    kind === "journal"
-      ? ["tidy", "summarize", "articleIdeas"]
-      : kind === "note"
-        ? NOTE
-        : kind === "article"
-          ? lang === "en"
-            ? ["tighten", "addHeadings", "toJapanese", "checkFacts"]
-            : NOTE
-          : kind === "rec"
-            ? ["summarize"]
-            : [];
+    kind === "note"
+      ? NOTE
+      : kind === "article"
+        ? lang === "en"
+          ? ["tighten", "addHeadings", "toJapanese", "checkFacts"]
+          : NOTE
+        : kind === "rec"
+          ? ["summarize"]
+          : [];
   return ids.map((id) => PRESETS[id]);
 }
 
