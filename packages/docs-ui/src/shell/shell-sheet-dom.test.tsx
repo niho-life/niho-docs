@@ -205,7 +205,7 @@ describe("公開のシート（外を inert にする。#43）", () => {
 });
 
 /** レールを開閉する呼ぶ側。withClose が false なら ShellRail に onClose を渡さない（従来の全画面）。 */
-function RailOpener({ withClose = true }: { withClose?: boolean }) {
+function RailOpener({ withClose = true, sidebarOpen = false }: { withClose?: boolean; sidebarOpen?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <EditorShell
@@ -231,7 +231,7 @@ function RailOpener({ withClose = true }: { withClose?: boolean }) {
           </ShellRailSection>
         </ShellRail>
       }
-      sidebarOpen={false}
+      sidebarOpen={sidebarOpen}
       railOpen={open}
     >
       本文
@@ -322,6 +322,23 @@ describe("レールのシート（900px 未満。#43）", () => {
     expect(host.querySelector('[role="dialog"]')!.closest("[inert]")).toBeNull();
     key(document.activeElement!, "Escape");
     expect(host.querySelectorAll("[inert]")).toHaveLength(0);
+  });
+
+  it("一覧が全画面のあいだ（view=list）は、隠れているレールをダイアログにしない: 見えている一覧を inert にしない", () => {
+    const host = mount(<RailOpener sidebarOpen />);
+    open(host);
+    expect(host.querySelector("[data-editor-shell]")?.getAttribute("data-view")).toBe("list");
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.querySelector("aside.es-rail")).not.toBeNull();
+    expect(host.querySelector("aside.es-sb")?.closest("[inert]")).toBeNull();
+    expect(byText(host, "button", "一覧の項目")?.closest("[inert]")).toBeNull();
+  });
+
+  it("一覧が閉じてレールが開いている（view=rail）あいだだけシートになる", () => {
+    const host = mount(<RailOpener />);
+    open(host);
+    expect(host.querySelector("[data-editor-shell]")?.getAttribute("data-view")).toBe("rail");
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
   });
 
   it("900px 以上、または onClose が無いときは、従来どおり aside（ダイアログにしない）", () => {

@@ -1,7 +1,8 @@
-import { useId, useSyncExternalStore, type ReactNode } from "react";
+import { useContext, useId, useSyncExternalStore, type ReactNode } from "react";
 import { Icon } from "./icons";
 import { ShellSheet } from "./sheet";
 import type { ShellIconName } from "./types";
+import { ShellViewContext } from "./view";
 
 /** shell.css のスマホの境目（@media (max-width:900px)）と同じ。 */
 const NARROW_QUERY = "(max-width:900px)";
@@ -25,6 +26,7 @@ export type ShellRailProps = {
   /**
    * 渡すと、900px 未満ではレールを下からのシートにする（ShellSheet と同じ: dialog、Esc・幕・「閉じる」で onClose、
    * Tab は中で回る、外は inert、閉じたら開く前の要素へフォーカスを戻す）。渡さなければ従来どおりヘッダーの下の全画面。#43。
+   * 一覧が全画面のあいだ（EditorShell の view が list。レールは隠れている）はシートにしない。
    */
   onClose?: () => void;
 };
@@ -35,7 +37,9 @@ export type ShellRailProps = {
  */
 export function ShellRail({ children, label = "このページの設定と AI", onClose }: ShellRailProps) {
   const narrow = useSyncExternalStore(subscribeNarrow, isNarrow, isNarrowOnServer);
-  if (narrow && onClose) {
+  const view = useContext(ShellViewContext);
+  // 900px 未満で一覧が全画面のあいだ（view=list）は、レールを含むページ全体が隠れている。見えないダイアログで外を inert にしない
+  if (narrow && onClose && view !== "list") {
     return (
       <ShellSheet label={label} onClose={onClose} className="es-sheet--rail">
         <div className="es-sh-hd">

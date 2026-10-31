@@ -1,4 +1,5 @@
 import { useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { ShellViewContext, type ShellView } from "./view";
 
 /** 本文（main）の id。skip link の移動先。 */
 const SHELL_MAIN_ID = "es-main";
@@ -35,7 +36,7 @@ export type EditorShellProps = {
  * URL の # は変えない（呼ぶ側の hash の route を壊さない）。
  */
 export function EditorShell({ sidebar, header, rail, toolbar, sidebarOpen, railOpen, overlay, children }: EditorShellProps) {
-  const view = sidebarOpen ? "list" : railOpen && rail ? "rail" : "page";
+  const view: ShellView = sidebarOpen ? "list" : railOpen && rail ? "rail" : "page";
   const main = useRef<HTMLElement | null>(null);
   const skip = (event: ReactMouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
@@ -43,23 +44,25 @@ export function EditorShell({ sidebar, header, rail, toolbar, sidebarOpen, railO
   };
   return (
     <div className="es-root" data-editor-shell data-sidebar={sidebarOpen ? "open" : "closed"} data-rail={railOpen && rail ? "open" : "closed"} data-view={view}>
-      <a className="es-skip" href={`#${SHELL_MAIN_ID}`} onClick={skip}>
-        本文へ移動
-      </a>
-      <div className="es-ws">
-        {sidebar}
-        <div className="es-doc">
-          {header}
-          <div className="es-dbody">
-            <main ref={main} id={SHELL_MAIN_ID} className="es-canvas" tabIndex={-1}>
-              {children}
-            </main>
-            {railOpen && rail}
+      <ShellViewContext.Provider value={view}>
+        <a className="es-skip" href={`#${SHELL_MAIN_ID}`} onClick={skip}>
+          本文へ移動
+        </a>
+        <div className="es-ws">
+          {sidebar}
+          <div className="es-doc">
+            {header}
+            <div className="es-dbody">
+              <main ref={main} id={SHELL_MAIN_ID} className="es-canvas" tabIndex={-1}>
+                {children}
+              </main>
+              {railOpen && rail}
+            </div>
+            {toolbar}
           </div>
-          {toolbar}
         </div>
-      </div>
-      {overlay}
+        {overlay}
+      </ShellViewContext.Provider>
     </div>
   );
 }
