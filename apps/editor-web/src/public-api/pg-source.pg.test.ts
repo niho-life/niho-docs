@@ -412,10 +412,11 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
     };
     const tokenStore = pgPreviewTokenStore(pool);
     for (const preview of Object.values(previews)) {
-      expect(await tokenStore.issue(ACTOR, { pageId: preview.pageId, handle: preview.handle, sha256: sha256(preview.token), issuedAt: preview.issuedAt, expiresAt: preview.expiresAt })).toBe(true);
+      // 参照の world の token は著者を持たないので、ここも著者なし（いまの公開版の著者で組む）
+      expect(await tokenStore.issue(ACTOR, { pageId: preview.pageId, handle: preview.handle, sha256: sha256(preview.token), issuedAt: preview.issuedAt, expiresAt: preview.expiresAt, author: null })).toBe(true);
     }
     // 別の人のページ・ゴミ箱のページには発行しない
-    expect(await tokenStore.issue(OTHER_ACTOR, { pageId: pages.live1.id, handle: "site-alpha", sha256: sha256("pv_other"), issuedAt: now, expiresAt: previews.live1.expiresAt })).toBe(false);
+    expect(await tokenStore.issue(OTHER_ACTOR, { pageId: pages.live1.id, handle: "site-alpha", sha256: sha256("pv_other"), issuedAt: now, expiresAt: previews.live1.expiresAt, author: null })).toBe(false);
 
     const faceEntries: FaceCredentialEntry[] = [
       { audience: "exp", sha256: sha256(EXP_TOKEN), expiresAt: new Date(Date.parse(now) + 3_600_000).toISOString() },
@@ -541,26 +542,46 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
     expect((await ask("preview other face", { url: `/v1/preview/${previews.unlisted.token}.json`, face: NIHO_TOKEN })).status).toBe(404);
     expect((await ask("preview expired", { url: `/v1/preview/${previews.expired.token}.json`, key: "alpha2" })).status).toBe(404);
 
+    // token に結んだ著者は、いまの公開版の著者より先に使う（公開・更新が本人のいまの名前で組むのと同じ）。Postgres の側だけ
+    const renamed = `pv_${"R".repeat(42)}A`;
+    const bound = { name: "Renamed Writer", handle: null, url: null };
+    expect(await tokenStore.issue(ACTOR, { pageId: pages.live1.id, handle: "site-alpha", sha256: sha256(renamed), issuedAt: now, expiresAt: previews.live1.expiresAt, author: bound })).toBe(true);
+    const renamedPreview = await pgApi.handle({
+      method: "GET",
+      url: `/v1/preview/${renamed}.json`,
+      headers: { authorization: `Bearer ${sides[1]!.keys.get("alpha2")}` },
+      requestId: "req_pg_bound_author",
+    });
+    expect(renamedPreview.status).toBe(200);
+    expect(body(renamedPreview)).toMatchObject({ author: bound, canonicalUrl: body(preview).canonicalUrl, title: "DRAFT-ONLY unpublished title" });
+    expect(body(preview).author).toMatchObject({ name: "Example Writer" });
+
     expect(compared).toBeGreaterThan(60);
   }, 60_000);
 
-  it("builds a preview for a handle the page was never published to from the connection and the current author", async () => {
+  it("builds a preview for a handle the page was never published to from the connection or the face's declaration and the token's author", async () => {
     const page = seedPage("never published");
     const side = pgSide();
     await side.addPage(page);
     const created = await side.connections.createConnection({ actorId: ACTOR, handle: "site-gamma", mode: "api", siteUrl: "https://gamma.example.net" });
     if (!created.ok) throw new Error(created.reason);
     const now = "2026-10-01T12:00:00.000Z";
-    const token = `pv_${"N".repeat(42)}A`;
-    expect(await pgPreviewTokenStore(pool).issue(ACTOR, { pageId: page.id, handle: "site-gamma", sha256: sha256(token), issuedAt: now, expiresAt: "2026-10-01T12:15:00.000Z" })).toBe(true);
-    const request = { method: "GET", url: `/v1/preview/${token}.json`, headers: { authorization: `Bearer ${created.key.plaintext}` }, requestId: "req_preview" };
-    const authors = new MemoryAuthors();
-    const withAuthor = createPublicApi({
-      source: pgPublicApiSource(pool, { assetUrls: memoryAssetUrls(), authors: { read: async (actor) => (actor === ACTOR ? { name: "Example Writer", handle: null, url: null } : authors.read(actor)) } }),
-      faces: faceCredentialSource([]),
-      clock: { now: () => "2026-10-01T12:01:00.000Z" },
-    });
-    const response = await withAuthor.handle(request);
+    const clock = { now: () => "2026-10-01T12:01:00.000Z" };
+    const writer = { name: "Example Writer", handle: null, url: null };
+    const tokens = { site: `pv_${"N".repeat(42)}A`, anonymous: `pv_${"M".repeat(42)}A`, face: `pv_${"F".repeat(42)}A` };
+    const issue = (token: string, handle: string, author: typeof writer | null) =>
+      pgPreviewTokenStore(pool).issue(ACTOR, { pageId: page.id, handle, sha256: sha256(token), issuedAt: now, expiresAt: "2026-10-01T12:15:00.000Z", author });
+    expect(await issue(tokens.site, "site-gamma", writer)).toBe(true);
+    expect(await issue(tokens.anonymous, "site-gamma", null)).toBe(true);
+    expect(await issue(tokens.face, "exp", writer)).toBe(true);
+    const request = (token: string, credential: string) =>
+      ({ method: "GET", url: `/v1/preview/${token}.json`, headers: { authorization: `Bearer ${credential}` }, requestId: "req_preview" });
+    const faces = new MemoryDeclarations();
+    faces.set("exp", FACE_DECLARATIONS.exp);
+    const expFace: FaceCredentialEntry = { audience: "exp", sha256: sha256(EXP_TOKEN), expiresAt: "2026-10-01T13:00:00.000Z" };
+    const api = createPublicApi({ source: pgPublicApiSource(pool, { assetUrls: memoryAssetUrls(), declarations: faces }), faces: faceCredentialSource([expFace]), clock });
+
+    const response = await api.handle(request(tokens.site, created.key.plaintext));
     expect(response.status).toBe(200);
     const doc = JSON.parse(response.body ?? "null") as Record<string, unknown>;
     expect(doc).toMatchObject({
@@ -569,20 +590,25 @@ describe.skipIf(databaseUrl === undefined)("public API on PostgreSQL answers lik
       slug: "coastal-walk-never-published",
       canonicalUrl: "https://gamma.example.net/coastal-walk-never-published",
       range: "live",
-      author: { name: "Example Writer" },
+      author: writer,
       version: 1,
       preview: { expiresAt: "2026-10-01T12:15:00.000Z", dest: "site", noindex: true },
     });
-    // 著者が分からなければ（公開したことも無ければ）組めない
-    const withoutAuthor = createPublicApi({ source: pgPublicApiSource(pool, { assetUrls: memoryAssetUrls() }), faces: faceCredentialSource([]), clock: { now: () => "2026-10-01T12:01:00.000Z" } });
-    expect((await withoutAuthor.handle(request)).status).toBe(404);
+    // 面へは宣言の URL で組む（宣言が無ければ組めない）
+    const face = await api.handle(request(tokens.face, EXP_TOKEN));
+    expect(face.status).toBe(200);
+    expect(JSON.parse(face.body ?? "null")).toMatchObject({ dest: "exp", canonicalUrl: "https://exp.example.com/guides/coastal-walk-never-published", author: writer });
+    const undeclared = createPublicApi({ source: pgPublicApiSource(pool, { assetUrls: memoryAssetUrls() }), faces: faceCredentialSource([expFace]), clock });
+    expect((await undeclared.handle(request(tokens.face, EXP_TOKEN))).status).toBe(404);
+    // 著者を結んでいない token は、公開したことも無ければ組めない
+    expect((await api.handle(request(tokens.anonymous, created.key.plaintext))).status).toBe(404);
     // 資産の URL が作れないとき（置き場の未設定）は 503（理由は出さない）
     const unwired = createPublicApi({
-      source: pgPublicApiSource(pool, { assetUrls: { urlFor: () => { throw new Error("not wired"); } }, authors: { read: async () => ({ name: "Example Writer", handle: null, url: null }) } }),
+      source: pgPublicApiSource(pool, { assetUrls: { urlFor: () => { throw new Error("not wired"); } } }),
       faces: faceCredentialSource([]),
-      clock: { now: () => "2026-10-01T12:01:00.000Z" },
+      clock,
       onUnexpected: () => undefined,
     });
-    expect((await unwired.handle(request)).status).toBe(503);
+    expect((await unwired.handle(request(tokens.site, created.key.plaintext))).status).toBe(503);
   });
 });

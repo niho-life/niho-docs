@@ -29,6 +29,9 @@ import { DEV_DECLARATIONS } from "./dev-declarations";
  * - authors: session の profile の名前（handle・url は null）。名前が無ければ公開を失敗にする。
  * - facts: 関連する体験が掲載中かは、まだ読めない（null＝不明＝満たさない）。
  * - assetUrls: `EDITOR_ASSET_ORIGIN` から `${origin}/assets/${sha256}.${ext}`。未設定なら例外（写真のあるページの公開は失敗する）。
+ *
+ * 公開 API（#40）のプレビューも同じ部品を使う（src/server/deps.ts）: 写真の URL と面の宣言は publicApiDeps、
+ * 役割と著者はプレビュー token の発行（previewTokenDeps。著者は発行のときに token に結ぶ）。
  */
 
 export type PublishWiring = {

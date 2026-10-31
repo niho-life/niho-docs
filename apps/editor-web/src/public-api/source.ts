@@ -2,6 +2,7 @@ import {
   SHA256_PATTERN,
   TIMESTAMP_PATTERN,
   isFaceDest,
+  type Author,
   type FaceDest,
   type MovedTo,
   type PublicationRange,
@@ -71,6 +72,11 @@ export interface PreviewBinding {
   readonly handle: string;
   readonly issuedAt: string;
   readonly expiresAt: string;
+  /**
+   * 発行したときの本人の著者（公開 API の要求には本人の session が無いので、発行のときに token に結ぶ）。
+   * 無い（名前の無い本人・著者を結ぶ前に発行した token）は null で、プレビューはいまの公開版の著者で組む。
+   */
+  readonly author: Author | null;
 }
 
 /** 下書きの内容を公開版の形にしたもの（公開の時点で決まる id・dest・版・時刻・Markdown・contractVersion を除く）。 */
@@ -98,10 +104,11 @@ export interface PublicApiSource {
   /** プレビュー token の SHA-256 → 拘束。未知は null（期限切れ・ページがゴミ箱のものも null にしてよい。handler も期限を見る）。 */
   previewTokenByHash(sha256: string, now: string): Promise<PreviewBinding | null>;
   /**
-   * プレビュー用の現在の下書き（packages/editor-publish の buildSnapshot で、その handle の公開の設定と現在の下書きから組む）。
-   * revision・savedAt はページの保存の版と時刻。ページが無い・ゴミ箱・公開の形に組めない（未確認の画像など）ときは null。
+   * token の拘束（ページ・handle・著者）のプレビュー用の現在の下書き（packages/editor-publish の buildSnapshot で、その handle の
+   * 公開の設定と現在の下書きから組む。著者は token に結んだもの、無ければいまの公開版のもの）。
+   * revision・savedAt はページの保存の版と時刻。ページが無い・ゴミ箱・公開の形に組めない（未確認の画像・著者が分からない）ときは null。
    */
-  previewDraft(pageId: string, handle: string): Promise<PreviewDraft | null>;
+  previewDraft(binding: PreviewBinding): Promise<PreviewDraft | null>;
 }
 
 // --- 面（NIHO の発信先）のサービス間の資格 ------------------------------------------------------

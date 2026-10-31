@@ -6,7 +6,6 @@ import {
   slugFromTitle,
   type AssetRecord,
   type AssetUrls,
-  type AuthorSource,
   type DeclarationSource,
   type DraftPage,
 } from "@niho/editor-publish";
@@ -41,26 +40,21 @@ import type { DraftContent, PublicApiSource, PublishedListRow, PublishedLookup, 
  * - 一覧の位置の時刻は、公開の updated_at（PublishService の時計のミリ秒の値）をマイクロ秒の文字列にして渡す。
  * - プレビューは、ページ・資産・公開・公開版を 1 つの読み取りの transaction（REPEATABLE READ）で読み、現在の下書きから
  *   buildSnapshot で組む。version と時刻はページの保存の版（revision）と時刻（updated_at）。
+ *   著者は token に結んだもの（発行したときの本人。0009）で、無ければいまの公開版の著者。どちらも無ければ組めない（404）。
  */
 
 export interface PgPublicApiOptions {
-  /** プレビューの写真の URL（公開と同じ資産の置き場）。 */
+  /**
+   * プレビューの写真の URL（公開と同じ資産の置き場。実行時は src/publish/ports.ts の assetUrlsOf と `EDITOR_ASSET_ORIGIN`）。
+   * 作れない（置き場の未設定）ときは、写真のある下書きのプレビューは 503（公開版の URL は公開版の中にある）。
+   */
   readonly assetUrls: AssetUrls;
   /**
-   * この handle に公開していないページのプレビューの URL に使う、面の宣言（本人のサイトは接続の設定から作る）。
-   * 無ければ、面へのそのプレビューは組めない（404）。
+   * この handle に公開していないページのプレビューの URL に使う、面の宣言（本人のサイトは接続の設定から作る。実行時は
+   * src/publish/ports.ts の faceDeclarations）。無ければ、面へのそのプレビューは組めない（404）。
    */
   readonly declarations?: DeclarationSource;
-  /** 同じく著者。無い・読めないときは、そのページのいまの公開版の著者。どちらも無ければ組めない（404）。 */
-  readonly authors?: AuthorSource;
 }
-
-/** 資産の置き場の URL をつなぐまで（#39 の配線）。写真のある下書きのプレビューは組めずに 503（公開版の URL は公開版の中にある）。 */
-export const PREVIEW_ASSET_URLS_UNWIRED: AssetUrls = {
-  urlFor() {
-    throw new Error("asset urls are not wired");
-  },
-};
 
 /** この handle での URL と、シートの設定（公開の前の既定か、この handle の公開の設定）。 */
 interface Placement {
@@ -116,21 +110,11 @@ function microseconds(iso: string): string {
 export function pgPublicApiSource(db: Database, options: PgPublicApiOptions): PublicApiSource {
   const declarations = siteDeclarationSource(pgPublishStore(db), options.declarations);
 
-  /** この handle に公開したことが無い（または離れた）ページの URL と著者。組めなければ null。 */
-  async function placeElsewhere(page: DraftPageRow, handle: string, current: unknown): Promise<Placement | null> {
+  /** この handle に公開したことが無い（または離れた）ページの URL（著者は呼び出し側が決める）。組めなければ null。 */
+  async function placeElsewhere(page: DraftPageRow, handle: string, author: Author): Promise<Placement | null> {
     const parsed = parseDestinationDeclaration(await declarations.get(handle));
     if (!parsed.ok) return null;
     const slug = slugFromTitle(page.title, page.id);
-    let author: Author | null = null;
-    if (options.authors) {
-      try {
-        author = await options.authors.read(page.ownerId);
-      } catch {
-        author = null;
-      }
-    }
-    author ??= authorOf(current);
-    if (author === null) return null;
     return { ...DEFAULT_SETTINGS, slug, canonicalUrl: destinationUrl(parsed.value, slug), author };
   }
 
@@ -163,10 +147,12 @@ export function pgPublicApiSource(db: Database, options: PgPublicApiOptions): Pu
 
     async previewTokenByHash(sha256, now) {
       const token = await findPreviewToken(db, sha256, now);
-      return token ? { pageId: token.pageId, handle: token.handle, issuedAt: token.issuedAt, expiresAt: token.expiresAt } : null;
+      return token
+        ? { pageId: token.pageId, handle: token.handle, issuedAt: token.issuedAt, expiresAt: token.expiresAt, author: token.author }
+        : null;
     },
 
-    async previewDraft(pageId, handle) {
+    async previewDraft({ pageId, handle, author: bound }) {
       const dest = publishDestOfHandle(handle);
       if (dest === null) return null;
       // ページ・資産・公開・公開版を同じ時点で読む（保存の版と本文が食い違わない）
@@ -181,12 +167,14 @@ export function pgPublicApiSource(db: Database, options: PgPublicApiOptions): Pu
       });
       if (!read) return null;
       const { page, assets, publication, current } = read;
+      // 著者は token に結んだもの（発行したときの本人。公開・更新が本人の名前で組むのと同じ）。無ければいまの公開版の著者
+      const author = bound ?? authorOf(current);
+      if (author === null) return null;
       let placement: Placement | null;
       if (publication !== null && publication.handle === handle) {
-        // この handle の公開（やめたものも含む）の設定と、いまの公開版の URL・著者（参照モデルの world と同じ）
+        // この handle の公開（やめたものも含む）の設定と、いまの公開版の URL（参照モデルの world と同じ）
         const canonicalUrl = canonicalUrlOf(current);
-        const author = authorOf(current);
-        placement = canonicalUrl === null || author === null ? null : {
+        placement = canonicalUrl === null ? null : {
           slug: publication.slug,
           canonicalUrl,
           range: publication.range,
@@ -196,7 +184,7 @@ export function pgPublicApiSource(db: Database, options: PgPublicApiOptions): Pu
           author,
         };
       } else {
-        placement = await placeElsewhere(page, handle, current);
+        placement = await placeElsewhere(page, handle, author);
       }
       if (placement === null) return null;
       const built = await buildSnapshot({
@@ -231,7 +219,7 @@ export function pgPublicApiSource(db: Database, options: PgPublicApiOptions): Pu
   };
 }
 
-/** プレビュー token の保存先（ハッシュだけ。本人の・ゴミ箱でないページのときだけ書く）。 */
+/** プレビュー token の保存先（ハッシュと、発行した本人の著者だけ。本人の・ゴミ箱でないページのときだけ書く）。 */
 export function pgPreviewTokenStore(db: Database): PreviewTokenStore {
   return {
     async issue(owner, record) {
@@ -242,6 +230,7 @@ export function pgPreviewTokenStore(db: Database): PreviewTokenStore {
         handle: record.handle,
         issuedAt: record.issuedAt,
         expiresAt: record.expiresAt,
+        author: record.author,
       });
       return created !== null;
     },

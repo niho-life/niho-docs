@@ -300,7 +300,7 @@ export function createPublicApi(options: PublicApiOptions): PublicApi {
       || time(record.expiresAt) - time(record.issuedAt) > PREVIEW_TOKEN_MAX_TTL_SECONDS * 1000
       || !canRead(principal, record.handle)
     ) return error("not_found", context);
-    const draft = await api.previewDraft(record.pageId, record.handle);
+    const draft = await api.previewDraft(record);
     const dest = destOfHandle(record.handle);
     if (!draft || dest === null) return error("not_found", context);
     if (query.size > 0) return error("invalid_request", context);

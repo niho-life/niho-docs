@@ -74,10 +74,11 @@ export function worldSource(world: ReferenceWorld, options: WorldSourceOptions =
     async previewTokenByHash(sha256) {
       record("previewTokenByHash");
       const token = world.previewTokens.find((candidate) => candidate.sha256 === sha256);
-      return token ? { pageId: token.pageId, handle: token.handle, issuedAt: token.issuedAt, expiresAt: token.expiresAt } : null;
+      // 参照モデルの token は著者を持たない（world の下書きの内容が著者を持つ）
+      return token ? { pageId: token.pageId, handle: token.handle, issuedAt: token.issuedAt, expiresAt: token.expiresAt, author: null } : null;
     },
 
-    async previewDraft(pageId) {
+    async previewDraft({ pageId }) {
       record("previewDraft");
       const page = world.pages.find((candidate) => candidate.id === pageId);
       return page ? { revision: page.draft.revision, savedAt: page.draft.savedAt, content: page.draft.content } : null;

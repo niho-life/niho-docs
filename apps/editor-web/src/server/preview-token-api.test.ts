@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { createHash, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { isPreviewToken } from "@niho/editor-publish-contract";
+import { isPreviewToken, type Author } from "@niho/editor-publish-contract";
 import { createReferenceServer, type ReferenceWorld } from "@niho/editor-publish-contract/test-support";
 import type { AuthProvider } from "../auth/types";
 import { createPublicApi } from "../public-api/handler";
@@ -12,6 +12,7 @@ import { issuePreviewTokenRoute, PREVIEW_TOKEN_TTL_MS, type PreviewTokenApiDeps,
 const ORIGIN = "http://editor.test";
 const OWNER = "owner-a";
 const NOW = "2026-10-01T00:00:00.000Z";
+const WRITER: Author = { name: "Example Writer", handle: null, url: null };
 
 type Page = { id: string; owner: string; deleted: boolean };
 
@@ -40,7 +41,9 @@ function auth(userId: string | null): AuthProvider {
   };
 }
 
-function setup(options: { user?: string | null; roles?: string[]; connections?: string[]; pages?: Page[]; db?: boolean } = {}) {
+function setup(
+  options: { user?: string | null; roles?: string[]; connections?: string[]; pages?: Page[]; db?: boolean; author?: () => Promise<Author> } = {},
+) {
   const pageId = randomUUID();
   const pages = options.pages ?? [{ id: pageId, owner: OWNER, deleted: false }];
   const saved = memory(pages);
@@ -48,7 +51,13 @@ function setup(options: { user?: string | null; roles?: string[]; connections?: 
   const deps: PreviewTokenApiDeps = {
     auth: () => auth(options.user === undefined ? OWNER : options.user),
     store: () => (options.db === false ? null : saved.store),
-    roles: () => ({ read: async (actor) => (actor === OWNER ? options.roles ?? [] : []) }),
+    roles: (session) => ({ read: async (actor) => (actor === OWNER && session.userId === OWNER ? options.roles ?? [] : []) }),
+    authors: (session) => ({
+      read: async (actor) => {
+        if (actor !== session.userId) throw new Error("another actor");
+        return options.author ? options.author() : WRITER;
+      },
+    }),
     connections: () => (options.db === false ? null : { has: async (actor, handle) => actor === OWNER && connections.includes(handle) }),
     clock: { now: () => NOW },
     env: {},
@@ -80,8 +89,28 @@ describe("POST /api/pages/{id}/preview-token", () => {
       sha256: createHash("sha256").update(body.token).digest("hex"),
       issuedAt: NOW,
       expiresAt: body.expiresAt,
+      author: WRITER,
     }]);
     expect(JSON.stringify(rows)).not.toContain(body.token);
+  });
+
+  it("binds the owner's author to the token, and issues without one when it cannot be read or does not fit", async () => {
+    const full: Author = { name: "Example Writer", handle: "example-writer", url: "https://writer.example.com/" };
+    const cases: [string, () => Promise<Author>, Author | null][] = [
+      ["full author", async () => full, full],
+      ["no profile", async () => { throw new Error("author profile is not available"); }, null],
+      ["blank name", async () => ({ name: "   ", handle: null, url: null }), null],
+      ["long name", async () => ({ name: "a".repeat(257), handle: null, url: null }), null],
+      ["control character", async () => ({ name: "Example\u0007Writer", handle: null, url: null }), null],
+      ["blank handle", async () => ({ name: "Example Writer", handle: "", url: null }), null],
+      ["http url", async () => ({ name: "Example Writer", handle: null, url: "http://writer.example.com/" }), null],
+    ];
+    for (const [label, author, expected] of cases) {
+      const { pageId, deps, rows } = setup({ author });
+      const response = await issuePreviewTokenRoute(post(pageId, { handle: "site-alpha" }), pageId, deps);
+      expect(response.status, label).toBe(201);
+      expect(rows.map((row) => row.author), label).toEqual([expected]);
+    }
   });
 
   it("issues for a face only when the owner's NIHO roles open it", async () => {

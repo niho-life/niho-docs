@@ -921,7 +921,9 @@ describe("public API v1 (production build, PostgreSQL)", () => {
   const otherKey = `ek_${randomBytes(32).toString("base64url")}`;
   const expToken = `st_${randomBytes(24).toString("base64url")}`;
   const expiredPreview = `pv_${randomBytes(32).toString("base64url")}`;
-  const ids = { live: randomUUID(), stopped: randomUUID(), exp: randomUUID(), unlisted: randomUUID(), other: randomUUID() };
+  const ids = { live: randomUUID(), stopped: randomUUID(), exp: randomUUID(), unlisted: randomUUID(), other: randomUUID(), photo: randomUUID() };
+  const assetOrigin = "https://assets.e2e.example.net";
+  const photo = { id: randomUUID(), sha256: sha256("synthetic e2e photo"), alt: "Synthetic harbor photo" };
 
   let dev;
   let prod;
@@ -937,6 +939,8 @@ describe("public API v1 (production build, PostgreSQL)", () => {
       EDITOR_AUTH_MODE: "niho",
       DATABASE_URL: schemaUrl,
       EDITOR_FACE_CREDENTIALS: JSON.stringify([{ audience: "exp", sha256: sha256(expToken), expiresAt: at(60) }]),
+      // 公開のシート（#39）と同じ写真の置き場（プレビューの写真の URL）
+      EDITOR_ASSET_ORIGIN: assetOrigin,
       PORT: String(port),
       HOSTNAME: "127.0.0.1",
       NEXT_TELEMETRY_DISABLED: "1",
@@ -1028,6 +1032,17 @@ describe("public API v1 (production build, PostgreSQL)", () => {
     await publish(ids.exp, "exp", "e2e-exp", "live", at(-20));
     await publish(ids.unlisted, "exp", "e2e-unlisted", "unlisted", at(-25));
     await publish(ids.other, "e2e-other", "e2e-other", "live", at(-30));
+    // 公開したことの無い、写真のある下書き（掲載許諾つきの合成の資産）
+    await pool.query("INSERT INTO pages (id, owner, title, lang, lead) VALUES ($1, $2, 'Photo draft e2e', 'en', 'Draft lead e2e.')", [ids.photo, STUB_OWNER]);
+    await pool.query(
+      `INSERT INTO assets (id, owner, page_id, kind, bucket_path, bytes, sha256, content_type, alt, credit, consent)
+       VALUES ($1, $2, $3, 'image', $4, 1024, $5, 'image/jpeg', $6, NULL, true)`,
+      [photo.id, STUB_OWNER, ids.photo, `synthetic/${ids.photo}/${photo.id}`, photo.sha256, photo.alt],
+    );
+    await pool.query("UPDATE pages SET blocks = $2::jsonb WHERE id = $1", [ids.photo, JSON.stringify([
+      ...draft,
+      { type: "image", attrs: { assetId: photo.id, alt: photo.alt, caption: "The harbor e2e" } },
+    ])]);
     await pool.query("INSERT INTO preview_tokens (sha256, page_id, owner, handle, issued_at, expires_at) VALUES ($1, $2, $3, 'e2e-site', $4, $5)", [
       sha256(expiredPreview),
       ids.live,
@@ -1134,8 +1149,11 @@ describe("public API v1 (production build, PostgreSQL)", () => {
     assert.match(token, /^pv_[A-Za-z0-9_-]{43}$/);
     assert.equal(url, `https://api.editor.niho.life/v1/preview/${token}.json`);
     assert.ok(Date.parse(expiresAt) - Date.now() <= 15 * 60_000);
-    const stored = await pool.query("SELECT sha256 FROM preview_tokens WHERE page_id = $1 AND sha256 = $2", [ids.live, sha256(token)]);
+    const stored = await pool.query("SELECT sha256, author_name, author_handle, author_url FROM preview_tokens WHERE page_id = $1 AND sha256 = $2", [ids.live, sha256(token)]);
     assert.equal(stored.rowCount, 1, "only the hash is stored");
+    // 発行した本人（stub の profile）の著者を token に結ぶ（0009）
+    const { author_name, author_handle, author_url } = stored.rows[0];
+    assert.deepEqual({ author_name, author_handle, author_url }, { author_name: "開発ユーザー", author_handle: null, author_url: null });
     // 別の人のページ・別の人の接続には発行しない
     assert.equal((await fetch(`${dev.base}/api/pages/${ids.other}/preview-token`, {
       method: "POST",
@@ -1152,10 +1170,42 @@ describe("public API v1 (production build, PostgreSQL)", () => {
     assert.equal(draft.preview.noindex, true);
     assert.equal(draft.preview.dest, "site");
     assert.equal(draft.canonicalUrl, "https://e2e.example.net/e2e-live");
+    // 著者は token に結んだ本人のもの（公開版の著者ではない）
+    assert.deepEqual(draft.author, { name: "開発ユーザー", handle: null, url: null });
     assert.equal((await read(`/v1/preview/${token}.json`, expToken)).status, 404, "another destination's credential");
     assert.equal((await read(`/v1/preview/${token}.json`)).status, 401);
     assert.equal((await read(`/v1/preview/${expiredPreview}.json`, key)).status, 404);
     assert.equal((await read(`/v1/e2e-site/published/${token}.json`, key)).status, 400);
+  });
+
+  it("previews with the publish sheet's wiring (#39): stub roles open a face, photos get EDITOR_ASSET_ORIGIN, an unpublished page gets the site's URL", async () => {
+    const issue = async (pageId, handle) => {
+      const response = await fetch(`${dev.base}/api/pages/${pageId}/preview-token`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: dev.base },
+        body: JSON.stringify({ handle }),
+      });
+      assert.equal(response.status, 201, `${pageId} on ${handle}`);
+      return (await response.json()).token;
+    };
+    // stub の既定の役割（writer,kamakura）で NIHO Experience へ出せる。公開中の面のプレビューは、その公開の URL と token の著者
+    const face = await read(`/v1/preview/${await issue(ids.exp, "exp")}.json`, expToken);
+    assert.equal(face.status, 200);
+    const faceDraft = await face.json();
+    assert.equal(faceDraft.preview.dest, "exp");
+    assert.equal(faceDraft.canonicalUrl, "https://exp.example.com/guides/e2e-exp");
+    assert.deepEqual(faceDraft.author, { name: "開発ユーザー", handle: null, url: null });
+
+    // 公開したことの無い、写真のある下書き: 本人のサイトの URL と、写真の置き場の URL
+    const photoPreview = await read(`/v1/preview/${await issue(ids.photo, "e2e-site")}.json`, key);
+    assert.equal(photoPreview.status, 200);
+    const photoDraft = await photoPreview.json();
+    assert.equal(photoDraft.title, "Photo draft e2e");
+    assert.match(photoDraft.canonicalUrl, /^https:\/\/e2e\.example\.net\/[a-z0-9-]+$/);
+    assert.deepEqual(photoDraft.author, { name: "開発ユーザー", handle: null, url: null });
+    const urls = JSON.stringify(photoDraft.assets);
+    assert.ok(urls.includes(`${assetOrigin}/assets/${photo.sha256}.jpg`), "the photo's URL is on EDITOR_ASSET_ORIGIN");
+    assert.ok(photoDraft.markdown.includes(`${assetOrigin}/assets/${photo.sha256}.jpg`), "and so is the Markdown's");
   });
 
   it("answers other methods with 400 and Allow: GET, HEAD", async () => {

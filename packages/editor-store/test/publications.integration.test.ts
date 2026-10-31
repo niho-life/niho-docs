@@ -176,13 +176,60 @@ describe("0008 on a database whose old publications table has rows", { skip: dat
 
       await client.query("DELETE FROM publications");
       const applied = await applyMigrations(client);
-      assert.deepEqual(applied.applied, ["0008_publications.sql"]);
+      assert.equal(applied.applied[0], "0008_publications.sql");
       const columns = await client.query<{ column_name: string }>(
         "SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'publications' ORDER BY ordinal_position",
         [schema],
       );
       assert.ok(columns.rows.some((row) => row.column_name === "handle"));
       assert.ok(!columns.rows.some((row) => row.column_name === "published_version"));
+    } finally {
+      client.release();
+    }
+  });
+});
+
+describe("0009 on a database that already has preview tokens", { skip: databaseUrl === undefined }, () => {
+  const schema = `editor_store_pub0009_${randomUUID().replaceAll("-", "")}`;
+  let pool: PgPool;
+  let dir: string;
+
+  before(async () => {
+    pool = await newPool(schema);
+    await pool.query(`CREATE SCHEMA "${schema}"`);
+    dir = await mkdtemp(join(tmpdir(), "editor-store-0009-"));
+    for (const name of await readdir(defaultMigrationsDir)) {
+      if (MIGRATION_FILE_PATTERN.test(name) && name < "0009") await copyFile(new URL(name, defaultMigrationsDir), join(dir, name));
+    }
+  });
+
+  after(async () => {
+    await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await pool.end();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps the tokens issued before it, without an author", async () => {
+    const client = await pool.connect();
+    try {
+      await applyMigrations(client, pathToFileURL(`${dir}/`));
+      const page = await client.query<{ id: string }>("INSERT INTO pages (owner, title) VALUES ($1, '合成のページ') RETURNING id", [OWNER]);
+      const pageId = page.rows[0]!.id;
+      await client.query(
+        "INSERT INTO preview_tokens (sha256, page_id, owner, handle, issued_at, expires_at) VALUES ($1, $2, $3, 'exp', $4, $5)",
+        [fakeSha("pv-before-0009"), pageId, OWNER, at(0), at(10)],
+      );
+      const applied = await applyMigrations(client);
+      assert.deepEqual(applied.applied, ["0009_preview_token_author.sql"]);
+      assert.deepEqual(await findPreviewToken(client, fakeSha("pv-before-0009"), at(1)), {
+        sha256: fakeSha("pv-before-0009"),
+        pageId,
+        ownerId: OWNER,
+        handle: "exp",
+        issuedAt: at(0),
+        expiresAt: at(10),
+        author: null,
+      });
     } finally {
       client.release();
     }
@@ -353,13 +400,44 @@ describe("PostgreSQL publications (0008)", { skip: databaseUrl === undefined }, 
     it("lets a preview token live at most 15 minutes after it is issued", async () => {
       const pageId = await makePage();
       const issuedAt = at(0);
-      const row = { sha256: fakeSha("pv-limit"), pageId, ownerId: OWNER, handle: "niho", issuedAt, expiresAt: at(15) };
+      const row = { sha256: fakeSha("pv-limit"), pageId, ownerId: OWNER, handle: "niho", issuedAt, expiresAt: at(15), author: null };
       assert.deepEqual(await createPreviewToken(pool, row), row);
       await rejectsWith(() => createPreviewToken(pool, { ...row, sha256: fakeSha("pv-16"), expiresAt: new Date(Date.parse(at(15)) + 1).toISOString() }), "23514");
       await rejectsWith(() => createPreviewToken(pool, { ...row, sha256: fakeSha("pv-past"), expiresAt: issuedAt }), "23514");
       await rejectsWith(() => createPreviewToken(pool, row), "23505");
       await assert.rejects(() => createPreviewToken(pool, { ...row, sha256: "plaintext-is-not-a-hash" }), TypeError);
       await assert.rejects(() => createPreviewToken(pool, { ...row, sha256: fakeSha("pv-handle"), handle: "admin" }), TypeError);
+    });
+
+    it("binds the issuer's author to a preview token, and refuses an author without a name or with a non-https url (0009)", async () => {
+      const pageId = await makePage();
+      const row = {
+        sha256: fakeSha("pv-author"),
+        pageId,
+        ownerId: OWNER,
+        handle: "exp",
+        issuedAt: at(0),
+        // 期限切れの掃除の試験（at(10) で掃く）に数えられないよう、15 分の上限いっぱい
+        expiresAt: at(15),
+        author: { name: "Example Writer", handle: "example-writer", url: "https://writer.example.com/" },
+      };
+      assert.deepEqual(await createPreviewToken(pool, row), row);
+      assert.deepEqual(await findPreviewToken(pool, row.sha256, at(1)), row);
+      const nameOnly = { ...row, sha256: fakeSha("pv-name-only"), author: { name: "Example Writer", handle: null, url: null } };
+      assert.deepEqual(await createPreviewToken(pool, nameOnly), nameOnly);
+      for (const [label, author] of [
+        ["blank name", { name: "  ", handle: null, url: null }],
+        ["long name", { name: "a".repeat(257), handle: null, url: null }],
+        ["blank handle", { name: "Example Writer", handle: "", url: null }],
+        ["http url", { name: "Example Writer", handle: null, url: "http://writer.example.com/" }],
+      ] as const) {
+        await rejectsWith(() => createPreviewToken(pool, { ...row, sha256: fakeSha(`pv-${label}`), author }), "23514");
+      }
+      // 名前の無い著者は置けない（handle・url だけの行は CHECK で断る）
+      await rejectsWith(
+        () => pool.query("UPDATE preview_tokens SET author_name = NULL WHERE sha256 = $1", [row.sha256]),
+        "23514",
+      );
     });
   });
 
@@ -545,7 +623,7 @@ describe("PostgreSQL publications (0008)", { skip: databaseUrl === undefined }, 
 
     it("finds preview tokens only for the owner's page, before they expire, and sweeps expired ones", async () => {
       const pageId = await makePage();
-      const row = { sha256: fakeSha("pv-1"), pageId, ownerId: OWNER, handle: "exp", issuedAt: at(0), expiresAt: at(10) };
+      const row = { sha256: fakeSha("pv-1"), pageId, ownerId: OWNER, handle: "exp", issuedAt: at(0), expiresAt: at(10), author: null };
       assert.deepEqual(await createPreviewToken(pool, row), row);
       assert.equal(await createPreviewToken(pool, { ...row, sha256: fakeSha("pv-other"), ownerId: OTHER }), null, "another owner's page");
       assert.equal(await createPreviewToken(pool, { ...row, sha256: fakeSha("pv-missing"), pageId: randomUUID() }), null);
