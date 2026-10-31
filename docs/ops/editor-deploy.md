@@ -226,7 +226,14 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 
 ## 12. 文字起こし（#36）
 
-録音の音声をサーバー側で文字起こしする。エンジンは Deepgram（`apps/editor-web/src/transcription/deepgram.ts`）。鍵は Secret Manager の `niho-editor-deepgram-key` に置き、画面の実行 ID（`niho-editor-runner`）だけが読める。**Secret に版が無い、または最新の版が無効なあいだ、エンジンは閉じたまま**（文字起こしの開始は 503）。`deploy.sh` は配備のたびに最新の版の状態を見て、有効なときだけ鍵と環境変数を足す（ログに `transcription: on` / `transcription: off`）。
+録音の音声をサーバー側で文字起こしする。エンジンは Deepgram（`apps/editor-web/src/transcription/deepgram.ts`）。
+
+> **いまは本番で音声からの文字起こしができません。** 呼び出し口（dispatcher）が本番に無いためです:
+> `apps/editor-web/src/transcription/dispatch.ts` の `resolveDispatcherKind()` は `NODE_ENV=production` で必ず `null` を返し
+> （inline は開発と CI だけ）、`getTranscriptionRunner()` も `null` になります。**鍵を入れても、起こす処理は動きません**（開始は 503）。
+> 手順（#37）と同じ Cloud Tasks の呼び出し口を足すのが残りの作業で、Issue #36 に残しています。
+> この節は**鍵を入れる所まで**の手順です。鍵は先に入れておいても害がなく（版が有効でも呼び出し口が無ければ起こせないだけ）、
+> 呼び出し口が入った配備で、そのまま有効になります。鍵は Secret Manager の `niho-editor-deepgram-key` に置き、画面の実行 ID（`niho-editor-runner`）だけが読める。**Secret に版が無い、または最新の版が無効なあいだ、エンジンは閉じたまま**（文字起こしの開始は 503）。`deploy.sh` は配備のたびに最新の版の状態を見て、有効なときだけ鍵と環境変数を足す（ログに `transcription: on` / `transcription: off`）。
 
 **VTT の取り込みは鍵を必要としません。** 既に文字起こし済みのファイルを持ち込む経路は、エンジンが閉じていても動きます。鍵が要るのは音声から起こすときだけです。
 
@@ -238,7 +245,7 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 2. Deepgram の Console で、この用途だけの API キーを作る（使用上限も付けておくと歯止めになる）。
 3. `scripts/editor-deploy/set-transcribe-key.sh` — 端末で実行すると、入力を画面に出さずに鍵を求める。パスワード管理の CLI から渡すときは `<鍵を出すコマンド> | scripts/editor-deploy/set-transcribe-key.sh`。
 4. `scripts/editor-deploy/deploy.sh --no-build` — `DEEPGRAM_API_KEY`（Secret の `latest`）と `EDITOR_TRANSCRIBE_ENGINE=deepgram` が付く。
-5. 短い音声を 1 つ起こして、段落と話者が出ることを確かめる。
+5. （呼び出し口が入ったあと）短い音声を 1 つ起こして、段落と話者が出ることを確かめる。
 
 ### 無効にする・回す
 

@@ -100,6 +100,11 @@ check "a negative limit is refused" "$(refused 'AI_MONTHLY_LIMIT_USD=-1')" 1
 check "a limit that is not a number is refused" "$(refused 'AI_MONTHLY_LIMIT_USD=10,EDITOR_AI_MODE=fake')" 1
 check "a transcription timeout that is not a number is refused" "$(refused 'TRANSCRIBE_TIMEOUT_SEC=20m')" 1
 check "a transcription timeout with a comma is refused" "$(refused 'TRANSCRIBE_TIMEOUT_SEC=600,EDITOR_AUTH_MODE=stub')" 1
+# Outside the app's range the service would not start, so load_deploy_env refuses it here.
+check "a transcription timeout below 60 is refused" "$(refused 'TRANSCRIBE_TIMEOUT_SEC=59')" 1
+check "a transcription timeout above 3300 is refused" "$(refused 'TRANSCRIBE_TIMEOUT_SEC=3600')" 1
+check "the lowest accepted timeout" "$(refused 'TRANSCRIBE_TIMEOUT_SEC=60')" 0
+check "the highest accepted timeout" "$(refused 'TRANSCRIBE_TIMEOUT_SEC=3300')" 0
 
 # The timeout is optional: empty leaves the app default out of --set-env-vars, a number is passed through.
 grep -v '^AI_' "$dir/deploy.env.example" > "$tmp/timeout.env"

@@ -32,9 +32,15 @@ load_deploy_env() {
   [[ -z "$STEPS_MODE" || "$STEPS_MODE" == cloud-tasks ]] || die "STEPS_MODE must be empty or cloud-tasks in $DEPLOY_ENV"
   # Transcription (#36): the engine is on only when the Deepgram key secret has an enabled newest version
   # (docs/ops/editor-deploy.md §12). The timeout is optional; empty leaves the app default (1200 seconds).
+  # The range is the one the app accepts (timeoutSec() in apps/editor-web/src/transcription/config.ts): a value outside
+  # it would pass here and then stop the new revision from starting (checkStartupConfig exits), so refuse it now.
   TRANSCRIBE_TIMEOUT_SEC="${TRANSCRIBE_TIMEOUT_SEC:-}"
-  [[ -z "$TRANSCRIBE_TIMEOUT_SEC" || "$TRANSCRIBE_TIMEOUT_SEC" =~ ^[0-9]+$ ]] \
-    || die "TRANSCRIBE_TIMEOUT_SEC must be empty or a whole number of seconds in $DEPLOY_ENV"
+  if [[ -n "$TRANSCRIBE_TIMEOUT_SEC" ]]; then
+    [[ "$TRANSCRIBE_TIMEOUT_SEC" =~ ^[0-9]+$ ]] \
+      || die "TRANSCRIBE_TIMEOUT_SEC must be empty or a whole number of seconds in $DEPLOY_ENV"
+    (( TRANSCRIBE_TIMEOUT_SEC >= 60 && TRANSCRIBE_TIMEOUT_SEC <= 3300 )) \
+      || die "TRANSCRIBE_TIMEOUT_SEC must be between 60 and 3300 seconds in $DEPLOY_ENV"
+  fi
   TASKS_SA="${TASKS_SA:-niho-editor-tasks}"
   TASKS_SA_EMAIL="$TASKS_SA@$GCP_PROJECT.iam.gserviceaccount.com"
   STEPS_QUEUE=niho-editor-steps
