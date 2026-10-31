@@ -119,7 +119,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st--published{color:var(--ed-accent-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st--updated{color:var(--ed-amber-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st--limited{color:var(--ed-blue)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-wrap--quiet{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-wrap--quiet{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;clip-path:inset(50%);white-space:nowrap;pointer-events:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-tip{position:absolute;top:calc(100% + 7px);right:0;width:max-content;max-width:min(360px,calc(100vw - 24px));background:var(--ed-white);color:var(--ed-ink);font-size:12px;font-weight:600;line-height:1.5;padding:6px 11px;border-radius:9px;box-shadow:0 8px 24px rgba(28,28,26,.14),0 0 0 1px var(--ed-line-2);opacity:0;pointer-events:none;transition:opacity .12s;z-index:20;overflow-wrap:anywhere}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-wrap:hover .es-st-tip,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-wrap:focus-within .es-st-tip{opacity:1}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-wrap[data-dismissed="true"] .es-st-tip{opacity:0}
