@@ -32,6 +32,7 @@ import { assetUrlsOf, faceDeclarations, roleReaderOf, sessionAuthors, wirePublis
 import { getStorage } from "../storage/runtime";
 import { getTranscriptionRunner } from "../transcription/runtime";
 import type { AudioApiDeps } from "./audio-api";
+import type { AudioStreamApiDeps } from "./audio-stream-api";
 import { getPool, getStore } from "./db";
 import type { ImageApiDeps } from "./images-api";
 import { faceCredentialsFromEnv } from "../public-api/source";
@@ -153,6 +154,16 @@ export const audioDeps: AudioApiDeps = {
       audioInfo: (owner, pageId) => audioInfo(pool, owner, pageId),
       getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
     };
+  },
+  storage: () => getStorage(process.env),
+};
+
+/** 録音の音声の再生（#36 段 3b-2。保存先から読み出して流す）の実行時の依存（DB・保存先は要求のたびに遅延して決める。Pool は getStore と共有）。 */
+export const audioStreamDeps: AudioStreamApiDeps = {
+  auth: () => getAuthProvider(),
+  store: () => {
+    const pool = getPool();
+    return pool ? { audioInfo: (owner, pageId) => audioInfo(pool, owner, pageId) } : null;
   },
   storage: () => getStorage(process.env),
 };

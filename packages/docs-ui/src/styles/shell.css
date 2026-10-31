@@ -175,6 +175,8 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-wave{flex:1;min-width:0;height:28px;background:repeating-linear-gradient(90deg,var(--ed-line-2) 0 2px,transparent 2px 5px);border-radius:4px;position:relative}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-wave::before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(90deg,var(--ed-accent-ink) 0 2px,transparent 2px 5px);width:34%}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-wave::after{content:"";position:absolute;left:34%;top:-4px;bottom:-4px;width:2px;background:var(--ed-accent-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-seek{flex:1;min-width:0;display:flex;align-items:center;gap:10px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-seek input{flex:1;min-width:0;margin:0;accent-color:var(--ed-accent-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-time{font:12px var(--ed-font-mono);color:var(--ed-ink-mute);white-space:nowrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tr{padding:4px 14px 10px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-seg{display:grid;grid-template-columns:76px minmax(0,1fr);gap:0 12px;padding:10px 0;border-top:1px solid var(--ed-line);font-size:15px;line-height:1.7}
@@ -189,6 +191,8 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tone--e{background:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tone--f{background:var(--ed-red)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-who time{font:12px var(--ed-font-mono);color:var(--ed-ink-mute);font-weight:400}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-at{width:fit-content;padding:2px 4px;margin:-2px -4px;border-radius:4px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-at:hover time{color:var(--ed-accent-ink);text-decoration:underline}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-seg p{margin:0;outline:none;overflow-wrap:anywhere;white-space:pre-wrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-seg p:focus-visible{box-shadow:0 0 0 2px var(--ed-accent-ink);border-radius:6px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-seg--cur p{background:var(--ed-accent-soft);border-radius:6px;padding:0 4px;margin:0 -4px}
@@ -581,6 +585,7 @@
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ld,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-bd{overflow-wrap:anywhere}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-rec-hd{flex-wrap:wrap;gap:10px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-wave{flex:1 1 80px}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-seek{flex:1 1 160px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-foot2 .es-btn{width:100%}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dt--plain{border-bottom-color:var(--ed-line)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-veil{padding:0;align-items:end}

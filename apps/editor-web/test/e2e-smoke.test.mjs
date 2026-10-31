@@ -1003,6 +1003,114 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.deepEqual(unknownStatus, theirStatus);
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM transcription_runs WHERE page_id = $1", [theirId])).rows[0].n, 0);
   });
+
+  it("streams the uploaded audio from the same origin with Range: 200 whole, 206 for a-b and -n, 416 past the end and for several ranges, and the same 404 for others (#36 段 3b-2)", async () => {
+    // EDITOR_STORAGE は未設定（next dev なので fake）。中身は位置が分かる合成のバイト列（i 番目のバイトが i * 7 + 1）
+    const bytes = Uint8Array.from({ length: 16 }, (_, index) => (index * 7 + 1) % 256);
+    const total = bytes.byteLength;
+    const sha256 = "c".repeat(64);
+    const snapshot = async (response) => ({
+      status: response.status,
+      headers: [...response.headers.entries()].filter(([name]) => name !== "date").sort(),
+      body: await response.text(),
+    });
+    const audioOf = (id, headers = {}, method = "GET") => fetch(`${base}/api/pages/${id}/recording/audio`, { method, headers });
+    const unknown = await snapshot(await audioOf(randomUUID()));
+    assert.equal(unknown.status, 404);
+    assert.equal(unknown.body, '{"error":"not_found"}');
+
+    const started = await write("POST", "/api/recordings/audio/start", { name: "合成の再生 e2e.m4a", contentType: "audio/mp4", sizeBytes: total, sha256 });
+    assert.equal(started.status, 201);
+    const { page, upload } = await started.json();
+    createdIds.push(page.id);
+    // アップロード途中は、存在しない id と同じ 404
+    assert.deepEqual(await snapshot(await audioOf(page.id)), unknown, "uploading");
+    assert.equal((await fetch(new URL(upload.url, base), { method: "PUT", headers: upload.headers, body: bytes })).status, 200);
+    assert.deepEqual(await snapshot(await audioOf(page.id)), unknown, "put but not completed");
+    const done = await write("POST", `/api/pages/${page.id}/recording/audio/complete`);
+    assert.equal(done.status, 200);
+
+    // 範囲なし: 200 で全体
+    const whole = await audioOf(page.id);
+    assert.equal(whole.status, 200);
+    assert.equal(whole.headers.get("content-type"), "audio/mp4");
+    assert.equal(whole.headers.get("accept-ranges"), "bytes");
+    assert.equal(whole.headers.get("content-length"), String(total));
+    assert.equal(whole.headers.get("content-range"), null);
+    assert.equal(whole.headers.get("content-disposition"), "inline");
+    assert.equal(whole.headers.get("cache-control"), "private, no-store");
+    assert.equal(whole.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(whole.headers.get("x-robots-tag"), "noindex, nofollow");
+    assert.deepEqual([...new Uint8Array(await whole.arrayBuffer())], [...bytes]);
+
+    // 範囲: a-b・-n・a-（ブラウザの最初の要求）
+    for (const [range, start, end] of [
+      ["bytes=2-5", 2, 5],
+      ["bytes=-3", total - 3, total - 1],
+      ["bytes=0-", 0, total - 1],
+      ["bytes=10-999", 10, total - 1],
+    ]) {
+      const part = await audioOf(page.id, { range });
+      assert.equal(part.status, 206, range);
+      assert.equal(part.headers.get("content-range"), `bytes ${start}-${end}/${total}`, range);
+      assert.equal(part.headers.get("content-length"), String(end - start + 1), range);
+      assert.equal(part.headers.get("content-disposition"), "inline");
+      assert.deepEqual([...new Uint8Array(await part.arrayBuffer())], [...bytes.slice(start, end + 1)], range);
+    }
+    // 範囲外・複数の範囲・形の違う範囲: 416 と全体の大きさ
+    for (const range of [`bytes=${total}-`, "bytes=0-1,4-5", "bytes=abc"]) {
+      const refused = await audioOf(page.id, { range });
+      assert.equal(refused.status, 416, range);
+      assert.equal(refused.headers.get("content-range"), `bytes */${total}`, range);
+      assert.equal(await refused.text(), '{"error":"range_not_satisfiable"}', range);
+    }
+    // HEAD は同じ header で本文なし
+    const head = await audioOf(page.id, { range: "bytes=2-5" }, "HEAD");
+    assert.equal(head.status, 206);
+    assert.equal(head.headers.get("content-range"), `bytes 2-5/${total}`);
+    assert.equal((await head.arrayBuffer()).byteLength, 0);
+    // 画面の CSP は media-src 'self'（同じ origin の route をそのまま <audio src> にできる）
+    const screen = await fetch(`${base}/p/${page.id}`);
+    assert.match(screen.headers.get("content-security-policy") ?? "", /media-src 'self'/);
+
+    // 音声の無い録音（VTT）・アップロード途中のまま・期限切れ・別の owner の音声: どれも存在しない id と同じ 404（範囲を付けても）
+    const vtt = await write("POST", "/api/recordings/import-vtt", { name: "合成の再生なし.vtt", vtt: SYNTHETIC_VTT });
+    assert.equal(vtt.status, 201);
+    const vttId = (await vtt.json()).page.id;
+    createdIds.push(vttId);
+    const pending = await write("POST", "/api/recordings/audio/start", { name: "合成の途中.m4a", contentType: "audio/mp4", sizeBytes: total, sha256 });
+    assert.equal(pending.status, 201);
+    const pendingId = (await pending.json()).page.id;
+    createdIds.push(pendingId);
+    const insertAudioPage = async (owner, title, status, expiresSql) => {
+      const inserted = await pool.query("INSERT INTO pages (owner, kind, title) VALUES ($1, 'rec', $2) RETURNING id", [owner, title]);
+      const id = inserted.rows[0].id;
+      createdIds.push(id);
+      const assetId = randomUUID();
+      await pool.query(
+        `INSERT INTO assets (id, owner, page_id, kind, bucket_path, bytes, sha256, content_type) VALUES ($1, $2, $3, 'audio', $4, $5, $6, 'audio/mp4')`,
+        [assetId, owner, id, `audio/${assetId}`, total, sha256],
+      );
+      await pool.query(
+        `INSERT INTO page_recordings (page_id, owner, source, language, segments, audio_asset, audio_status, audio_expires_at)
+         VALUES ($1, $2, 'audio', 'ja', '[]', $3, $4, ${expiresSql})`,
+        [id, owner, assetId, status],
+      );
+      return id;
+    };
+    const theirId = await insertAudioPage(OTHER_OWNER, "synthetic other playback", "uploaded", "clock_timestamp() + interval '30 days'");
+    const expiredId = await insertAudioPage(STUB_OWNER, "synthetic expired playback", "uploaded", "clock_timestamp() - interval '1 day'");
+    for (const [label, id] of [
+      ["vtt", vttId],
+      ["uploading", pendingId],
+      ["expired", expiredId],
+      ["another owner", theirId],
+      ["malformed id", "not-a-uuid"],
+    ]) {
+      assert.deepEqual(await snapshot(await audioOf(id)), unknown, label);
+      assert.deepEqual(await snapshot(await audioOf(id, { range: "bytes=999-" })), unknown, `${label} with a range`);
+    }
+  });
 });
 
 describe("editor-web e2e (stub, next dev, the fake transcription engine fails) (#36 段 2b)", () => {

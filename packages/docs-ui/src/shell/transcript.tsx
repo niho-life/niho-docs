@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { Icon } from "./icons";
 
 /** 話者の色。a＝accent-ink、b＝amber、c＝blue、d＝brown、e＝ink-mute、f＝red（どれも --ed-* の token から引く）。 */
@@ -39,6 +39,12 @@ export type ShellRecordingProps = {
   onToggleEdit?: () => void;
   /** 渡すと再生ボタンと波形を出す。再生できない録音（音声が無い）では渡さない。 */
   onPlay?: () => void;
+  /** 再生している最中（onPlay と使う）。true なら再生ボタンが「一時停止」になる。 */
+  playing?: boolean;
+  /** 渡すと波形の代わりに出す（再生位置のスライダーなど。onPlay と使う。描き直しは渡す側が持つ）。 */
+  seek?: ReactNode;
+  /** 渡すと段落の時刻がボタンになり、押すとその段落の id を返す（その段落から再生する）。時刻の無い段落は出さない。 */
+  onPlayFrom?: (id: string) => void;
   /** 段落を直して確定した（フォーカスが外れた・Enter。変換中は確定しない）。文章が変わったときだけ呼ぶ。 */
   onSegmentChange?: (id: string, text: string) => void;
   /** 渡すと話者がボタンになり、その場の小さなフォームで名前を変えられる（空にすると名前を外す）。 */
@@ -126,6 +132,42 @@ function SegmentText({ id, text, label, onChange }: { id: string; text: string; 
     </p>
   );
 }
+
+/**
+ * 段落の 1 行（話者・時刻・本文）。値だけを受けて memo するので、再生中の段落が移っても描き直すのは移った 2 行だけ
+ * （段落が 20,000 でも、強調が移るたびに全部の行を描き直さない）。time は出す時刻（出さなければ null）。
+ */
+const SegmentRow = memo(function SegmentRow(props: {
+  id: string;
+  who: string;
+  tone: ShellTone;
+  time: string | null;
+  text: string;
+  current: boolean;
+  onChange?: (id: string, text: string) => void;
+  onPlayFrom?: (id: string) => void;
+}) {
+  const { id, who, tone, time, text, current, onChange, onPlayFrom } = props;
+  return (
+    <div className={`es-seg${current ? " es-seg--cur" : ""}`}>
+      <div className="es-who">
+        <span>
+          <i className={`es-tone es-tone--${tone}`} aria-hidden="true" />
+          {who}
+        </span>
+        {time &&
+          (onPlayFrom ? (
+            <button type="button" className="es-at" aria-label={`${time} から再生`} onClick={() => onPlayFrom(id)}>
+              <time>{time}</time>
+            </button>
+          ) : (
+            <time>{time}</time>
+          ))}
+      </div>
+      <SegmentText id={id} text={text} label={`${who}${time ? ` ${time}` : ""} の文字起こし`} onChange={onChange} />
+    </div>
+  );
+});
 
 type Speaker = ShellSpeaker & { id: string };
 
@@ -262,6 +304,9 @@ export function ShellRecording({
   editing,
   onToggleEdit,
   onPlay,
+  playing,
+  seek,
+  onPlayFrom,
   onSegmentChange,
   onRenameSpeaker,
   onMergeSpeakers,
@@ -286,15 +331,22 @@ export function ShellRecording({
     focusAfter.current = focusId;
     setOpenId(null);
   };
+  // 段落の行は memo。呼ぶ側の関数が描くたびに作り直されても行を描き直さないよう、行には変わらない関数を渡し、最新の関数を呼ぶ
+  const latest = useRef({ onSegmentChange, onPlayFrom });
+  useEffect(() => {
+    latest.current = { onSegmentChange, onPlayFrom };
+  });
+  const changeSegment = useCallback((id: string, text: string) => latest.current.onSegmentChange?.(id, text), []);
+  const playFrom = useCallback((id: string) => latest.current.onPlayFrom?.(id), []);
   return (
     <div ref={root} className={`es-rec${editing ? " es-rec--editing" : ""}`}>
       <div className="es-rec-hd">
         {onPlay && (
           <>
-            <button type="button" className="es-play" aria-label="再生" onClick={onPlay}>
-              <Icon name="play" />
+            <button type="button" className="es-play" aria-label={playing ? "一時停止" : "再生"} onClick={onPlay}>
+              <Icon name={playing ? "pause" : "play"} />
             </button>
-            <div className="es-wave" aria-hidden="true" />
+            {seek ?? <div className="es-wave" aria-hidden="true" />}
           </>
         )}
         {position && <span className="es-time">{position}</span>}
@@ -305,22 +357,20 @@ export function ShellRecording({
         </button>
       </div>
       <div className="es-tr">
-        {segments.map((segment) => {
-          // 時刻の無い段落（空文字）は、時刻を出さない
-          const time = timestamps && segment.time !== "" ? segment.time : null;
-          return (
-            <div key={segment.id} className={`es-seg${segment.current && !editing ? " es-seg--cur" : ""}`}>
-              <div className="es-who">
-                <span>
-                  <i className={`es-tone es-tone--${segment.tone}`} aria-hidden="true" />
-                  {segment.who}
-                </span>
-                {time && <time>{time}</time>}
-              </div>
-              <SegmentText id={segment.id} text={segment.text} label={`${segment.who}${time ? ` ${time}` : ""} の文字起こし`} onChange={onSegmentChange} />
-            </div>
-          );
-        })}
+        {segments.map((segment) => (
+          <SegmentRow
+            key={segment.id}
+            id={segment.id}
+            who={segment.who}
+            tone={segment.tone}
+            // 時刻の無い段落（空文字）は、時刻を出さない
+            time={timestamps && segment.time !== "" ? segment.time : null}
+            text={segment.text}
+            current={Boolean(segment.current) && !editing}
+            onChange={onSegmentChange ? changeSegment : undefined}
+            onPlayFrom={onPlayFrom ? playFrom : undefined}
+          />
+        ))}
       </div>
       {editing && (
         <div className="es-trhint">

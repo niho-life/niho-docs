@@ -85,3 +85,24 @@ test("段落を直して Enter で確定、Esc で取り消し。時刻の切り
   await expect(page.locator(".es-who time")).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Mika の文字起こし" })).toHaveText(`${original}（追記）`);
 });
+
+test("再生（#36 段 3b-2）: 時刻をキーボードで押すとその段落が再生中になり、再生ボタンは一時停止に。再生位置はスライダー", async ({ page }) => {
+  await openScreen(page, "page:rec?playing=1&rail=0", 1440);
+  const pause = page.getByRole("button", { name: "一時停止" });
+  await expect(pause).toBeVisible();
+  const slider = page.getByRole("slider", { name: "再生位置" });
+  await slider.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(slider).toHaveValue("313");
+
+  await pause.click();
+  await expect(page.getByRole("button", { name: "再生", exact: true })).toBeVisible();
+  const at = page.getByRole("button", { name: "00:41 から再生" });
+  await at.focus();
+  await expect(at).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".es-seg--cur")).toHaveCount(1);
+  await expect(page.locator(".es-seg--cur").getByRole("textbox")).toHaveAccessibleName("Mika 00:41 の文字起こし");
+  await expect(page.getByRole("button", { name: "一時停止" })).toBeVisible();
+  await expect(slider).toHaveValue("41");
+});

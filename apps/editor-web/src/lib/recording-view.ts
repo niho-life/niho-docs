@@ -27,14 +27,18 @@ export function speakerTone(speaker: number | null): ShellTone {
   return SHELL_TONES[(speaker - 1) % SHELL_TONES.length] ?? "a";
 }
 
-/** 録音の段落。id は段落の位置（0 始まり）。drafts は、まだ保存されていない（確定した）文章。 */
-export function shellSegments(recording: Recording, drafts: Readonly<Record<number, string>>): ShellSegment[] {
+/**
+ * 録音の段落。id は段落の位置（0 始まり）。drafts は、まだ保存されていない（確定した）文章。
+ * currentId は、いま再生している段落の id（#36 段 3b-2。その段落だけ current）。
+ */
+export function shellSegments(recording: Recording, drafts: Readonly<Record<number, string>>, currentId: string | null = null): ShellSegment[] {
   return recording.segments.map((segment, index) => ({
     id: String(index),
     who: segment.speaker === null ? NO_SPEAKER_LABEL : speakerLabel(segment.speaker, recording.speakerNames[String(segment.speaker)]),
     tone: speakerTone(segment.speaker),
     time: formatClock(segment.start),
     text: drafts[index] ?? segment.text,
+    ...(currentId === String(index) ? { current: true } : {}),
   }));
 }
 

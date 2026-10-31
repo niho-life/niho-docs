@@ -73,6 +73,7 @@ function App() {
     edit: params.has("edit") ? params.get("edit") === "1" : undefined,
     time: params.has("time") ? params.get("time") === "1" : undefined,
     play: params.has("play") ? params.get("play") === "1" : undefined,
+    playing: params.has("playing") ? params.get("playing") === "1" : undefined,
     web: params.get("web") === "1",
     note: params.get("note") === "1",
     // 設定（editor-web）の、開いている編集

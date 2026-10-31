@@ -1,12 +1,22 @@
 import { randomBytes } from "node:crypto";
-import { StorageError, isObjectPath, type ObjectStorage, type ReadObject, type StartUploadInput, type StoredObject, type UploadTicket } from "./types";
+import {
+  StorageError,
+  isByteRange,
+  isObjectPath,
+  type ObjectStorage,
+  type ReadObject,
+  type ReadObjectOptions,
+  type StartUploadInput,
+  type StoredObject,
+  type UploadTicket,
+} from "./types";
 
 /**
  * メモリの中だけの偽の保存先（開発と CI だけ。本番では src/storage/config.ts が受け付けない）。
  * ticket の url は `/api/dev/fake-storage/{token}`（同じ origin の dev 用の受け口。src/app/api/dev/fake-storage/[token]/route.ts）で、
  * そこへの PUT が putFakeObject を呼ぶ。GCS と同じく、同じ場所に object が既にあれば上書きしない。
  * 偽物は PUT の大きさを申告と照らさない（完了の時の大きさの照合をサーバーの側で試せるように）。
- * 読み取り（readObject）は置いてあるバイト列を流す（画像の中継を開発でも試せるように）。
+ * 読み取り（readObject）は置いてあるバイト列を流す（画像の中継・録音の再生を開発でも試せるように。範囲は slice）。
  */
 
 /** 偽の受け口の path の接頭辞。 */
@@ -36,6 +46,16 @@ export function createFakeStorageState(): FakeStorageState {
   return { sessions: new Map(), objects: new Map() };
 }
 
+/** バイト列を 1 つの chunk で流す。 */
+function streamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
 export function createFakeStorage(options: { state?: FakeStorageState; now?: () => number } = {}): FakeStorage {
   const state = options.state ?? createFakeStorageState();
   const now = options.now ?? Date.now;
@@ -59,19 +79,23 @@ export function createFakeStorage(options: { state?: FakeStorageState; now?: () 
       const object = state.objects.get(objectPath);
       return object ? { sizeBytes: object.bytes.byteLength, contentType: object.contentType } : null;
     },
-    async readObject(objectPath: string): Promise<ReadObject | null> {
+    async readObject(objectPath: string, options: ReadObjectOptions = {}): Promise<ReadObject | null> {
       if (!isObjectPath(objectPath)) throw new StorageError("rejected");
+      const { range } = options;
+      if (range !== undefined && !isByteRange(range)) throw new StorageError("rejected");
       const object = state.objects.get(objectPath);
       if (!object) return null;
-      // 置いてあるバイト列の写しを 1 つの chunk で流す（読む側が持っている間に置き換わらない）
-      const bytes = object.bytes.slice();
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(bytes);
-          controller.close();
-        },
-      });
-      return { body, contentType: object.contentType, sizeBytes: bytes.byteLength };
+      if (range === undefined) {
+        // 置いてあるバイト列の写しを 1 つの chunk で流す（読む側が持っている間に置き換わらない）
+        const bytes = object.bytes.slice();
+        return { body: streamOf(bytes), contentType: object.contentType, sizeBytes: bytes.byteLength };
+      }
+      // 範囲: GCS（Range つきの GET）と同じく、始まりが大きさ以上なら断り、終わりは object の終わりで切る
+      const totalBytes = object.bytes.byteLength;
+      if (range.start >= totalBytes) throw new StorageError("range_not_satisfiable");
+      const end = Math.min(range.end, totalBytes - 1);
+      const bytes = object.bytes.slice(range.start, end + 1);
+      return { body: streamOf(bytes), contentType: object.contentType, sizeBytes: bytes.byteLength, range: { start: range.start, end }, totalBytes };
     },
     putFakeObject(token: string, bytes: Uint8Array, contentType: string | null): FakePutResult {
       if (!FAKE_TOKEN_PATTERN.test(token)) return "not_found";
