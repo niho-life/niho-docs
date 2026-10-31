@@ -198,7 +198,9 @@ export function PageSteps({
   const onAction = (id: string) => {
     const action = actions.find((candidate) => candidate.id === id);
     if (!action || !run) return;
-    if (action.cancel) void send(() => cancelStepRun(root, run.id));
+    // 設定の画面の節へ（今月の使用量・手順の指示とお手本。節の id は docs-ui の EDITOR_SETTINGS_NAV と同じ）
+    if (action.settings) router.push(action.settings === "usage" ? "/settings#es-s-ai" : "/settings#es-s-steps");
+    else if (action.cancel) void send(() => cancelStepRun(root, run.id));
     else if (action.fromStep !== undefined) start(run.recipe, action.fromStep);
   };
 

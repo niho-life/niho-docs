@@ -78,11 +78,11 @@ function server(saved: readonly SettingsRecipe[] = []) {
   return { store, queue, deps, recipes, recording, calls, fetchImpl, work };
 }
 
-/** 段階 0 は成功し、`failAt` の段階だけ（やり直せない失敗で）落ちる実行器。 */
-function executorFailingAt(failAt: number | null): StepExecutor {
+/** `failAt` の段階だけ（やり直せない失敗で）落ちる実行器。ほかの段階は成功する。 */
+function executorFailingAt(failAt: number | null, code = "invalid_output"): StepExecutor {
   return {
     async run(input) {
-      if (input.stepIndex === failAt) throw new StepError("invalid_output", false);
+      if (input.stepIndex === failAt) throw new StepError(code, false);
       return { blocks: fakeBlocks(input) };
     },
   };
@@ -294,7 +294,7 @@ describe("PageSteps（手順の帯）", () => {
       { label: "記事方針", say: "失敗", state: "failed" },
       { label: "記事本文", say: "待機", state: "wait" },
     ]);
-    expect(note()).toBe("「記事方針」が失敗しました（AI の答えを本文にできなかった）。この段階からやり直せます。");
+    expect(note()).toBe("「記事方針」が失敗しました。AI の答えを本文にできませんでした。手順の指示やお手本を見直すと直ることがあります。");
     // 失敗したあとは、別の手順も始められる
     expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "手順を変える"]);
 
@@ -305,6 +305,72 @@ describe("PageSteps（手順の帯）", () => {
     expect(band().map((step) => step.say)).toEqual(["済み", "済み", "済み"]);
     // 段階 0 は作り直さず、前の結果をそのまま使う（reused）
     expect((await currentRun(api)).steps.map((step) => step.state)).toEqual(["reused", "succeeded", "succeeded"]);
+  });
+
+  it("AI がまだ設定されていない失敗では、やり直しのボタンを出さない", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    await api.work(executorFailingAt(0, "ai_unavailable"));
+    await wait(60_000);
+
+    expect(band()[0]).toEqual({ label: "文字起こし修正", say: "失敗", state: "failed" });
+    expect(note()).toBe("「文字起こし修正」が失敗しました。AI がまだ設定されていないので、この段階を作れません。設定が済むまでお待ちください。");
+    // 押しても同じ結果になるボタンは出さない。code そのものも出さない
+    expect(bandActions()).toEqual([]);
+    expect(container!.textContent).not.toContain("ai_unavailable");
+    // 録音ページの入口は残る（直ったあとに始め直せる）
+    expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "手順を変える"]);
+  });
+
+  it("今月の上限に達した失敗では、やり直しの代わりに使用量への案内だけを出す", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    await api.work(executorFailingAt(0, "quota_exceeded"));
+    await wait(60_000);
+
+    expect(note()).toBe("「文字起こし修正」が失敗しました。今月の AI の使用量が上限に達しました。来月まで手順を実行できません。");
+    expect(bandActions()).toEqual(["使用量を見る"]);
+    await pressAction("使用量を見る");
+    expect(router.push).toHaveBeenCalledWith("/settings#es-s-ai");
+  });
+
+  it("原因を直せる失敗では、やり直しと手順への案内の両方を出す", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    await api.work(executorFailingAt(1, "ai_bad_request"));
+    await wait(60_000);
+
+    expect(note()).toBe("「記事方針」が失敗しました。AI がこの指示を受け付けませんでした。手順の指示やお手本を短くすると直ることがあります。");
+    expect(bandActions()).toEqual(["「記事方針」からやり直す", "はじめから作り直す", "手順を見る"]);
+    await pressAction("手順を見る");
+    expect(router.push).toHaveBeenCalledWith("/settings#es-s-steps");
+  });
+
+  it("待てば直る失敗では、今までどおりやり直せる", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    await api.work(executorFailingAt(0, "ai_timeout"));
+    await wait(60_000);
+
+    expect(note()).toBe("「文字起こし修正」が失敗しました。AI の答えを待てる時間を過ぎました。少し待ってもう一度お試しください。");
+    expect(bandActions()).toEqual(["「文字起こし修正」からやり直す", "はじめから作り直す"]);
+    await pressAction("「文字起こし修正」からやり直す");
+    await settle();
+    await api.work(good);
+    await wait(60_000);
+    expect(band().map((step) => step.say)).toEqual(["済み", "済み", "済み"]);
   });
 
   it("帯の段階を押すとそのサブページへ移り、開いている段階は押しても移らない", async () => {

@@ -9,10 +9,12 @@ import {
   stepDoneMessage,
   stepPagesOf,
   stepRecipeName,
+  stepFailure,
   stepStartChoices,
   stepStartLabel,
   stepStateOf,
   maxStepFrom,
+  UNKNOWN_FAILURE,
 } from "./steps-view";
 
 const NAMES = ["文字起こし修正", "記事方針", "記事本文"];
@@ -91,6 +93,7 @@ describe("steps-view（手順の帯の見た目）", () => {
     expect(stepBandNote(run({ state: "queued" }))).toBe("順番を待っています。画面を閉じても進みます。");
     expect(stepBandNote(run({ steps: [step(0, { state: "running" }), step(1), step(2)] }))).toBe("「文字起こし修正」を作成中です。画面を閉じても進みます。");
     expect(stepBandNote(run({ state: "canceled" }))).toBe("手順を取消しました。もう一度始められます。");
+    // 失敗の文は code ごと（下の「失敗の code ごとに…」で全部を見る）
     expect(
       stepBandNote(
         run({
@@ -98,17 +101,100 @@ describe("steps-view（手順の帯の見た目）", () => {
           steps: [step(0, { state: "succeeded", stepStatus: "done" }), step(1, { state: "failed", errorCode: "invalid_output" }), step(2)],
         }),
       ),
-    ).toBe("「記事方針」が失敗しました（AI の答えを本文にできなかった）。この段階からやり直せます。");
-    // 知らない code は言葉にしない（内部の情報を画面に出さない）
-    expect(stepBandNote(run({ state: "failed", steps: [step(0, { state: "failed", errorCode: "something_new" })] }))).toBe(
-      "「文字起こし修正」が失敗しました。この段階からやり直せます。",
-    );
+    ).toBe("「記事方針」が失敗しました。AI の答えを本文にできませんでした。手順の指示やお手本を見直すと直ることがあります。");
     const stale = run({
       state: "succeeded",
       steps: [step(0, { state: "succeeded", stepStatus: "done" }), step(1, { state: "succeeded", stepStatus: "stale" }), step(2, { state: "succeeded", stepStatus: "stale" })],
     });
     expect(stepBandNote(stale)).toBe("上流のページが変わりました。「記事方針」から作り直すと印が消えます。");
     expect(stepBandNote(run({ state: "succeeded", steps: [step(0, { state: "succeeded", stepStatus: "done" })] }))).toBe("すべての段階が済みました。");
+  });
+
+  it("失敗の code ごとに、次に何をすればいいかの文を出す（code は画面に出さない）", () => {
+    const codes: [string, string][] = [
+      ["ai_unavailable", "AI がまだ設定されていないので、この段階を作れません。設定が済むまでお待ちください。"],
+      ["ai_auth", "AI の鍵が使えませんでした。設定が直るまでこの段階を作れません。"],
+      ["quota_exceeded", "今月の AI の使用量が上限に達しました。来月まで手順を実行できません。"],
+      ["invalid_output", "AI の答えを本文にできませんでした。手順の指示やお手本を見直すと直ることがあります。"],
+      ["ai_bad_request", "AI がこの指示を受け付けませんでした。手順の指示やお手本を短くすると直ることがあります。"],
+      ["usage_unavailable", "使用量を数えられませんでした。少し待ってもう一度お試しください。"],
+      ["ai_rate_limit", "AI への問い合わせが混み合っています。少し待ってもう一度お試しください。"],
+      ["ai_overloaded", "AI が混み合っています。少し待ってもう一度お試しください。"],
+      ["ai_server", "AI の側で失敗しました。少し待ってもう一度お試しください。"],
+      ["ai_timeout", "AI の答えを待てる時間を過ぎました。少し待ってもう一度お試しください。"],
+      ["ai_network", "AI に届きませんでした。少し待ってもう一度お試しください。"],
+      ["unknown_recipe", "この手順の定義が見つかりませんでした。設定の「手順」を確かめてください。"],
+      ["unknown_step", "手順の段階が変わりました。はじめから作り直してください。"],
+      ["input_missing", "もとになる本文が空でした。前の段階のページを書いてからやり直してください。"],
+      ["invalid_input", "もとになる本文を読めませんでした。前の段階のページを確かめてください。"],
+      ["page_missing", "結果を書くページが見つかりませんでした。はじめから作り直してください。"],
+      ["lease_expired", "時間がかかりすぎて止まりました。少し待ってもう一度お試しください。"],
+      ["aborted", "途中で止まりました。少し待ってもう一度お試しください。"],
+      ["internal", "思わぬ失敗で止まりました。少し待ってもう一度お試しください。"],
+    ];
+    for (const [code, message] of codes) {
+      expect(stepFailure(code).message, code).toBe(message);
+      // 帯の一言は「どの段階が失敗したか」＋その文（code そのものは出さない）
+      const note = stepBandNote(run({ state: "failed", steps: [step(0, { state: "failed", errorCode: code })] }));
+      expect(note, code).toBe(`「文字起こし修正」が失敗しました。${message}`);
+      expect(note, code).not.toContain(code);
+    }
+  });
+
+  it("知らない code・code の無い失敗は既定（待てば直るものとして扱う）", () => {
+    expect(stepFailure("something_new")).toEqual(UNKNOWN_FAILURE);
+    expect(stepFailure(null)).toEqual(UNKNOWN_FAILURE);
+    expect(UNKNOWN_FAILURE).toEqual({ retryable: true, rerun: true, settings: null, message: "この段階を作れませんでした。少し待ってもう一度お試しください。" });
+    expect(stepBandNote(run({ state: "failed", steps: [step(0, { state: "failed", errorCode: "something_new" })] }))).toBe(
+      "「文字起こし修正」が失敗しました。この段階を作れませんでした。少し待ってもう一度お試しください。",
+    );
+  });
+
+  it("待てば直るものと、原因を直すものを分けている", () => {
+    const retryable = ["usage_unavailable", "ai_rate_limit", "ai_overloaded", "ai_server", "ai_timeout", "ai_network", "lease_expired", "aborted", "internal"];
+    const notRetryable = ["ai_unavailable", "quota_exceeded", "invalid_output", "ai_auth", "ai_bad_request"];
+    for (const code of retryable) expect(stepFailure(code).retryable, code).toBe(true);
+    for (const code of notRetryable) expect(stepFailure(code).retryable, code).toBe(false);
+    // 待てば直るものは「少し待って」と言う
+    for (const code of retryable) expect(stepFailure(code).message, code).toContain("少し待ってもう一度");
+  });
+
+  it("やり直しても同じ結果になる失敗では、やり直しのボタンを出さない（設定への案内だけ）", () => {
+    const failedWith = (code: string) =>
+      run({ state: "failed", steps: [step(0, { state: "succeeded", stepStatus: "done" }), step(1, { state: "failed", errorCode: code, stepStatus: "failed" })] });
+
+    // AI がまだ設定されていない・鍵が使えない: 利用者には直せないので、どのやり直しも出さない
+    for (const code of ["ai_unavailable", "ai_auth"]) {
+      expect(stepBandActions(failedWith(code), "page-1"), code).toEqual([]);
+      expect(stepBandActions(failedWith(code), "rec"), code).toEqual([]);
+    }
+
+    // 今月の上限: やり直しは出さず、使用量への案内だけ
+    expect(stepBandActions(failedWith("quota_exceeded"), "page-1")).toEqual([{ id: "usage", label: "使用量を見る", tone: "primary", settings: "usage" }]);
+
+    // 原因を直せるものは、やり直しも出す（手順への案内を添える）
+    expect(stepBandActions(failedWith("invalid_output"), "rec")).toEqual([
+      { id: "retry", label: "「記事方針」からやり直す", tone: "primary", fromStep: 1 },
+      { id: "restart", label: "はじめから作り直す", tone: "outline", fromStep: 0 },
+      { id: "steps", label: "手順を見る", tone: "quiet", settings: "steps" },
+    ]);
+
+    // 待てば直るものは、今までどおりやり直しだけ
+    expect(stepBandActions(failedWith("ai_timeout"), "rec").map((action) => action.id)).toEqual(["retry", "restart"]);
+    expect(stepBandActions(failedWith("something_new"), "rec").map((action) => action.id)).toEqual(["retry", "restart"]);
+  });
+
+  it("前提変更（失敗ではない）のときは、失敗の扱いでボタンを消さない", () => {
+    // 段階 1 が前提変更・段階 2 が ai_unavailable で失敗。作り直すのは手前の段階 1 なので、やり直しは出す
+    const mixed = run({
+      state: "failed",
+      steps: [
+        step(0, { state: "succeeded", stepStatus: "done" }),
+        step(1, { state: "succeeded", stepStatus: "stale" }),
+        step(2, { state: "failed", errorCode: "ai_unavailable", stepStatus: "failed" }),
+      ],
+    });
+    expect(stepBandActions(mixed, "rec").map((action) => action.id)).toEqual(["retry", "restart"]);
   });
 
   it("動いている間は「やめる」だけ", () => {
