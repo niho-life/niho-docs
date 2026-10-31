@@ -46,6 +46,26 @@ VITE_NIHO_DOCS_EDITOR_SHELL=true npm -C apps/docs run dev:fake
   限定 AST の外の要素があるページは、**黙って欠けさせず開かずに知らせる**（移行は #45 第 2 段）。
 - まだ無いもの: 公開のシート・発信先・情報パネル・手順の帯・AI・録音・本文の画像・版と履歴・⌘K の全文検索（一覧の題名の絞り込みだけ）。
 
+### Mac の殻（#45 の T7・第 1 段）
+
+設計（`docs/architecture/editor-niho-life-design.md` §13）のとおり、Mac アプリは **editor.niho.life を読む殻 ＋ 端末の力**になる。
+この段で入ったのは殻の骨格だけで、**既定は今までの画面のまま**（`NIHO_DOCS_SHELL` を立てたときだけ editor を読む）。
+
+```sh
+NIHO_DOCS_SHELL=remote npm -C apps/docs run dev:fake    # editor.niho.life を読む
+NIHO_DOCS_SHELL=dev    npm -C apps/docs run dev:fake    # 開発の editor（localhost:3000。開発・試験の起動だけ）
+```
+
+- URL は `src-tauri/src/shell.rs` の定数だけ。環境変数やページから URL を受け取らない。
+- **remote origin から呼べるコマンド**は `src-tauri/capabilities/remote-editor.json`（`remote.urls` は `https://editor.niho.life` だけ、
+  permission は `allow-editor-shell`＝`shell_capabilities` だけ）。保管庫・設定・鍵・CLI の起動の引数には届かない。
+  `acl_tests.rs` がこれを固定している（`allow-docs-*` が remote に混ざると落ちる）。
+- 開発の `localhost:3000` は `capabilities/remote-editor-dev.json` に分け、`tauri.dev.conf.json`（`npm run dev` / `dev:fake` が付ける）
+  のときだけ数える。配布物の `tauri.conf.json` は `app.security.capabilities` を `["default", "remote-editor"]` に固定しているので入らない。
+- `shell_capabilities` は殻の自己紹介（版・開発の起動か・端末の力の有無）。画面はこれが返ることで Mac の殻の中だと分かる。
+  鍵・パス・端末の名前は返さない。
+- 次の段で足すもの：一時置き場（`staging/<操作の id>/`）、端末内の文字起こし・録音・CLI の AI の command、旧い画面の退役。
+
 ### NIHO アカウント（L5 #18557）
 
 - 設定 › 接続設定の「NIHO アカウント」の丸ボタンから接続する。ログインは任意で、未ログインでも文書作成・工程・AI 接続を使える。

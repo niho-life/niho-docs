@@ -43,6 +43,7 @@ mod samples;
 mod secrets;
 #[cfg(target_os = "macos")]
 mod single_instance;
+mod shell;
 mod speech;
 mod store;
 mod updater;
@@ -2644,6 +2645,16 @@ pub fn run() {
           let _ = window.set_title(DEV_WINDOW_TITLE);
         }
       }
+      // Mac の殻（設計 §13）: NIHO_DOCS_SHELL=remote なら editor.niho.life を読む（URL は shell.rs の定数だけ。
+      // remote から呼べるコマンドは capabilities/remote-editor.json で決まる）。既定は今までの画面
+      let shell_mode = shell::shell_mode(std::env::var(shell::SHELL_ENV).ok().as_deref(), dev);
+      if let Some(url) = shell::remote_url(shell_mode) {
+        if let Some(window) = app.get_webview_window("main") {
+          if let Err(error) = window.navigate(url) {
+            eprintln!("shell: could not open the editor screen: {error}");
+          }
+        }
+      }
       conversation::cleanup_stale_chat_workspaces(&data_dir);
       // CLI 実行基盤は起動時に 1 つ作る（CLI の場所の上書きは設定の cliPaths と環境変数。変えたらアプリを開き直す）
       let settings = std::fs::read_to_string(data_dir.join("settings.json"))
@@ -2739,6 +2750,7 @@ pub fn run() {
       }
     })
     .invoke_handler(tauri::generate_handler![
+      shell::shell_capabilities,
       app_paths,
       load_settings,
       save_settings,

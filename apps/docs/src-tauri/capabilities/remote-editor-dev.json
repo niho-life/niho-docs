@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-editor-dev",
+  "description": "開発の editor（npm -C apps/editor-web run dev の localhost:3000）から呼べるコマンド。remote-editor と同じ範囲。tauri.dev.conf.json を付けた起動だけで有効（配布物の tauri.conf.json の capabilities には入れない）。",
+  "windows": ["main"],
+  "platforms": ["macOS"],
+  "remote": { "urls": ["http://localhost:3000"] },
+  "permissions": ["allow-editor-shell", "core:event:allow-listen", "core:event:allow-unlisten"]
+}

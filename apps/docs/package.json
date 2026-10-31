@@ -5,8 +5,8 @@
   "type": "module",
   "description": "NIHO docs（Mac・Tauri 2 ＋ React）。工程を本人が設計できるドキュメント制作アプリ。",
   "scripts": {
-    "dev": "tauri dev",
-    "dev:fake": "NIHO_DOCS_CLAUDE_CLI_PATH=\"$PWD/sidecar/fake/claude\" NIHO_DOCS_CODEX_CLI_PATH=\"$PWD/sidecar/fake/codex\" NIHO_DOCS_AGY_CLI_PATH=\"$PWD/sidecar/fake/agy\" NIHO_DOCS_SPEECH_PATH=\"$PWD/sidecar/fake/niho-speech\" tauri dev",
+    "dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
+    "dev:fake": "NIHO_DOCS_CLAUDE_CLI_PATH=\"$PWD/sidecar/fake/claude\" NIHO_DOCS_CODEX_CLI_PATH=\"$PWD/sidecar/fake/codex\" NIHO_DOCS_AGY_CLI_PATH=\"$PWD/sidecar/fake/agy\" NIHO_DOCS_SPEECH_PATH=\"$PWD/sidecar/fake/niho-speech\" tauri dev --config src-tauri/tauri.dev.conf.json",
     "dev:web": "vite",
     "build": "vite build",
     "build:app": "npm run sidecar:build && tauri build --config src-tauri/tauri.sidecar.conf.json",

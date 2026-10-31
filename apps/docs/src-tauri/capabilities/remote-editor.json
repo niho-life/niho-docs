@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-editor",
+  "description": "editor.niho.life（Mac の殻が読む画面）から呼べるコマンド。端末の力だけ（設計 §13）。保管庫・設定・鍵・CLI の起動の引数は渡せない。配布物に入るのはこのファイルだけで、開発の localhost は remote-editor-dev（tauri.dev.conf.json のときだけ）。",
+  "windows": ["main"],
+  "platforms": ["macOS"],
+  "remote": { "urls": ["https://editor.niho.life"] },
+  "permissions": ["allow-editor-shell", "core:event:allow-listen", "core:event:allow-unlisten"]
+}
