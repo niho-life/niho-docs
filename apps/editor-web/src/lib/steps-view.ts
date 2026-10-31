@@ -7,25 +7,33 @@
  */
 
 import type { ShellStep, ShellStepState } from "niho-docs-ui/shell";
-import type { StepPageStatus, StepRun, StepRunStep } from "./steps-client";
+import type { StepPageStatus, StepRecipeChoice, StepRun, StepRunStep } from "./steps-client";
 
-/** 録音から始められる手順。id と名前は src/steps/recipes.ts の RECIPES の写し（steps-view.test.ts が一致を確かめる）。 */
-export const STEP_RECIPES = [
-  { id: "tpl-1", name: "記事制作", start: "記事にする" },
-  { id: "tpl-2", name: "議事録", start: "議事録にする" },
-  { id: "tpl-3", name: "インサイト整理", start: "インサイトを整理する" },
-] as const;
+/**
+ * 既定の手順の、入口に出す言い方（設計 §7.2・モック v6）。既定の手順の名前を変えていなければこの言い方を使い、
+ * 変えた手順・設定（#108）で足した手順は「{名前}にする」にする。手順そのものの一覧はサーバーが答える
+ * （`GET /api/pages/{id}/steps` の `recipes`）ので、画面は静的な一覧を持たない。
+ */
+const DEFAULT_START_LABELS: Readonly<Record<string, string>> = {
+  "tpl-1": "記事にする",
+  "tpl-2": "議事録にする",
+  "tpl-3": "インサイトを整理する",
+};
 
-export type StepRecipeKey = (typeof STEP_RECIPES)[number]["id"];
-
-/** 「この録音から」の選び方（最初の 1 つが主ボタン）。 */
-export function stepStartChoices(): { id: string; label: string }[] {
-  return STEP_RECIPES.map((recipe) => ({ id: recipe.id, label: recipe.start }));
+/** 入口のボタンの文字。既定の名前のままなら決まった言い方、変えた・足した手順はその名前から。 */
+export function stepStartLabel(recipe: StepRecipeChoice): string {
+  const wording = recipe.defaultName !== null && recipe.defaultName === recipe.name ? DEFAULT_START_LABELS[recipe.id] : undefined;
+  return wording ?? `${recipe.name}にする`;
 }
 
-/** 手順の名前（知らない id は id のまま出す。設定で足した手順でも帯は出る）。 */
-export function stepRecipeName(recipeId: string): string {
-  return STEP_RECIPES.find((recipe) => recipe.id === recipeId)?.name ?? recipeId;
+/** 「この録音から」の選び方（サーバーが答えた順。最初の 1 つが主ボタン）。 */
+export function stepStartChoices(recipes: readonly StepRecipeChoice[]): { id: string; label: string }[] {
+  return recipes.map((recipe) => ({ id: recipe.id, label: stepStartLabel(recipe) }));
+}
+
+/** 手順の名前（一覧に無い id は id のまま出す。設定から消えた手順の run でも帯は出る）。 */
+export function stepRecipeName(recipes: readonly StepRecipeChoice[], recipeId: string): string {
+  return recipes.find((recipe) => recipe.id === recipeId)?.name ?? recipeId;
 }
 
 /** まだ動いているか（これが true の間だけ状態を読み直す）。 */
@@ -153,11 +161,12 @@ export function stepPagesOf(run: StepRun): { id: string; title: string; stepStat
 }
 
 /** 終わったときの通知の一言（画面を閉じていた人に出す。本文は入れない）。 */
-export function stepDoneMessage(run: StepRun): string | null {
-  if (run.state === "succeeded") return `${stepRecipeName(run.recipe)}の手順が終わりました。`;
+export function stepDoneMessage(recipes: readonly StepRecipeChoice[], run: StepRun): string | null {
+  const name = stepRecipeName(recipes, run.recipe);
+  if (run.state === "succeeded") return `${name}の手順が終わりました。`;
   if (run.state === "failed") {
     const failed = run.steps.find((step) => step.state === "failed");
-    return `${stepRecipeName(run.recipe)}の手順が${failed ? quoted(failed.name) + "で" : ""}失敗しました。`;
+    return `${name}の手順が${failed ? quoted(failed.name) + "で" : ""}失敗しました。`;
   }
   return null;
 }

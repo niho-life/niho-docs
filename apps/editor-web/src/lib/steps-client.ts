@@ -4,6 +4,7 @@
  * 画面は「始める」「状態を読む」「取消」の 3 本だけを使う。
  *
  * - 状態は親（録音ページ）の id で読む（`GET /api/pages/{parent}/steps`）。サブページを開いているときも親で読む。
+ * - 手順は設定（#108）で変えられるので、画面は静的な一覧を持たず、同じ答えに入っている `recipes` に従う。
  * - 読むたびにサーバーが前提変更を測り直す（`stepStatus` が `stale` になる）。画面は測らない。
  * - 短い間隔で回さない（./use-step-run.ts が間隔を空け、画面を閉じたら止める）。
  */
@@ -39,6 +40,15 @@ export type StepRun = {
   fromStep: number;
   steps: StepRunStep[];
 };
+
+/**
+ * その人の手順（サーバーの `RecipeChoiceView`）。`defaultName` は既定の手順の元の名前（既定でなければ null）。
+ * 帯の名前と、録音ページの入口に出すものをこれで決める。
+ */
+export type StepRecipeChoice = { id: string; name: string; defaultName: string | null };
+
+/** `GET /api/pages/{id}/steps` の答え。 */
+export type StepsState = { run: StepRun | null; recipes: StepRecipeChoice[] };
 
 /** API の失敗。`error` はサーバーの短い code（`steps_unavailable`・`run_in_progress`・`invalid_from_step` など）。 */
 export class StepsRequestError extends Error {
@@ -95,20 +105,30 @@ function toRun(value: unknown): StepRun | null {
   return { id, recipe, state: state as StepRunState, fromStep, steps: parsed as StepRunStep[] };
 }
 
+function toChoice(value: unknown): StepRecipeChoice | null {
+  if (!isPlainObject(value)) return null;
+  const { id, name, defaultName } = value;
+  if (typeof id !== "string" || id === "" || typeof name !== "string") return null;
+  if (defaultName !== null && typeof defaultName !== "string") return null;
+  return { id, name, defaultName };
+}
+
 function stepsPath(parentId: string, rest = ""): string {
   return `/api/pages/${encodeURIComponent(parentId)}/steps${rest}`;
 }
 
-/** 最新の run（無ければ null）。読むたびにサーバーが前提変更を測り直す。 */
-export async function getStepRun(parentId: string, fetchImpl: FetchLike = fetch): Promise<StepRun | null> {
+/** 最新の run（無ければ null）と、その人の手順。読むたびにサーバーが前提変更を測り直す。 */
+export async function getSteps(parentId: string, fetchImpl: FetchLike = fetch): Promise<StepsState> {
   const response = await fetchImpl(stepsPath(parentId), { method: "GET", credentials: "same-origin", cache: "no-store" });
   if (!response.ok) throw await failure(response);
   const data = await readJson(response);
-  if (!isPlainObject(data) || !("run" in data)) throw new StepsRequestError(500);
-  if (data.run === null) return null;
+  if (!isPlainObject(data) || !("run" in data) || !Array.isArray(data.recipes)) throw new StepsRequestError(500);
+  const recipes = data.recipes.map(toChoice);
+  if (recipes.some((recipe) => recipe === null)) throw new StepsRequestError(500);
+  if (data.run === null) return { run: null, recipes: recipes as StepRecipeChoice[] };
   const run = toRun(data.run);
   if (!run) throw new StepsRequestError(500);
-  return run;
+  return { run, recipes: recipes as StepRecipeChoice[] };
 }
 
 /** 手順を始める（`fromStep` を渡すとその段階からの作り直し）。202 は作った run、200 は同じ要求の再送。 */

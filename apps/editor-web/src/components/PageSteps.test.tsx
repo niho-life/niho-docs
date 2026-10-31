@@ -2,12 +2,13 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Block } from "@niho/editor-store";
+import type { Block, SettingsRecipe } from "@niho/editor-store";
 import type { AuthProvider } from "@/auth/types";
 import { cancelStepRun, createStepRun, getSteps, type StepsApiDeps } from "@/server/steps-api";
 import { StepError, fakeBlocks, type StepExecutor } from "@/steps/executor";
 import { MemoryStepRunStore } from "@/steps/memory-store";
 import { MemoryTaskQueue } from "@/steps/queue";
+import { recipesOf } from "@/steps/recipes";
 import { runAttempt } from "@/steps/runner";
 
 const router = { push: vi.fn(), refresh: vi.fn(), replace: vi.fn() };
@@ -29,10 +30,14 @@ const notUsed = async (): Promise<Response> => {
   throw new Error("the steps API never calls the login routes");
 };
 
-/** 本物の受付 API（src/server/steps-api.ts）とメモリの store を、画面の fetch の先につなぐ。 */
-function server() {
+/**
+ * 本物の受付 API（src/server/steps-api.ts）とメモリの store を、画面の fetch の先につなぐ。
+ * `saved` はその人が設定（#108）で変えた・足した手順（空なら既定の 3 つ）。
+ */
+function server(saved: readonly SettingsRecipe[] = []) {
   const store = new MemoryStepRunStore();
   const queue = new MemoryTaskQueue();
+  const recipes = recipesOf(saved);
   const recording = store.addPage("user-a", { kind: "rec", blocks: TRANSCRIPT });
   const auth: AuthProvider = {
     mode: "stub",
@@ -41,7 +46,13 @@ function server() {
     completeLogin: notUsed,
     logout: notUsed,
   };
-  const deps: StepsApiDeps = { auth: () => auth, steps: () => store, queue: () => queue, env: { EDITOR_STEPS_MODE: "inline" } };
+  const deps: StepsApiDeps = {
+    auth: () => auth,
+    steps: () => store,
+    recipes: () => async () => recipes,
+    queue: () => queue,
+    env: { EDITOR_STEPS_MODE: "inline" },
+  };
   const calls: string[] = [];
   const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
     const method = init?.method ?? "GET";
@@ -61,10 +72,10 @@ function server() {
   /** 積まれている段階を、積まれなくなるまで実行する（本番は Cloud Tasks の worker）。 */
   const work = async (executor: StepExecutor) => {
     for (let tasks = queue.drain(); tasks.length > 0; tasks = queue.drain()) {
-      for (const task of tasks) await runAttempt({ store, executor, queue }, task);
+      for (const task of tasks) await runAttempt({ store, recipes: async () => recipes, executor, queue }, task);
     }
   };
-  return { store, queue, deps, recording, calls, fetchImpl, work };
+  return { store, queue, deps, recipes, recording, calls, fetchImpl, work };
 }
 
 /** 段階 0 は成功し、`failAt` の段階だけ（やり直せない失敗で）落ちる実行器。 */
@@ -171,6 +182,32 @@ describe("PageSteps（手順の帯）", () => {
     await wait(4_000);
     expect(band()[0]).toEqual({ label: "文字起こし修正", say: "作成中", state: "run" });
     expect(note()).toBe("「文字起こし修正」を作成中です。画面を閉じても進みます。");
+  });
+
+  it("入口と帯は、設定（#108）で変えた・足した手順に従う（画面は静的な一覧を持たない）", async () => {
+    // 既定の tpl-2 の名前を変え、手順を 1 つ足した人
+    const api = server([
+      { id: "tpl-2", name: "座談会メモ", guide: "", steps: [{ id: "d9c3x7mf", name: "まとめ", instruction: "まとめる。" }] },
+      { id: "r-1", name: "対談", guide: "", steps: [{ id: "s-1", name: "書き起こし", instruction: "書き起こす。" }] },
+    ]);
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    // 既定の名前のままの手順は決まった言い方、変えた・足した手順はその名前から
+    expect(entry()).toEqual(["記事にする", "座談会メモにする", "インサイトを整理する", "対談にする", "手順を変える"]);
+
+    // 足した手順を始めると、帯の名前も段階の名前もその人の定義に従う
+    await pressEntry("対談にする");
+    await settle();
+    expect(container!.textContent).toContain("対談の手順");
+    expect(band()).toEqual([{ label: "書き起こし", say: "待機", state: "wait" }]);
+
+    // 名前を変えた既定の手順も同じ
+    await pressAction("やめる");
+    await settle();
+    await pressEntry("座談会メモにする");
+    await settle();
+    expect(container!.textContent).toContain("座談会メモの手順");
+    expect(band()).toEqual([{ label: "まとめ", say: "待機", state: "wait" }]);
   });
 
   it("受入: 手順の途中で画面を閉じても進み、戻ると帯が最新", async () => {

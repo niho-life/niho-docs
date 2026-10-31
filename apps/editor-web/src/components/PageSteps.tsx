@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useRouter } from "next/navigation";
 import type { PageKind } from "@niho/editor-store";
 import { ShellSteps, ShellStepsStart, type ShellStepsAction } from "niho-docs-ui/shell";
-import { StepsRequestError, cancelStepRun, getStepRun, isStepRunDone, startStepRun, type StepRun } from "@/lib/steps-client";
+import { StepsRequestError, cancelStepRun, getSteps, isStepRunDone, startStepRun, type StepRecipeChoice, type StepRun } from "@/lib/steps-client";
 import {
   isStepRunActive,
   stepBandActions,
@@ -40,8 +40,8 @@ function messageOf(error: unknown): string {
 }
 
 /** 許可されているときだけブラウザ通知を出す（設計 §7.2。本文は入れず、終わったことだけ）。 */
-function notifyDone(run: StepRun): void {
-  const message = stepDoneMessage(run);
+function notifyDone(recipes: readonly StepRecipeChoice[], run: StepRun): void {
+  const message = stepDoneMessage(recipes, run);
   if (message === null || typeof Notification === "undefined" || Notification.permission !== "granted") return;
   try {
     new Notification("NIHO editor", { body: message, tag: `steps-${run.id}` });
@@ -92,10 +92,14 @@ export function PageSteps({
   // 手順は録音ページを根に持つ。サブページを開いているときは親で読む
   const rootId = kind === "rec" ? pageId : parentId;
   const [run, setRun] = useState<StepRun | null>(null);
+  // その人の手順（設定で変えた名前・足したものを含む。サーバーが状態と一緒に答える）
+  const [recipes, setRecipes] = useState<readonly StepRecipeChoice[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // 読み直しの合図（始めた・やり直した直後にもう一度読む）
   const [tick, setTick] = useState(0);
+  // 通知の文のために、いま読んでいる手順の一覧（apply を作り直さず、送る直前の値を読む）
+  const recipesRef = useRef<readonly StepRecipeChoice[]>([]);
   // 前に見た run が動いていたか（動いている → 終わったの境目でだけ通知する）
   const wasActive = useRef(false);
   // 開いているページの段階が、前に見たとき実行の途中だったか（途中 → 済みの境目でだけ本文を読み直す）
@@ -108,7 +112,7 @@ export function PageSteps({
   const apply = useCallback(
     (next: StepRun) => {
       setRun(next);
-      if (wasActive.current && isStepRunDone(next)) notifyDone(next);
+      if (wasActive.current && isStepRunDone(next)) notifyDone(recipesRef.current, next);
       wasActive.current = isStepRunActive(next);
       // 開いているページの本文が、この段階の結果で入れ替わった（worker が blocks を書き、revision を進めた）
       const here = next.steps.find((step) => step.pageId === pageId);
@@ -129,12 +133,14 @@ export function PageSteps({
     const read = async () => {
       timer = null;
       try {
-        const latest = await getStepRun(rootId);
+        const latest = await getSteps(rootId);
         if (cancelled) return;
         setNotice(null);
-        if (latest) apply(latest);
+        recipesRef.current = latest.recipes;
+        setRecipes(latest.recipes);
+        if (latest.run) apply(latest.run);
         else setRun(null);
-        if (!isStepRunActive(latest)) return;
+        if (!isStepRunActive(latest.run)) return;
       } catch (error) {
         if (cancelled) return;
         // 読めなかったことは帯の下に出し、間隔を空けてもう一度（ログインが切れていれば止める）
@@ -201,7 +207,7 @@ export function PageSteps({
       {run && (
         <ShellSteps
           band
-          title={`${stepRecipeName(run.recipe)}の手順`}
+          title={`${stepRecipeName(recipes, run.recipe)}の手順`}
           steps={stepBandSteps(run)}
           currentId={pageId}
           note={notice ?? stepBandNote(run)}
@@ -219,8 +225,8 @@ export function PageSteps({
       )}
       {media}
       {/* 録音ページで、手順が動いていないときの入口（終わったあとは別の手順も始められる） */}
-      {kind === "rec" && !isStepRunActive(run) && (
-        <ShellStepsStart choices={stepStartChoices()} busy={busy} onPick={(recipe) => start(recipe)} onChangeSteps={() => router.push("/settings")} />
+      {kind === "rec" && recipes.length > 0 && !isStepRunActive(run) && (
+        <ShellStepsStart choices={stepStartChoices(recipes)} busy={busy} onPick={(recipe) => start(recipe)} onChangeSteps={() => router.push("/settings")} />
       )}
       {children}
     </>

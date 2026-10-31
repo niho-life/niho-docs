@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { RECIPES } from "@/steps/recipes";
-import type { StepRun, StepRunStep } from "./steps-client";
+import { DEFAULT_RECIPES } from "@/steps/recipes";
+import type { StepRecipeChoice, StepRun, StepRunStep } from "./steps-client";
 import {
-  STEP_RECIPES,
   isStepRunActive,
   stepBandActions,
   stepBandNote,
@@ -11,6 +10,7 @@ import {
   stepPagesOf,
   stepRecipeName,
   stepStartChoices,
+  stepStartLabel,
   stepStateOf,
   maxStepFrom,
 } from "./steps-view";
@@ -25,17 +25,35 @@ function run(over: Partial<StepRun> = {}): StepRun {
   return { id: "run-1", recipe: "tpl-1", state: "running", fromStep: 0, steps: [step(0), step(1), step(2)], ...over };
 }
 
+/** サーバーが答える、その人の手順（既定の 3 つに手を入れていないとき）。 */
+const DEFAULTS: StepRecipeChoice[] = DEFAULT_RECIPES.map((recipe) => ({ id: recipe.id, name: recipe.name, defaultName: recipe.name }));
+
 describe("steps-view（手順の帯の見た目）", () => {
-  it("手順の id と名前が src/steps/recipes.ts の RECIPES と合っている", () => {
-    expect(STEP_RECIPES.map((recipe) => [recipe.id, recipe.name])).toEqual(RECIPES.map((recipe) => [recipe.id, recipe.name]));
-    expect(stepStartChoices()).toEqual([
+  it("入口はサーバーが答えた手順の順で、既定の名前のままなら決まった言い方", () => {
+    expect(DEFAULT_RECIPES.map((recipe) => recipe.name)).toEqual(["記事制作", "議事録", "インサイト整理"]);
+    expect(stepStartChoices(DEFAULTS)).toEqual([
       { id: "tpl-1", label: "記事にする" },
       { id: "tpl-2", label: "議事録にする" },
       { id: "tpl-3", label: "インサイトを整理する" },
     ]);
-    expect(stepRecipeName("tpl-2")).toBe("議事録");
-    // 設定で足した手順（知らない id）でも帯は出す
-    expect(stepRecipeName("usr-9")).toBe("usr-9");
+    expect(stepRecipeName(DEFAULTS, "tpl-2")).toBe("議事録");
+  });
+
+  it("設定（#108）で名前を変えた・足した手順は、その名前から入口の文字を作る", () => {
+    const mine: StepRecipeChoice[] = [
+      // 既定の手順の名前を変えた
+      { id: "tpl-2", name: "座談会メモ", defaultName: "議事録" },
+      // 設定で足した手順
+      { id: "r-1", name: "対談", defaultName: null },
+    ];
+    expect(stepStartChoices(mine)).toEqual([
+      { id: "tpl-2", label: "座談会メモにする" },
+      { id: "r-1", label: "対談にする" },
+    ]);
+    expect(stepStartLabel({ id: "tpl-1", name: "記事制作", defaultName: "記事制作" })).toBe("記事にする");
+    expect(stepRecipeName(mine, "r-1")).toBe("対談");
+    // 設定から消えた手順の run でも帯は出す（名前は id のまま）
+    expect(stepRecipeName(mine, "tpl-3")).toBe("tpl-3");
   });
 
   it("段階の状態は、実行中・失敗が先で、そのあとに前提変更", () => {
@@ -185,9 +203,11 @@ describe("steps-view（手順の帯の見た目）", () => {
       { id: "page-0", title: "文字起こし修正", stepStatus: "done" },
       { id: "page-1", title: "記事方針", stepStatus: null },
     ]);
-    expect(stepDoneMessage(run({ state: "succeeded" }))).toBe("記事制作の手順が終わりました。");
-    expect(stepDoneMessage(run({ state: "failed", steps: [step(0, { state: "failed" })] }))).toBe("記事制作の手順が「文字起こし修正」で失敗しました。");
-    expect(stepDoneMessage(run({ state: "running" }))).toBeNull();
-    expect(stepDoneMessage(run({ state: "canceled" }))).toBeNull();
+    expect(stepDoneMessage(DEFAULTS, run({ state: "succeeded" }))).toBe("記事制作の手順が終わりました。");
+    expect(stepDoneMessage(DEFAULTS, run({ state: "failed", steps: [step(0, { state: "failed" })] }))).toBe("記事制作の手順が「文字起こし修正」で失敗しました。");
+    expect(stepDoneMessage(DEFAULTS, run({ state: "running" }))).toBeNull();
+    expect(stepDoneMessage(DEFAULTS, run({ state: "canceled" }))).toBeNull();
+    // 名前を変えた手順は、通知の文もその名前で
+    expect(stepDoneMessage([{ id: "tpl-1", name: "記事（長め）", defaultName: "記事制作" }], run({ state: "succeeded" }))).toBe("記事（長め）の手順が終わりました。");
   });
 });
