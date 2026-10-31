@@ -154,7 +154,7 @@ pub async fn shell_recording_start(
   let recorder = state.recorder.clone();
   tauri::async_runtime::spawn_blocking(move || {
     recorder.start(&binary.path, &recording_id, move |value| {
-      let _ = on_event.send(value);
+      let _ = on_event.send(shell_recording_event(value));
     })
   })
   .await
@@ -173,6 +173,28 @@ pub struct ShellRecording {
   pub exported: bool,
 }
 
+/// 書き出せたか（書き出せなければ録音中の CAF のまま）。
+fn exported(path: &str) -> bool {
+  path.ends_with(".m4a")
+}
+
+/// 録音のイベントを remote の画面へ渡す前に、パスを落とす。画面が止めずに終わったとき（入力装置の切断など）の
+/// `Done.audio` は `RecordingInfo`（app data の絶対パスを含む）なので、`ShellRecording` と同じ形に変える。
+/// ほかのイベント（Started・Level・Error）にパスは無い。
+pub fn shell_recording_event(mut value: Value) -> Value {
+  if value.get("type").and_then(Value::as_str) == Some("Done") {
+    let audio = value.get("audio").cloned().unwrap_or(Value::Null);
+    let shaped = ShellRecording {
+      recording_id: audio["recordingId"].as_str().unwrap_or_default().to_string(),
+      name: audio["name"].as_str().unwrap_or_default().to_string(),
+      duration_sec: audio["durationSec"].as_f64(),
+      exported: audio["path"].as_str().is_some_and(exported),
+    };
+    value["audio"] = serde_json::to_value(shaped).unwrap_or(Value::Null);
+  }
+  value
+}
+
 /// 録音を止める。
 #[tauri::command]
 pub async fn shell_recording_stop(state: State<'_, AppState>, recording_id: String) -> CommandResult<ShellRecording> {
@@ -183,7 +205,7 @@ pub async fn shell_recording_stop(state: State<'_, AppState>, recording_id: Stri
     .map_err(|_| blocking_failed())?
     .map_err(CommandError::from)?;
   Ok(ShellRecording {
-    exported: info.path.ends_with(".m4a"),
+    exported: exported(&info.path),
     recording_id: info.recording_id,
     name: info.name,
     duration_sec: info.duration_sec,
@@ -441,6 +463,40 @@ pub async fn shell_transcribe_stop(state: State<'_, AppState>, job_id: String) -
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn recording_events_carry_no_paths() {
+    let done = shell_recording_event(serde_json::json!({
+      "type": "Done",
+      "audio": {
+        "recordingId": "rec-1",
+        "path": "/Users/someone/Library/Application Support/life.niho.docs/recordings/rec-1.m4a",
+        "name": "録音 10/16 15:30",
+        "durationSec": 12.5
+      }
+    }));
+    assert_eq!(
+      done,
+      serde_json::json!({
+        "type": "Done",
+        "audio": { "recordingId": "rec-1", "name": "録音 10/16 15:30", "durationSec": 12.5, "exported": true }
+      })
+    );
+    assert!(!done.to_string().contains("/Users"));
+    let caf = shell_recording_event(serde_json::json!({
+      "type": "Done",
+      "audio": { "recordingId": "rec-1", "path": "/d/recordings/rec-1.caf", "name": "n", "durationSec": null }
+    }));
+    assert_eq!(caf["audio"]["exported"], serde_json::json!(false));
+    assert!(caf["audio"].get("path").is_none());
+    for other in [
+      serde_json::json!({ "type": "Started", "device": "USB マイク" }),
+      serde_json::json!({ "type": "Level", "rms": 0.1, "peak": 0.2 }),
+      serde_json::json!({ "type": "Error", "code": "no_input_device", "message": "x" }),
+    ] {
+      assert_eq!(shell_recording_event(other.clone()), other);
+    }
+  }
 
   #[test]
   fn remote_is_the_production_editor_only() {
