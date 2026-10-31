@@ -30,6 +30,8 @@ export type Page = {
   parent: string | null;
   recipe: string | null;
   stepStatus: StepStatus | null;
+  /** 同じ親の中の手動の並び（小さいほど上。0 は並べ替えていない）。 */
+  sortOrder: number;
   /** 楽観ロックの番号。保存のたびに +1。保存の要求はこれを `baseRevision` として持ってくる。 */
   revision: number;
   createdAt: string;
@@ -57,10 +59,8 @@ export type PagePublicationSummary = {
  * 一覧の 1 行（本文は含めない）。parent はサブページを親の下に並べるため、stepStatus は「作成中」を出すため、
  * publication は 2 行目の公開先を出すため。
  */
-export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "parent" | "stepStatus" | "createdAt" | "updatedAt"> & {
+export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "parent" | "stepStatus" | "sortOrder" | "createdAt" | "updatedAt"> & {
   publication: PagePublicationSummary | null;
-  /** 同じ親の中の手動の並び（小さいほど上。0 は並べ替えていない）。 */
-  sortOrder: number;
 };
 
 /** 一覧のひと区切り。next は続きを読むときに cursor に渡す値（続きが無ければ null）。 */

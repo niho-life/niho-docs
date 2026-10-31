@@ -129,7 +129,7 @@ function server(options: { sheets: PublishSheetDto[]; post?: Response | (() => R
 }
 
 function summary(): PageSummary {
-  return { id: PAGE, kind: "article", title: "Morning walk", lang: "en", parent: null, stepStatus: null, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", publication: null };
+  return { id: PAGE, kind: "article", title: "Morning walk", lang: "en", parent: null, stepStatus: null, sortOrder: 0, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", publication: null };
 }
 
 /** ページの中身の代わり（題名と本文の欄だけ）。保存を知らせるボタンも持つ。 */

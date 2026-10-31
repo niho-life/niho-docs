@@ -73,7 +73,7 @@ afterEach(async () => {
 const NOW = Date.parse("2026-10-31T03:00:00.000Z");
 
 function page(id: string, title = id): PageSummary {
-  return { id, kind: "note", title, lang: "ja", parent: null, stepStatus: null, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", publication: null };
+  return { id, kind: "note", title, lang: "ja", parent: null, stepStatus: null, sortOrder: 0, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", publication: null };
 }
 
 let mounted: FrameInitial | null = null;

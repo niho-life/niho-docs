@@ -105,13 +105,13 @@ type PageRow = {
   parent: string | null;
   recipe: string | null;
   step_status: StepStatus | null;
+  sort_order: number;
   revision: number;
   created_at: Date;
   updated_at: Date;
 };
 
-type SummaryRow = Pick<PageRow, "id" | "kind" | "title" | "lang" | "parent" | "step_status" | "created_at" | "updated_at"> & {
-  sort_order: number;
+type SummaryRow = Pick<PageRow, "id" | "kind" | "title" | "lang" | "parent" | "step_status" | "sort_order" | "created_at" | "updated_at"> & {
   pub_dest: PublishDest | null;
   pub_handle: string | null;
   pub_range: PublishRange | null;
@@ -129,7 +129,7 @@ type ChunkRow = SummaryRow & { cursor_time: string };
 
 type VersionRow = { version: number; reason: VersionReason; created_at: Date; block_count: number };
 
-const PAGE_COLUMNS = "id, kind, title, lang, blocks, cover, lead, parent, recipe, step_status, revision, created_at, updated_at";
+const PAGE_COLUMNS = "id, kind, title, lang, blocks, cover, lead, parent, recipe, step_status, sort_order, revision, created_at, updated_at";
 
 function toPage(row: PageRow): Page {
   return {
@@ -143,6 +143,7 @@ function toPage(row: PageRow): Page {
     parent: row.parent,
     recipe: row.recipe,
     stepStatus: row.step_status,
+    sortOrder: row.sort_order,
     revision: row.revision,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),

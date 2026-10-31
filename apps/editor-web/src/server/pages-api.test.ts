@@ -69,7 +69,7 @@ function memoryStore() {
     published,
     async createPage(owner: string, input: CreatePageInput = {}): Promise<Page> {
       const now = new Date().toISOString();
-      const page: Page = { id: randomUUID(), kind: input.kind ?? "note", title: input.title ?? "", lang: input.lang ?? "ja", blocks: input.blocks ?? [], cover: null, lead: null, parent: null, recipe: null, stepStatus: null, revision: 1, createdAt: now, updatedAt: now };
+      const page: Page = { id: randomUUID(), kind: input.kind ?? "note", title: input.title ?? "", lang: input.lang ?? "ja", blocks: input.blocks ?? [], cover: null, lead: null, parent: null, recipe: null, stepStatus: null, sortOrder: 0, revision: 1, createdAt: now, updatedAt: now };
       rows.set(page.id, { ...page, owner, deleted: false, deletedAt: null });
       return page;
     },
@@ -84,7 +84,7 @@ function memoryStore() {
         if (start === 0) throw new InvalidPageCursorError();
       }
       const limit = options.limit ?? 100;
-      const pages: PageSummary[] = sorted.slice(start, start + limit).map(({ id, kind, title, lang, parent, stepStatus, createdAt, updatedAt }) => ({ id, kind, title, lang, parent, stepStatus, createdAt, updatedAt, publication: null }));
+      const pages: PageSummary[] = sorted.slice(start, start + limit).map(({ id, kind, title, lang, parent, stepStatus, sortOrder, createdAt, updatedAt }) => ({ id, kind, title, lang, parent, stepStatus, sortOrder, createdAt, updatedAt, publication: null }));
       return { pages, next: start + limit < sorted.length ? (pages.at(-1)?.id ?? null) : null };
     },
     async getPage(owner: string, id: string): Promise<Page | null> {
