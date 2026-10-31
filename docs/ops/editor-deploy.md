@@ -8,11 +8,11 @@
 
 | 資源 | 名前（既定） | 内容 |
 | --- | --- | --- |
-| Cloud Run サービス | `niho-editor` | 画面と `/api/pages`。誰でも呼べる（ログインはアプリの中）。min 0 / max 2、`EDITOR_AUTH_MODE=niho` |
+| Cloud Run サービス | `niho-editor` | 画面と `/api/pages`。誰でも呼べる（ログインはアプリの中）。min 0 / max 2、`EDITOR_AUTH_MODE=niho`。要求の時間切れは 300 秒（AI の提案は 1 回の呼び出し 120 秒まで × 分けた要求の数。§10） |
 | Cloud Run ジョブ | `niho-editor-migrate` | 配備のたびに 1 回。migration の適用と、アプリ用ロールの作成・権限付与 |
 | Cloud SQL | 既存の共有インスタンスに データベース `niho_editor` | ロール 2 つ: `niho_editor_migrate`（表の所有者。migrate ジョブだけが使う）と `niho_editor_app`（DML だけ。DDL と migration の記録の書き換えは不可） |
 | GCS | 資産バケット（private） | 均一なバケットレベルのアクセス、公開アクセス禁止。実行 ID は作成と閲覧だけ（削除・上書き不可） |
-| Secret Manager | `niho-editor-database-url`（アプリ）、`niho-editor-migrate-database-url`（migrate） | アプリは自分の URL だけ読める。migrate ジョブは両方読む（アプリ用ロールを作るため） |
+| Secret Manager | `niho-editor-database-url`（アプリ）、`niho-editor-migrate-database-url`（migrate）、`niho-editor-anthropic-key`（AI の鍵） | アプリは自分の URL と AI の鍵だけ読める。migrate ジョブは DB の 2 つを読む（アプリ用ロールを作るため）。AI の鍵の版はオーナーが入れる（§10） |
 | サービスアカウント | `niho-editor-runner`（画面）、`niho-editor-migrate`（ジョブ） | 別々にして、画面からは表の所有者の資格情報に届かないようにする |
 | Artifact Registry | `niho-editor`（Docker） | 配備の image。直近 5 個だけ残す |
 | Cloud Build | — | `scripts/editor-deploy/cloudbuild.yaml` で web と migrate の 2 つの image を 1 回で作る |
@@ -29,6 +29,10 @@
 | `EDITOR_ORIGIN` | `https://<APP_DOMAIN>` | 更新系の要求の `Origin` 検査。独自ドメインが無いうちは `run.app` の URL |
 | `EDITOR_ASSETS_BUCKET` | 資産バケット名 | アプリはまだ読まない（画像と音声は #33 以降） |
 | `DATABASE_URL` | Secret | アプリ用ロール |
+| `ANTHROPIC_API_KEY` | Secret | AI の鍵。`niho-editor-anthropic-key` に有効な版があるときだけ渡す（§10） |
+| `EDITOR_AI_MODE` | `anthropic` | 同上。版が無ければ渡さない（AI は 503 のまま） |
+| `EDITOR_AI_MODEL` | `AI_MODEL`（既定 `claude-sonnet-5-5`） | 同上 |
+| `EDITOR_AI_MONTHLY_LIMIT_USD` | `AI_MONTHLY_LIMIT_USD`（既定 `10`） | 同上。1 人・1 か月の上限（見込みの USD） |
 
 migrate ジョブには `DATABASE_URL`（migrate ロール）と `EDITOR_APP_DATABASE_URL`（アプリ用ロールの URL。ここからロール名とパスワードを取って作る）が Secret で渡る。
 
@@ -39,7 +43,7 @@ migrate ジョブには `DATABASE_URL`（migrate ロール）と `EDITOR_APP_DAT
 1. API の有効化
 2. サービスアカウント 2 つと `roles/cloudsql.client`
 3. Cloud SQL にデータベース `niho_editor` と migrate ロール（アプリ用ロールは migrate ジョブが作る）
-4. Secret 2 つと、読める人の限定
+4. Secret 3 つと、読める人の限定（AI の鍵は版なしで作る。鍵はオーナーが §10 の手順で入れる）
 5. Artifact Registry（直近 5 個だけ残す）
 6. 資産バケット（private）
 
@@ -87,7 +91,8 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 | Cloud Run（min 0） | 0 円台。使った分だけ |
 | Cloud SQL | 既存インスタンスに同居なので追加の固定費なし。共有なので、負荷が出たら分ける |
 | GCS | 保存量しだい（いまは空） |
-| Secret Manager（有効な版 6 つまで無料） | 0 円 |
+| Secret Manager（有効な版 6 つまで無料） | 0 円（DB の 2 つと AI の鍵 1 つ） |
+| Anthropic API（AI） | 使った分。1 人・1 か月 $10 が上限（§10） |
 | Artifact Registry（直近 5 個） | 10 円未満 |
 | Cloud Build（1 日 120 分まで無料） | 0 円 |
 
@@ -95,3 +100,44 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 
 - 配備を戻す: 前の revision へ全トラフィックを戻す（`gcloud run services update-traffic niho-editor --to-revisions <revision>=100`）。DB は expand → contract なので旧版と互換。戻したあとの次のデプロイでは、`deploy.sh` が毎回 `update-traffic --to-latest` で最新の revision へ traffic を向け直す（Cloud Run は割り当てを引き継ぐため、これが無いと smoke が古い revision に通る）。
 - サービスを止める: 独自ドメインのマッピングを消せば `run.app` の URL だけが残る。サービスごと止めるなら `gcloud run services delete niho-editor`（DB とバケットは残る）。
+
+## 10. AI（#38）
+
+AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messages`。ホストはコードで固定）を呼ぶ。鍵は Secret Manager の `niho-editor-anthropic-key` に置き、画面の実行 ID（`niho-editor-runner`）だけが読める。**Secret に有効な版が無いあいだ、AI は閉じたまま**（提案・採用は 503 `ai_unavailable`。使用量の表示は動く）。`deploy.sh` は配備のたびに版の有無を見て、ある時だけ鍵と AI の環境変数を足す（ログに `AI: on` / `AI: off`）。
+
+**鍵は公開リポジトリ・Issue・PR・チャット・ログ・シェルの履歴に出さない。** 入れる経路は `set-ai-key.sh` だけ（標準入力から読み、画面・ファイル・コマンドラインに出さない。引数では受け付けない）。アプリも鍵・プロンプト・本文をエラーやログに出さない（ログは失敗の種類と HTTP ステータスだけ）。
+
+### 推奨値と理由
+
+| `deploy.env` | 既定（推奨） | 渡る環境変数 | 理由 |
+| --- | --- | --- | --- |
+| `AI_MODEL` | `claude-sonnet-5-5` | `EDITOR_AI_MODEL` | 文を整える・要約・見出しには十分な品質で、Opus 系の約半額（入力 $2・出力 $10／100 万トークン）。docs-core の単価表にあり、見込み金額が出る |
+| `AI_MONTHLY_LIMIT_USD` | `10` | `EDITOR_AI_MONTHLY_LIMIT_USD` | 1 人・1 か月の見込みの上限。数段落の提案は 1 回 $0.01 前後、出力が上限まで出るいちばん悪い 1 回の呼び出し（本文 約 4,000 文字・出力 12,000 トークン）でも約 $0.13 なので、普段使いでは届かず、誤用や暴走は止まる |
+
+1 回の提案で送る本文は 30,000 文字まで（超えたら 413 `too_large`。範囲を選んで頼む）で、段落の切れ目で約 4,000 文字ずつに分けて順に呼ぶ。1 回の呼び出しの時間切れ（`EDITOR_AI_TIMEOUT_MS`、既定 120 秒）と出力の上限（`EDITOR_AI_MAX_TOKENS`、既定 12,000 トークン。思考の分を含む）は `deploy.sh` から渡さない（アプリの既定のまま）。Cloud Run の要求の時間切れはそれに合わせて 300 秒。自動の再試行はしない。上流の失敗（401・429・529・5xx・時間切れ）と、使えない応答（JSON でない・出力の上限で途中で切れた）は 502 `ai_failed`。
+
+### 有効にする
+
+1. （初回だけ）`scripts/editor-deploy/gcp-bootstrap.sh resources` — Secret `niho-editor-anthropic-key` を版なしで作り、実行 ID に `roles/secretmanager.secretAccessor` を付ける（既存の資源はそのまま）。
+2. Anthropic の Console で、この用途だけの API キーを作る（workspace を分けて使用上限も付けておくと、アプリの上限とは別の歯止めになる）。
+3. `scripts/editor-deploy/set-ai-key.sh` — 端末で実行すると、入力を画面に出さずに鍵を求める（貼り付けて Enter）。パスワード管理の CLI から渡すときは `<鍵を出すコマンド> | scripts/editor-deploy/set-ai-key.sh`。空の入力は何もしない。
+4. `scripts/editor-deploy/deploy.sh --no-build` — `ANTHROPIC_API_KEY`（Secret の `latest`）と `EDITOR_AI_MODE=anthropic`・`EDITOR_AI_MODEL`・`EDITOR_AI_MONTHLY_LIMIT_USD` が付く。`DATABASE_URL` の Secret はそのまま。
+5. 画面で 1 回だけ提案を頼み、設定の使用量が増えることを確かめる。
+
+### 無効にする
+
+1. 有効な版をすべて無効にする: `gcloud secrets versions list niho-editor-anthropic-key --filter='state:ENABLED'` で版を見て、それぞれ `gcloud secrets versions disable <版> --secret niho-editor-anthropic-key`。
+2. `scripts/editor-deploy/deploy.sh --no-build` — 有効な版が無いので、AI の Secret と環境変数を付けずに配備する（`--set-secrets`・`--set-env-vars` は毎回の全量なので、前の revision の分は残らない）。ログに `AI: off`。
+3. 1 と 2 の間も、動いているインスタンスは起動の時に読んだ鍵を持っている。すぐ止めたいときは先に Console で鍵を無効にする（以後の提案は 502 `ai_failed`）。
+
+### 鍵を回す
+
+1. Console で新しい鍵を作り、`set-ai-key.sh` で新しい版として足す（`latest` が新しい版になる）。
+2. `scripts/editor-deploy/deploy.sh --no-build`（新しい revision が新しい鍵を読む）。提案が通ることを確かめる。
+3. 古い版を `gcloud secrets versions disable <古い版> --secret niho-editor-anthropic-key` で無効にし、Console で古い鍵を無効にする。
+
+### 費用の見方
+
+- 1 人・1 か月（Asia/Tokyo の月）の見込み金額は、画面の設定（`GET /api/ai/usage`）に出る。返ったトークン数 × docs-core の単価表。上限の 80% 以上で一言出し、上限以上はモデルを呼ぶ前に 429 `quota_exceeded`。上限を変えるときは `deploy.env` の `AI_MONTHLY_LIMIT_USD` を変えて `deploy.sh --no-build`。
+- 請求の正は Anthropic の Console の使用量と請求。アプリの金額は見込み。応答が届いて使えなかった呼び出し（JSON でない・途中で切れた）の分も数える。HTTP の失敗・時間切れ・通信の失敗はトークン数が返らないので数えない。
+- GCP 側の追加は Secret の版 1 つだけ（無料の範囲）。

@@ -3,7 +3,7 @@ import type { AiIntent } from "./presets";
 
 /**
  * モデルの接続口（設計 §6・Issue #38）。モデルと鍵はサーバー側だけに置く。
- * この段では偽物（fake-model.ts）だけ。本物のプロバイダは後段で `EDITOR_AI_MODE=<provider>` として足す。
+ * 本物は Anthropic（anthropic.ts。`EDITOR_AI_MODE=anthropic`）、開発と CI は偽物（fake-model.ts。`EDITOR_AI_MODE=fake`）。
  */
 
 /** モデルへ送る段落 1 つ。`index` は本文の最上位のブロックの位置。`context` は文脈として送るだけ（変えられない）。 */
