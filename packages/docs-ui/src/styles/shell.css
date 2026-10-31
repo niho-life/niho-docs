@@ -33,6 +33,8 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-btn--quiet{background:none;color:var(--ed-ink-sub)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-btn--quiet:hover{background:var(--ed-sand)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-btn--sm{height:30px;padding:0 12px;font-size:12.5px}
+/* 送っている間（disabled にするとフォーカスが外れるので aria-disabled と、中の回るマークで示す。文字は薄めない） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-btn--busy{cursor:progress}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-btn:disabled{opacity:.4;cursor:not-allowed}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-pubbtn{min-width:72px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ib{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;color:var(--ed-ink-sub);flex:none}
@@ -86,6 +88,9 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-t--untitled{color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-when{grid-column:2;grid-row:1;font-size:12px;color:var(--ed-ink-mute);white-space:nowrap}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-sub{grid-column:1/-1;font-size:12px;color:var(--ed-ink-mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 進行中の回るマーク（サイドバーの行と、送っている間のボタン）。状態の言葉は横の文字が持つので、マークは支援技術から隠す */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-busy{display:inline-block;vertical-align:-1px;width:9px;height:9px;border-radius:50%;border:1.5px solid var(--ed-line-3);border-top-color:currentColor;animation:es-turn .9s linear infinite;flex:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di-sub .es-busy{margin-right:5px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dest{width:7px;height:7px;border-radius:2px;display:inline-block;margin-right:6px;vertical-align:1px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dest--exp{background:var(--ed-deep)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dest--niho{background:var(--ed-brown)}
@@ -284,9 +289,26 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-step--done i,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-step--cur i{background:var(--ed-accent-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-step--run i{background:var(--ed-amber);animation:es-pulse 1s infinite alternate}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-step small{margin-left:auto;color:var(--ed-ink-mute);font-size:12px;font-weight:400}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-redo{margin-top:9px}
+/* 待機は空の丸、失敗は四角、前提変更は空の四角。状態を色だけで表さない（言葉は <small> が持つ） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-step--wait i{background:transparent;box-shadow:inset 0 0 0 1.5px var(--ed-line-3)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-step--failed i{background:var(--ed-red);border-radius:2px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-step--stale i{background:transparent;border-radius:2px;box-shadow:inset 0 0 0 1.5px var(--ed-amber-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-step--failed small{color:var(--ed-red)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-step--stale small{color:var(--ed-amber-ink)}
+/* 本文の列の上の帯（設計 §7.2）。狭い画面では折り返す（320px でも横に溢れない） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-stepband{margin:0 0 14px;padding:10px 12px;border:1px solid var(--ed-line-2);border-radius:14px;background:var(--ed-canvas)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-stepband-ttl{display:flex;align-items:center;gap:6px;margin:0 0 5px;font-size:12.5px;font-weight:600;color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-stepband-ttl svg{width:14px;height:14px;flex:none}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-stepband-note{margin:5px 0 0;font-size:12px;line-height:1.5;color:var(--ed-ink-mute);min-height:1.5em}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-steps--band{display:flex;flex-wrap:wrap;gap:3px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-steps--band>li{min-width:0;max-width:100%}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-steps--band .es-step{width:auto;gap:7px;padding:6px 10px;max-width:100%}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-steps--band .es-step small{margin-left:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-redo{margin-top:9px;display:flex;flex-wrap:wrap;gap:6px}
+
 @keyframes es-pulse{from{opacity:.35}to{opacity:1}}
-@media (prefers-reduced-motion:reduce){:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-step--run i{animation:none}:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-tip{transition:none}}
+@keyframes es-turn{to{transform:rotate(1turn)}}
+@media (prefers-reduced-motion:reduce){:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-step--run i{animation:none}:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-busy{animation:none}:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-tip{transition:none}}
 
 /* ページ設定 */
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ps section{padding:13px 0 0;border-top:1px solid var(--ed-line)}

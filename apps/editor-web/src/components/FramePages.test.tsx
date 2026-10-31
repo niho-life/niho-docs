@@ -19,6 +19,16 @@ vi.mock("./PageEditor", () => ({
 vi.mock("./RecordingTranscript", () => ({
   RecordingTranscript: ({ pageId }: { pageId: string }) => <div data-transcript={pageId} />,
 }));
+// 手順の帯（#37）は PageSteps.test.tsx が見る。ここは、帯・文字起こし・本文の並びと渡す値だけを見る
+vi.mock("./PageSteps", () => ({
+  PageSteps: ({ pageId, kind, parentId, media, children }: { pageId: string; kind: string; parentId: string | null; media?: unknown; children?: unknown }) => (
+    <>
+      <div data-steps={`${pageId}:${kind}:${parentId ?? "none"}`} />
+      {media as never}
+      {children as never}
+    </>
+  ),
+}));
 
 import { rememberLastPage } from "@/lib/last-page";
 import { NewPage, OpenPage } from "./FramePages";
@@ -71,30 +81,38 @@ describe("NewPage: the creation redirect belongs to the draft that made the page
   });
 });
 
-describe("OpenPage: a recording page shows the transcript above the title and body", () => {
+describe("OpenPage: the steps band, the transcript, then the title and body", () => {
   const PAGE = "33333333-3333-4333-8333-333333333333";
-  const summary = (kind: "note" | "rec") => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent: null, stepStatus: null, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
+  const summary = (kind: "note" | "rec" | "step", parent: string | null = null) => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent, stepStatus: null, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
 
-  async function open(kind: "note" | "rec") {
+  async function open(kind: "note" | "rec" | "step", parent: string | null = null) {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
     await act(async () => {
-      root!.render(<OpenPage summary={summary(kind)} blocks={[]} revision={1} />);
+      root!.render(<OpenPage summary={summary(kind, parent)} blocks={[]} revision={1} />);
     });
     return container;
   }
 
-  it("puts the transcript (kind=rec) before the page editor", async () => {
+  const order = (host: HTMLElement) =>
+    [...host.children].map((node) => node.getAttribute("data-steps") ?? node.getAttribute("data-transcript") ?? "editor");
+
+  it("puts the steps band first, then the transcript (kind=rec), then the page editor", async () => {
     const host = await open("rec");
-    expect([...host.children].map((node) => node.getAttribute("data-transcript") ?? "editor")).toEqual([PAGE, "editor"]);
+    expect(order(host)).toEqual([`${PAGE}:rec:none`, PAGE, "editor"]);
     expect(frame.pageOpened).toHaveBeenCalledTimes(1);
   });
 
-  it("shows only the editor for an ordinary page", async () => {
+  it("shows the band and the editor for an ordinary page, without the transcript", async () => {
     const host = await open("note");
-    expect([...host.children].map((node) => node.hasAttribute("data-editor"))).toEqual([true]);
+    expect(order(host)).toEqual([`${PAGE}:note:none`, "editor"]);
     expect(host.querySelector("[data-transcript]")).toBeNull();
+  });
+
+  it("gives the band the parent of a step subpage (the run belongs to the recording page)", async () => {
+    const host = await open("step", "44444444-4444-4444-8444-444444444444");
+    expect(order(host)).toEqual([`${PAGE}:step:44444444-4444-4444-8444-444444444444`, "editor"]);
   });
 });
 

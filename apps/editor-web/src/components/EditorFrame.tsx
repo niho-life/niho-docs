@@ -5,7 +5,7 @@ import "niho-docs-ui/styles/tokens.css";
 import "niho-docs-ui/styles/shell.css";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import type { PageKind, PageLang, PageSummary } from "@niho/editor-store";
+import type { PageKind, PageLang, PageSummary, StepStatus } from "@niho/editor-store";
 import { EditorShell, ShellHeader, ShellSheet, ShellSidebar, shellAccountItems, type NewPageKind } from "niho-docs-ui/shell";
 import { listPagesRequest } from "@/lib/pages-client";
 import { headerStatus } from "@/lib/save-status";
@@ -54,6 +54,9 @@ export type OpenedDetails = {
   recordingSec?: number | null;
 };
 
+/** 手順（#37）のサブページ。帯（./PageSteps.tsx）が読んだ run から渡す。 */
+export type FrameStepPage = { id: string; title: string; stepStatus: StepStatus | null };
+
 /** ページの画面から枠（一覧・ヘッダー）へ知らせること。 */
 export type EditorFrameApi = {
   narrow: boolean;
@@ -68,6 +71,11 @@ export type EditorFrameApi = {
   pageCreated: (id: string, title: string, kind?: PageKind) => void;
   /** ページをゴミ箱へ入れた。一覧から、そのページと子孫（読み込んである分）を外す。 */
   pageRemoved: (id: string) => void;
+  /**
+   * 手順が進んだ（#37）。一覧の行の印（stepStatus）を替え、まだ読み込んでいないサブページは親の下に足す。
+   * 並びは arrangeSidebarItems が作った順に揃える（段階の順になるよう、足す行の createdAt を段階の順にする）。
+   */
+  stepPagesChanged: (parentId: string, steps: readonly FrameStepPage[]) => void;
   /**
    * 開いているページ（エディタ）を枠に登録する。ヘッダーの状態の丸と「…」がこれを使う。
    * 保存の状態が変わるたびに登録し直し、画面を離れたら返す関数で外す（後から登録したページは外さない）。
@@ -90,6 +98,7 @@ const FrameContext = createContext<EditorFrameApi>({
   pageCreated: noop,
   registerPageSaver: () => noop,
   pageRemoved: noop,
+  stepPagesChanged: noop,
   attachPage: () => noop,
   openPublish: noop,
 });
@@ -342,6 +351,37 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           return { ...current, pages, gone, opened: current.opened && gone.has(current.opened.id) ? null : current.opened };
         });
       },
+      stepPagesChanged: (parentId, steps) =>
+        setList((current) => {
+          const known = new Map(current.pages.map((page) => [page.id, page]));
+          const parent = known.get(parentId);
+          let moved = false;
+          const pages = current.pages.map((page) => {
+            const step = steps.find((item) => item.id === page.id);
+            if (!step || page.stepStatus === step.stepStatus) return page;
+            moved = true;
+            return { ...page, stepStatus: step.stepStatus };
+          });
+          const at = Date.now();
+          const added = steps
+            .filter((step) => !known.has(step.id) && !current.gone.has(step.id))
+            .map((step, index): PageSummary => {
+              const created = new Date(at + index).toISOString();
+              return {
+                id: step.id,
+                kind: "step",
+                title: step.title,
+                lang: parent?.lang ?? "ja",
+                parent: parentId,
+                stepStatus: step.stepStatus,
+                createdAt: created,
+                updatedAt: created,
+                publication: null,
+              };
+            });
+          if (!moved && added.length === 0) return current;
+          return { ...current, pages: [...pages, ...added] };
+        }),
       attachPage: (page) => {
         attachedRef.current = page;
         setAttached(page);

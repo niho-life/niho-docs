@@ -7,6 +7,7 @@ import { ShellSettingsPage } from "niho-docs-ui/shell";
 import { rememberLastPage } from "@/lib/last-page";
 import { isNarrowNow, useEditorFrame } from "./EditorFrame";
 import { PageEditor } from "./PageEditor";
+import { PageSteps } from "./PageSteps";
 import { RecordingTranscript } from "./RecordingTranscript";
 
 export { RecordingStartScreen } from "./RecordingStartScreen";
@@ -58,13 +59,17 @@ export function OpenPage({
       onLangChange={(lang) => frame.pageLangChanged(id, lang)}
     />
   );
-  // 録音ページは、文字起こしの録音ブロックが本文の上に入る（設計 §7.1）
-  if (summary.kind !== "rec") return editor;
+  // 手順の帯（#37）はページのいちばん上、録音ページの文字起こし（設計 §7.1。本文の上）はその下。
+  // 手順に関わらないページでは、PageSteps は帯も入口も描かず本文だけを並べる
   return (
-    <>
-      <RecordingTranscript pageId={id} />
+    <PageSteps
+      pageId={id}
+      kind={summary.kind}
+      parentId={summary.parent}
+      media={summary.kind === "rec" ? <RecordingTranscript pageId={id} /> : null}
+    >
       {editor}
-    </>
+    </PageSteps>
   );
 }
 

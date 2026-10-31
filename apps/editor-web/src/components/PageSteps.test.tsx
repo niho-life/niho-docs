@@ -1,0 +1,387 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Block } from "@niho/editor-store";
+import type { AuthProvider } from "@/auth/types";
+import { cancelStepRun, createStepRun, getSteps, type StepsApiDeps } from "@/server/steps-api";
+import { StepError, fakeBlocks, type StepExecutor } from "@/steps/executor";
+import { MemoryStepRunStore } from "@/steps/memory-store";
+import { MemoryTaskQueue } from "@/steps/queue";
+import { runAttempt } from "@/steps/runner";
+
+const router = { push: vi.fn(), refresh: vi.fn(), replace: vi.fn() };
+const frame = { stepPagesChanged: vi.fn() };
+
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
+vi.mock("./EditorFrame", () => ({ useEditorFrame: () => frame }));
+
+import { PageSteps } from "./PageSteps";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const ORIGIN = "http://editor.test";
+const TRANSCRIPT: Block[] = [{ type: "paragraph", content: [{ type: "text", text: "合成の文字起こし" }] }];
+const STEPS_PATH = /^\/api\/pages\/([^/]+)\/steps(?:\/runs(?:\/([^/]+)\/cancel)?)?$/;
+
+const notUsed = async (): Promise<Response> => {
+  throw new Error("the steps API never calls the login routes");
+};
+
+/** 本物の受付 API（src/server/steps-api.ts）とメモリの store を、画面の fetch の先につなぐ。 */
+function server() {
+  const store = new MemoryStepRunStore();
+  const queue = new MemoryTaskQueue();
+  const recording = store.addPage("user-a", { kind: "rec", blocks: TRANSCRIPT });
+  const auth: AuthProvider = {
+    mode: "stub",
+    getSession: async () => ({ userId: "user-a", mode: "stub" }),
+    beginLogin: notUsed,
+    completeLogin: notUsed,
+    logout: notUsed,
+  };
+  const deps: StepsApiDeps = { auth: () => auth, steps: () => store, queue: () => queue, env: { EDITOR_STEPS_MODE: "inline" } };
+  const calls: string[] = [];
+  const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+    const method = init?.method ?? "GET";
+    const url = new URL(String(input), ORIGIN);
+    calls.push(`${method} ${url.pathname}`);
+    const headers = new Headers(init?.headers);
+    headers.set("host", "editor.test");
+    if (method !== "GET") headers.set("origin", ORIGIN);
+    const request = new Request(url, { ...init, method, headers });
+    const match = STEPS_PATH.exec(url.pathname);
+    if (!match) throw new Error(`the test server does not serve ${url.pathname}`);
+    const id = decodeURIComponent(match[1]!);
+    if (method === "GET") return getSteps(request, id, deps);
+    if (match[2]) return cancelStepRun(request, id, decodeURIComponent(match[2]), deps);
+    return createStepRun(request, id, deps);
+  });
+  /** 積まれている段階を、積まれなくなるまで実行する（本番は Cloud Tasks の worker）。 */
+  const work = async (executor: StepExecutor) => {
+    for (let tasks = queue.drain(); tasks.length > 0; tasks = queue.drain()) {
+      for (const task of tasks) await runAttempt({ store, executor, queue }, task);
+    }
+  };
+  return { store, queue, deps, recording, calls, fetchImpl, work };
+}
+
+/** 段階 0 は成功し、`failAt` の段階だけ（やり直せない失敗で）落ちる実行器。 */
+function executorFailingAt(failAt: number | null): StepExecutor {
+  return {
+    async run(input) {
+      if (input.stepIndex === failAt) throw new StepError("invalid_output", false);
+      return { blocks: fakeBlocks(input) };
+    },
+  };
+}
+
+const good = executorFailingAt(null);
+
+let root: Root | null = null;
+let container: HTMLElement | null = null;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.useFakeTimers();
+});
+
+afterEach(async () => {
+  await unmount();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+async function mount(props: { pageId: string; kind: "rec" | "step"; parentId: string | null }) {
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () => {
+    root!.render(
+      <PageSteps pageId={props.pageId} kind={props.kind} parentId={props.parentId} media={null}>
+        <p>本文</p>
+      </PageSteps>,
+    );
+  });
+  await settle();
+}
+
+async function unmount() {
+  const current = root;
+  root = null;
+  await act(async () => current?.unmount());
+  container?.remove();
+  container = null;
+}
+
+/** 進んでいる要求（fetch）と、そのあとの描画を待つ。 */
+const settle = () => act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+/** 時間を進める（読み直しの間隔）。 */
+const wait = (ms: number) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
+/** この画面へ戻ってくる（別のページを見ていた・タブを離れていた）。戻ったら状態を読み直す。 */
+const back = () =>
+  act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+/** 帯の段階（名前・状態の言葉・状態の class）。 */
+function band(): { label: string; say: string; state: string }[] {
+  return [...container!.querySelectorAll<HTMLButtonElement>("ol.es-steps--band > li > button")].map((button) => ({
+    label: button.childNodes[1]?.textContent ?? "",
+    say: button.querySelector("small")?.textContent ?? "",
+    state: /es-step--([a-z]+)/.exec(button.className)?.[1] ?? "",
+  }));
+}
+const note = () => container!.querySelector(".es-stepband-note")?.textContent ?? "";
+const bandActions = () => [...container!.querySelectorAll<HTMLButtonElement>(".es-redo button")].map((button) => button.textContent ?? "");
+const entry = () => [...container!.querySelectorAll<HTMLButtonElement>(".es-makefrom button")].map((button) => button.textContent ?? "");
+const press = (label: string, where: string) => {
+  const button = [...container!.querySelectorAll<HTMLButtonElement>(`${where} button`)].find((candidate) => candidate.textContent?.includes(label));
+  if (!button) throw new Error(`${label} is not on the screen`);
+  return act(async () => button.click());
+};
+const pressEntry = (label: string) => press(label, ".es-makefrom");
+const pressAction = (label: string) => press(label, ".es-redo");
+
+describe("PageSteps（手順の帯）", () => {
+  it("録音ページでは「この録音から」の入口を出し、押すと手順が始まって帯が出る", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    expect(band()).toEqual([]);
+    expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "手順を変える"]);
+
+    await pressEntry("記事にする");
+    await settle();
+    expect(container!.textContent).toContain("記事制作の手順");
+    expect(band()).toEqual([
+      { label: "文字起こし修正", say: "待機", state: "wait" },
+      { label: "記事方針", say: "待機", state: "wait" },
+      { label: "記事本文", say: "待機", state: "wait" },
+    ]);
+    expect(note()).toBe("順番を待っています。画面を閉じても進みます。");
+    // 動いている間は入口を出さず、できるのは「やめる」だけ
+    expect(entry()).toEqual([]);
+    expect(bandActions()).toEqual(["やめる"]);
+
+    // 段階を実行し始めると「作成中」になる
+    await api.store.claimAttempt((await currentRun(api)).id, 0);
+    await wait(4_000);
+    expect(band()[0]).toEqual({ label: "文字起こし修正", say: "作成中", state: "run" });
+    expect(note()).toBe("「文字起こし修正」を作成中です。画面を閉じても進みます。");
+  });
+
+  it("受入: 手順の途中で画面を閉じても進み、戻ると帯が最新", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    expect(band().map((step) => step.say)).toEqual(["待機", "待機", "待機"]);
+
+    // 画面を閉じる
+    await unmount();
+    const closed = api.calls.length;
+    // 閉じている間に、サーバー（worker）が手順を進める。画面はもう何も読まない
+    await api.work(good);
+    await act(async () => void (await vi.advanceTimersByTimeAsync(120_000)));
+    expect(api.calls.length).toBe(closed);
+
+    // 戻ってくると、帯は最新（すべて済み）
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    expect(band()).toEqual([
+      { label: "文字起こし修正", say: "済み", state: "done" },
+      { label: "記事方針", say: "済み", state: "done" },
+      { label: "記事本文", say: "済み", state: "done" },
+    ]);
+    expect(note()).toBe("すべての段階が済みました。");
+    // 終わった手順は読み直さない（最初の 1 回だけ）
+    const read = api.calls.length;
+    await act(async () => void (await vi.advanceTimersByTimeAsync(120_000)));
+    expect(api.calls.length).toBe(read);
+  });
+
+  it("受入: 上流のサブページを直すと下流に「前提変更」が付き、その段階から作り直すと消える", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    await api.work(good);
+    const run = await currentRun(api);
+    const [first, second, third] = run.steps.map((step) => step.pageId);
+
+    // 段階 1（記事方針）のページを開く
+    await unmount();
+    await mount({ pageId: second!, kind: "step", parentId: api.recording });
+    expect(band().map((step) => step.say)).toEqual(["済み", "済み", "済み"]);
+
+    // 上流（文字起こし修正）を直して、このページへ戻ってくる（終わった手順は読み直さないので、戻ったときに読む）
+    api.store.pages.get(first!)!.blocks = [{ type: "paragraph", content: [{ type: "text", text: "手で直した結果" }] }];
+    await wait(60_000);
+    expect(band().map((step) => step.say)).toEqual(["済み", "済み", "済み"]);
+    await back();
+    expect(band()).toEqual([
+      { label: "文字起こし修正", say: "済み", state: "done" },
+      { label: "記事方針", say: "前提変更", state: "stale" },
+      { label: "記事本文", say: "前提変更", state: "stale" },
+    ]);
+    expect(note()).toBe("上流のページが変わりました。「記事方針」から作り直すと印が消えます。");
+    expect(bandActions()).toEqual(["「記事方針」からやり直す", "はじめから作り直す"]);
+
+    // その段階から作り直すと、前提変更の印は消える（段階 0 は作り直さない）
+    await pressAction("「記事方針」からやり直す");
+    await settle();
+    expect(band().map((step) => step.state)).toEqual(["done", "wait", "wait"]);
+    expect(api.fetchImpl.mock.calls.some(([, init]) => init?.body === JSON.stringify({ recipe: "tpl-1", fromStep: 1 }))).toBe(true);
+
+    await api.work(good);
+    await wait(60_000);
+    expect(band().map((step) => step.say)).toEqual(["済み", "済み", "済み"]);
+    expect(note()).toBe("すべての段階が済みました。");
+    expect(third).toBeDefined();
+  });
+
+  it("失敗した段階だけやり直せる", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    await api.work(executorFailingAt(1));
+    await wait(60_000);
+    expect(band()).toEqual([
+      { label: "文字起こし修正", say: "済み", state: "done" },
+      { label: "記事方針", say: "失敗", state: "failed" },
+      { label: "記事本文", say: "待機", state: "wait" },
+    ]);
+    expect(note()).toBe("「記事方針」が失敗しました（AI の答えを本文にできなかった）。この段階からやり直せます。");
+    // 失敗したあとは、別の手順も始められる
+    expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "手順を変える"]);
+
+    await pressAction("「記事方針」からやり直す");
+    await settle();
+    await api.work(good);
+    await wait(60_000);
+    expect(band().map((step) => step.say)).toEqual(["済み", "済み", "済み"]);
+    // 段階 0 は作り直さず、前の結果をそのまま使う（reused）
+    expect((await currentRun(api)).steps.map((step) => step.state)).toEqual(["reused", "succeeded", "succeeded"]);
+  });
+
+  it("帯の段階を押すとそのサブページへ移り、開いている段階は押しても移らない", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    await api.work(good);
+    const run = await currentRun(api);
+    await unmount();
+    await mount({ pageId: run.steps[1]!.pageId, kind: "step", parentId: api.recording });
+
+    await press("記事本文", "ol.es-steps--band");
+    expect(router.push).toHaveBeenCalledWith(`/p/${run.steps[2]!.pageId}`);
+    router.push.mockClear();
+    await press("記事方針", "ol.es-steps--band");
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it("「やめる」で取消し、そのあともう一度始められる", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("議事録にする");
+    await settle();
+    expect(container!.textContent).toContain("議事録の手順");
+
+    await pressAction("やめる");
+    await settle();
+    expect(note()).toBe("手順を取消しました。もう一度始められます。");
+    expect(band().map((step) => step.say)).toEqual(["待機", "待機"]);
+    expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "手順を変える"]);
+
+    await pressEntry("記事にする");
+    await settle();
+    expect(container!.textContent).toContain("記事制作の手順");
+  });
+
+  it("手順に関わらないページでは、帯も入口も出さず本文だけを並べる", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11", kind: "step", parentId: null });
+    expect(container!.textContent).toBe("本文");
+    expect(api.calls).toEqual([]);
+  });
+
+  it("状態を読めなかったことは帯の下に出し、ログインが切れたら読み直すのをやめる", async () => {
+    const api = server();
+    const signedOut: AuthProvider = { ...api.deps.auth(), getSession: async () => null };
+    vi.stubGlobal("fetch", api.fetchImpl);
+    api.deps.auth = () => signedOut;
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    expect(note()).toBe("ログインが切れています。もう一度ログインしてください。");
+    const read = api.calls.length;
+    await act(async () => void (await vi.advanceTimersByTimeAsync(120_000)));
+    expect(api.calls.length).toBe(read);
+  });
+
+  it("終わったら通知する（許可されているときだけ。本文は入れない）", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    const made: { title: string; body: string | undefined }[] = [];
+    const requestPermission = vi.fn(async () => "granted" as NotificationPermission);
+    class FakeNotification {
+      static permission: NotificationPermission = "default";
+      static requestPermission = requestPermission;
+      constructor(title: string, options?: NotificationOptions) {
+        made.push({ title, body: options?.body });
+      }
+    }
+    vi.stubGlobal("Notification", FakeNotification);
+
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    // 始めるときに許可を聞く（押した操作の中なので聞いてよい）
+    await pressEntry("記事にする");
+    await settle();
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+
+    // まだ許可されていないので、終わっても通知しない
+    await api.work(good);
+    await wait(60_000);
+    expect(made).toEqual([]);
+
+    // 許可されたあと、動いている → 終わったの境目で 1 回だけ通知する
+    FakeNotification.permission = "granted";
+    await pressAction("はじめから作り直す");
+    await settle();
+    await api.work(good);
+    await wait(60_000);
+    expect(made).toEqual([{ title: "NIHO editor", body: "記事制作の手順が終わりました。" }]);
+    // 開き直しただけでは通知しない（閉じている間に終わったものを、戻るたびに知らせない）
+    await unmount();
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    expect(made).toHaveLength(1);
+  });
+
+  it("サイドバーへ、手順のサブページとその状態を知らせる", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("インサイトを整理する");
+    await settle();
+    const run = await currentRun(api);
+    expect(frame.stepPagesChanged).toHaveBeenCalledWith(api.recording, [{ id: run.steps[0]!.pageId, title: "インサイト", stepStatus: "wait" }]);
+
+    await api.work(good);
+    await wait(60_000);
+    expect(frame.stepPagesChanged).toHaveBeenLastCalledWith(api.recording, [{ id: run.steps[0]!.pageId, title: "インサイト", stepStatus: "done" }]);
+  });
+});
+
+/** サーバーが持っている今の run（画面の表示とは別に、store の中身を確かめるため）。 */
+async function currentRun(api: ReturnType<typeof server>) {
+  const listed = await api.store.listRun("user-a", api.recording);
+  if (!listed?.run) throw new Error("the test server has no run");
+  return listed.run;
+}
