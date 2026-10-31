@@ -238,14 +238,15 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
   - `editor-web: sweep could not requeue every step`: 掃除の積み直しの一部が失敗した（次の回でまた拾う）。
   - `editor-web: sweep read only the oldest queued steps`: queued の段階が 1,000 件を超えて残っている（掃除は古い順に 100 件ずつ 10 回まで読む）。Cloud Tasks のキューが止まっていないか（`gcloud tasks queues describe`）を見る。
 - **段階の失敗の理由**: 帯（`GET /api/pages/{id}/steps` の `errorCode`）。`lease_expired` は実行中に worker が落ちて lease が切れたもの。AI の分は次のとおり（再試行するものは Cloud Tasks が自動で、しないものはその段階で失敗にする）:
-  - 再試行しない: `ai_unavailable`（`EDITOR_AI_MODE` が無効・鍵が無い）・`quota_exceeded`（今月の上限に達した。モデルを呼ぶ前に止めた）・`ai_auth`（鍵が通らない。401・402・403）・`ai_bad_request`・`invalid_output`（答えが使える形でなかった）・`unknown_step`
+  - 再試行しない: `ai_unavailable`（`EDITOR_AI_MODE` が無効・鍵が無い）・`quota_exceeded`（今月の上限に達した。モデルを呼ぶ前に止めた）・`ai_auth`（鍵が通らない。401・402・403）・`ai_bad_request`・`invalid_output`（答えが使える形でなかった）・`output_too_long`（出力の上限で切れ、続きを 8 回頼んでも終わらなかった）・`unknown_step`
   - 再試行する: `ai_rate_limit`（429）・`ai_overloaded`（529）・`ai_server`（5xx）・`ai_timeout`・`ai_network`・`usage_unavailable`（DB に届かず使用量を数えられなかった）
 - **段階の費用**: §10 の使用量（`GET /api/ai/usage`）に提案と一緒に入る（1 人・1 か月の見込みの上限は同じものが効く）。
 - **Cloud Scheduler のジョブ**の最後の実行: 成功は 200 `{"requeued": n}`。
 
 ### 制約
 
-- 1 つの段階は 1 回の要求。今の `deploy.sh` の Cloud Run の要求の上限（`lib.sh` の `service_request_timeout`。既定 300 秒）を超える段階は途中で切れる（Cloud Tasks が再試行し、lease が切れれば掃除が拾う）。1 回のモデルの呼び出しの時間切れは `EDITOR_AI_TIMEOUT_MS`（既定 120 秒）なので、今の 300 秒に収まる。長い資料で足りなくなったら、要求の上限を段階の長さに合わせて上げる（上限は task の 30 分）。
+- **出力が `EDITOR_AI_MAX_TOKENS`（既定 12,000）で切れたら、同じ答えの続きを書かせて繋ぐ**（旧 NIHO docs と同じ。続きは 8 回まで、重なりは 400 字まで除く。docs-core の `MAX_CONTINUATIONS`・`joinContinuation`）。続きの 1 回ずつも使用量に数え、月の上限は続きの前にも見る（上限に達したらそこで止める）。8 回で終わらなければ `output_too_long` で失敗し、**途中まで書けた文書はページに書かない**。
+- 1 つの段階は 1 回の要求（続きを頼んだ分だけ往復は増える）。今の `deploy.sh` の Cloud Run の要求の上限（`lib.sh` の `service_request_timeout`。既定 300 秒）を超える段階は途中で切れる（Cloud Tasks が再試行し、lease が切れれば掃除が拾う）。1 回のモデルの呼び出しの時間切れは `EDITOR_AI_TIMEOUT_MS`（既定 120 秒）なので、今の 300 秒に収まる。長い資料で足りなくなったら、要求の上限を段階の長さに合わせて上げる（上限は task の 30 分）。
 
 ## 12. 文字起こし（#36）
 

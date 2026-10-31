@@ -28,10 +28,10 @@ function askedFor(user: string): string {
   return position >= 0 ? (lines[position + 1] ?? "") : "";
 }
 
-/** 資料（`<untrusted_data>` の中）の先頭（無ければ空）。 */
+/** 資料（`<untrusted_data>` の中）の先頭（無ければ空）。「あなたについて」も同じ包みなので、最後の包み＝資料を見る。 */
 function sourceHead(user: string): string {
-  const match = /<untrusted_data>\n([\s\S]*?)\n<\/untrusted_data>/.exec(user);
-  return match?.[1] ?? "";
+  const all = [...user.matchAll(/<untrusted_data>\n([\s\S]*?)\n<\/untrusted_data>/g)];
+  return all.at(-1)?.[1] ?? "";
 }
 
 function countChars(text: string): number {
@@ -72,14 +72,34 @@ function callTool(name: string, input: unknown, step: number): ToolCall {
   return { id: `fake-tool-${step}`, name, input };
 }
 
+/** 文書を作る側（手順の段階）の偽の答え（compose.ts が読む JSON）。 */
+function composeAnswer(user: string): string {
+  const asked = head(askedFor(user), HEAD_CHARS) || "（頼むことなし）";
+  const source = head(sourceHead(user), HEAD_CHARS) || "（資料なし）";
+  return JSON.stringify({
+    blocks: [
+      { kind: "heading", level: 2, text: "[fake] 偽の結果" },
+      { kind: "paragraph", text: `[fake] ${asked}` },
+      { kind: "paragraph", text: `[fake] 資料の先頭: ${source}` },
+    ],
+  });
+}
+
 /** 決定的な偽物の 1 往復。usage は送った文字数・返した文字数の 1/4（切り上げ）。 */
 export function createFakeClient(): AnthropicClient {
   const usageOf = (sent: number, returned: number) => ({ model: FAKE_CLIENT_MODEL, inputTokens: Math.ceil(sent / 4), outputTokens: Math.ceil(returned / 4) });
-  const converse = async (input: { system: string; messages: unknown[]; signal?: AbortSignal }): Promise<Turn> => {
+  const converse = async (input: { system: string; messages: unknown[]; tools?: unknown[]; signal?: AbortSignal }): Promise<Turn> => {
     input.signal?.throwIfAborted();
     const sent = countChars(input.system) + countChars(JSON.stringify(input.messages));
-    const last = lastTool(input.messages);
     const usage = usageOf(sent, 64);
+    // 道具を渡されない往復は、文書を作る側（手順の段階。compose.ts）
+    if (!input.tools || input.tools.length === 0) {
+      const first = input.messages[0];
+      const user = isRecord(first) && typeof first.content === "string" ? first.content : "";
+      const text = composeAnswer(user);
+      return { text, toolCalls: [], stopReason: "end_turn", usage: usageOf(sent, countChars(text)) };
+    }
+    const last = lastTool(input.messages);
     if (last === null) return { text: "", toolCalls: [callTool("list_pages", {}, 1)], stopReason: "tool_use", usage };
     if (last.name === "list_pages") {
       const pages = isRecord(last.result) && Array.isArray(last.result.pages) ? last.result.pages : [];
@@ -100,15 +120,7 @@ export function createFakeClient(): AnthropicClient {
     converse,
     async complete(input: CompleteInput): Promise<Completion> {
       input.signal?.throwIfAborted();
-      const asked = head(askedFor(input.user), HEAD_CHARS) || "（頼むことなし）";
-      const source = head(sourceHead(input.user), HEAD_CHARS) || "（資料なし）";
-      const text = JSON.stringify({
-        blocks: [
-          { kind: "heading", level: 2, text: "[fake] 偽の結果" },
-          { kind: "paragraph", text: `[fake] ${asked}` },
-          { kind: "paragraph", text: `[fake] 資料の先頭: ${source}` },
-        ],
-      });
+      const text = composeAnswer(input.user);
       const sent = countChars(input.system) + countChars(input.user);
       return { text, usage: usageOf(sent, countChars(text)) };
     },

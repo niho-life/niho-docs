@@ -1,6 +1,7 @@
+import { MAX_CONTINUATIONS } from "@niho/docs-core";
 import { describe, expect, it, vi } from "vitest";
 import type { AiUsageDelta, AiUsageTotals, Block, OwnerId } from "@niho/editor-store";
-import { AnthropicError, type AnthropicClient, type CompleteInput } from "../ai/anthropic";
+import { AnthropicError, type AnthropicClient } from "../ai/anthropic";
 import type { AiComposeBackend } from "../ai/config";
 import { StepError } from "./executor";
 import { createAiStepExecutor, type AiStepExecutorDeps, type StepUsageStore } from "./ai-executor";
@@ -23,17 +24,18 @@ const answer = JSON.stringify({
   ],
 });
 
-/** 送られたプロンプトを覚える偽の 1 往復。 */
-function stubClient(reply: () => Promise<{ text: string; usage: { model: string; inputTokens: number; outputTokens: number } }>) {
-  const calls: CompleteInput[] = [];
+/** 送られたプロンプトを覚える偽の往復（段階の実行器は道具を渡さない `converse` を使う）。 */
+function stubClient(reply: (round: number) => Promise<{ text: string; stopReason?: string; usage: { model: string; inputTokens: number; outputTokens: number } }>) {
+  const calls: { system: string; user: string; messages: unknown[] }[] = [];
   const client: AnthropicClient = {
-    complete: async (input) => {
-      calls.push(input);
-      return reply();
+    complete: async () => {
+      throw new Error("the step executor uses converse");
     },
-    // 段階の実行器は 1 往復だけを使う（道具つきの往復は AI チャット）
-    converse: async () => {
-      throw new Error("the step executor must not use converse");
+    converse: async (input) => {
+      const first = input.messages[0] as { content?: unknown } | undefined;
+      calls.push({ system: input.system, user: typeof first?.content === "string" ? first.content : "", messages: input.messages });
+      const answer = await reply(calls.length - 1);
+      return { text: answer.text, toolCalls: [], stopReason: answer.stopReason ?? "end_turn", usage: answer.usage };
     },
   };
   return { client, calls };
@@ -256,6 +258,68 @@ describe("the real step executor", () => {
     await setup({ client: client.client }).run(input);
     expect(client.calls[0]!.user).not.toContain("## あなたについて");
     expect(client.calls[0]!.user).not.toContain("## 参考");
+  });
+
+  it("asks for the rest when the answer was cut by the output limit, and joins it", async () => {
+    // 1 通目は途中で切れ、2 通目が続きを書く（重なりは docs-core の規則で除く）
+    const head = '{"blocks":[{"kind":"heading","level":2,"text":"合成の見出し"},{"kind":"para';
+    const tail = 'graph","text":"合成の本文"}]}';
+    const usage = memoryUsage();
+    const client = stubClient(async (round) =>
+      round === 0
+        ? { text: head, stopReason: "max_tokens", usage: { model: "claude-sonnet-5-5", inputTokens: 1_000, outputTokens: 500 } }
+        : { text: tail, usage: { model: "claude-sonnet-5-5", inputTokens: 1_200, outputTokens: 100 } },
+    );
+    const output = await setup({ client: client.client, usage }).run(input);
+    expect(output.blocks).toEqual([
+      { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "合成の見出し" }] },
+      { type: "paragraph", content: [{ type: "text", text: "合成の本文" }] },
+    ]);
+    // 2 通目には、ここまでの答えを assistant の書きかけとして渡す
+    expect(client.calls).toHaveLength(2);
+    expect(client.calls[1]!.messages[1]).toEqual({ role: "assistant", content: head });
+    // どちらの呼び出しも使用量に数え、帯に出す数は合計
+    expect(usage.records).toHaveLength(2);
+    expect(output.usage).toEqual({ inputTokens: 2_200, outputTokens: 600, model: "claude-sonnet-5-5" });
+  });
+
+  it("removes what the continuation repeats", async () => {
+    const head = '{"blocks":[{"kind":"paragraph","text":"合成の本文です。つづき';
+    const client = stubClient(async (round) =>
+      round === 0
+        ? { text: head, stopReason: "max_tokens", usage: { model: "claude-sonnet-5-5", inputTokens: 10, outputTokens: 10 } }
+        : { text: 'です。つづきの文です。"}]}', usage: { model: "claude-sonnet-5-5", inputTokens: 10, outputTokens: 10 } },
+    );
+    const output = await setup({ client: client.client }).run(input);
+    expect(output.blocks).toEqual([{ type: "paragraph", content: [{ type: "text", text: "合成の本文です。つづきの文です。" }] }]);
+  });
+
+  it("gives up after the documented number of continuations, and writes nothing", async () => {
+    const usage = memoryUsage();
+    const client = stubClient(async () => ({ text: '{"blocks":[{"kind":"paragraph","text":"長い', stopReason: "max_tokens", usage: { model: "claude-sonnet-5-5", inputTokens: 10, outputTokens: 10 } }));
+    await expect(setup({ client: client.client, usage }).run(input)).rejects.toMatchObject({ code: "output_too_long", retryable: false });
+    // 1 回目 + 続き 8 回
+    expect(client.calls).toHaveLength(MAX_CONTINUATIONS + 1);
+    expect(usage.records).toHaveLength(MAX_CONTINUATIONS + 1);
+  });
+
+  it("stops asking for the rest when the month's limit is reached in the middle", async () => {
+    const usage = memoryUsage();
+    const client = stubClient(async () => ({ text: '{"blocks":[{"kind":"paragraph","text":"長い', stopReason: "max_tokens", usage: { model: "claude-sonnet-5-5", inputTokens: 1_000_000, outputTokens: 1_000_000 } }));
+    await expect(setup({ client: client.client, usage, limitUsd: 1 }).run(input)).rejects.toMatchObject({ code: "quota_exceeded", retryable: false });
+    // 1 回目は通り、続きの前で止まる
+    expect(client.calls).toHaveLength(1);
+  });
+
+  it("stops asking when the continuation adds nothing, and still says it was too long", async () => {
+    const client = stubClient(async (round) =>
+      round === 0
+        ? { text: '{"blocks":[{"kind":"paragraph","text":"途中', stopReason: "max_tokens", usage: { model: "claude-sonnet-5-5", inputTokens: 10, outputTokens: 10 } }
+        : { text: "   ", stopReason: "max_tokens", usage: { model: "claude-sonnet-5-5", inputTokens: 10, outputTokens: 10 } },
+    );
+    await expect(setup({ client: client.client }).run(input)).rejects.toMatchObject({ code: "output_too_long", retryable: false });
+    // 同じ要求を繰り返さない（2 回で止める）
+    expect(client.calls).toHaveLength(2);
   });
 
   it("is a StepError for every failure the runner has to classify", async () => {

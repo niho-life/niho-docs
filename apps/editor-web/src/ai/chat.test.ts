@@ -188,6 +188,18 @@ describe("one chat turn", () => {
     }
   });
 
+  it("never runs a tool from a turn the output limit cut off (its arguments may be half written)", async () => {
+    const { client } = stubClient([
+      turn({ text: "書きます。", toolCalls: [{ id: "t1", name: "write_page", input: { page_id: "x", markdown: "途中で切れた本" } }], stopReason: "max_tokens" }),
+    ]);
+    const runner = recordingRunner();
+    const run = await runChatTurn({ client, system: "s", messages: [], run: runner });
+    expect(runner.calls).toEqual([]);
+    expect(run).toMatchObject({ result: "stopped", code: "max_tokens" });
+    // 実況は残る（何をしようとしたかは会話に出る）
+    expect(run.items).toEqual([{ kind: "narration", text: "書きます。" }]);
+  });
+
   it("says it was cut off when the model ran into the output limit", async () => {
     const { client } = stubClient([turn({ text: "途中まで", stopReason: "max_tokens" })]);
     const run = await runChatTurn({ client, system: "s", messages: [], run: recordingRunner() });

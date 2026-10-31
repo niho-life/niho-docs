@@ -215,6 +215,8 @@ export async function runChatTurn(options: ChatRunner): Promise<ChatRun> {
     if (turn.toolCalls.length === 0) {
       return { reply, items, result: turn.stopReason === "max_tokens" ? "stopped" : "done", code: turn.stopReason === "max_tokens" ? "max_tokens" : null };
     }
+    // 出力の上限で切れた往復の道具は使わない（最後の道具の引数が途中で切れていて、本文を欠けたまま書きうる）
+    if (turn.stopReason === "max_tokens") return { reply, items, result: "stopped", code: "max_tokens" };
     if (toolCalls + turn.toolCalls.length > maxToolCalls) return { reply, items, result: "stopped", code: "max_tools" };
 
     messages.push({

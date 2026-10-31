@@ -1,4 +1,4 @@
-import { estimateTokenCostUsd } from "@niho/docs-core";
+import { MAX_CONTINUATIONS, estimateTokenCostUsd, joinContinuation } from "@niho/docs-core";
 import {
   DEFAULT_EDITOR_SETTINGS,
   monthKeyJst,
@@ -130,25 +130,42 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
       };
       const prompt = buildComposePrompt(composeInput);
 
-      let text: string;
-      let report: AiUsageReport;
-      try {
-        const completion = await backend.client.complete({
-          system: prompt.system,
-          user: prompt.user,
-          maxTokens: composeMaxTokens(composeInput, maxTokensLimit(deps.env ?? process.env)),
-          signal: input.signal,
-        });
-        text = completion.text;
-        report = completion.usage;
-      } catch (error) {
-        // 応答が届いたのに使えなかった（JSON でない・途中で切れた）分も課金されているので記録する
-        if (error instanceof AnthropicError && error.usage) await usage.record(owner, month, usageDelta(backend, error.usage));
-        if (error instanceof AnthropicError) throw new StepError(ERROR_CODES[error.kind], error.retryable);
-        // 中断（lease を失った・取消）は runner が世代で見分ける
-        throw error;
+      const maxTokens = composeMaxTokens(composeInput, maxTokensLimit(deps.env ?? process.env));
+      // 出力の上限で切れたら、同じ答えの続きを書かせて繋ぐ（旧アプリの「続き」。docs-core の規則と結合をそのまま使う）
+      let text = "";
+      let report: AiUsageReport | null = null;
+      // 続きを書かせた分も足した合計（帯と記録に出す）
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let truncated = false;
+      for (let round = 0; round <= MAX_CONTINUATIONS; round++) {
+        // 2 回目からは、ここまでの答えを assistant の書きかけとして渡す（モデルは止まった所の続きから書く）
+        const messages: unknown[] =
+          round === 0 ? [{ role: "user", content: prompt.user }] : [{ role: "user", content: prompt.user }, { role: "assistant", content: text }];
+        if (round > 0 && overLimit(await usage.get(owner, month), limitUsd)) throw new StepError("quota_exceeded", false);
+        let turn;
+        try {
+          turn = await backend.client.converse({ system: prompt.system, messages, maxTokens, ...(input.signal ? { signal: input.signal } : {}) });
+        } catch (error) {
+          // 応答が届いたのに使えなかった分も課金されているので記録する
+          if (error instanceof AnthropicError && error.usage) await usage.record(owner, month, usageDelta(backend, error.usage));
+          if (error instanceof AnthropicError) throw new StepError(ERROR_CODES[error.kind], error.retryable);
+          // 中断（lease を失った・取消）は runner が世代で見分ける
+          throw error;
+        }
+        await usage.record(owner, month, usageDelta(backend, turn.usage));
+        report = turn.usage;
+        inputTokens += count(turn.usage.inputTokens);
+        outputTokens += count(turn.usage.outputTokens);
+        const piece = turn.text.trimEnd();
+        text = round === 0 ? piece : joinContinuation(text, piece);
+        truncated = turn.stopReason === "max_tokens";
+        // 続きが 1 字も出ないなら、これ以上は進まない（同じ要求を繰り返さない）
+        if (!truncated || piece.length === 0) break;
       }
-      await usage.record(owner, month, usageDelta(backend, report));
+      if (!report) throw new StepError("internal", true);
+      // 続きの回数を使い切っても終わらなかった（人に見せる。黙って切った文書をページに書かない）
+      if (truncated) throw new StepError("output_too_long", false);
 
       const parsed = parseComposeOutput(parseJson(text));
       if (!parsed.ok) {
@@ -161,7 +178,7 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
         console.error("editor-web: step output rejected", { reason: blocks.reason });
         throw new StepError("invalid_output", false);
       }
-      return { blocks: blocks.blocks, usage: { inputTokens: count(report.inputTokens), outputTokens: count(report.outputTokens), model: report.model } };
+      return { blocks: blocks.blocks, usage: { inputTokens, outputTokens, model: report.model } };
     },
   };
 }
