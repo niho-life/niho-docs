@@ -8,7 +8,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageSummary } from "@niho/editor-store";
 import { EditorShell, ShellHeader, ShellSidebar, shellAccountItems, type NewPageKind } from "niho-docs-ui/shell";
 import { listPagesRequest } from "@/lib/pages-client";
-import { arrangeSidebarItems } from "@/lib/sidebar-items";
+import { arrangeSidebarItems, type SidebarPublication } from "@/lib/sidebar-items";
+import { usePagePublish } from "./PagePublish";
 
 /** shell.css と同じ境目（これ以下は一覧・ページのどちらかを全画面で出す）。 */
 const NARROW_QUERY = "(max-width: 900px)";
@@ -44,11 +45,20 @@ export type EditorFrameApi = {
   pageSaved: (id: string) => void;
   /** 新しいページを作った。一覧の上に足す。 */
   pageCreated: (id: string, title: string) => void;
+  /** 開いているページのエディタの「今すぐ保存して待つ」（公開のシートが、開く前と送る前に使う）。返す関数で外す。 */
+  registerPageSaver: (saveNow: () => Promise<boolean>) => () => void;
 };
 
 const noop = () => undefined;
 
-const FrameContext = createContext<EditorFrameApi>({ narrow: false, pageOpened: noop, pageTitleChanged: noop, pageSaved: noop, pageCreated: noop });
+const FrameContext = createContext<EditorFrameApi>({
+  narrow: false,
+  pageOpened: noop,
+  pageTitleChanged: noop,
+  pageSaved: noop,
+  pageCreated: noop,
+  registerPageSaver: () => noop,
+});
 
 export function useEditorFrame(): EditorFrameApi {
   return useContext(FrameContext);
@@ -67,6 +77,10 @@ function subscribeNarrow(onChange: () => void): () => void {
 
 /** 一覧（読み込んだ分）と、開いているページ（一覧に無いこともある）。 */
 type ListState = { pages: PageSummary[]; next: string | null; opened: PageSummary | null };
+
+function samePublication(a: SidebarPublication | null, b: SidebarPublication | null): boolean {
+  return a === b || (a !== null && b !== null && a.dest === b.dest && a.handle === b.handle && a.range === b.range && a.stopped === b.stopped);
+}
 
 function toTop(pages: PageSummary[], page: PageSummary): PageSummary[] {
   return [page, ...pages.filter((item) => item.id !== page.id)];
@@ -91,6 +105,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
+  const publishSaved = useRef<(id: string) => void>(() => undefined);
+  const pageSaver = useRef<(() => Promise<boolean>) | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
@@ -142,16 +158,25 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           pages: current.pages.map((page) => (page.id === id ? { ...page, title } : page)),
           opened: current.opened?.id === id ? { ...current.opened, title } : current.opened,
         })),
-      pageSaved: (id) =>
+      pageSaved: (id) => {
         setList((current) => {
           const page = current.pages.find((item) => item.id === id) ?? (current.opened?.id === id ? current.opened : undefined);
           return page ? { ...current, pages: toTop(current.pages, { ...page, updatedAt: new Date().toISOString() }) } : current;
-        }),
+        });
+        // 公開中なら「更新あり」を確かめ直す
+        publishSaved.current(id);
+      },
       pageCreated: (id, title) => {
         const at = new Date().toISOString();
         // 作ったばかりのページは公開していない
         const page: PageSummary = { id, kind: "note", title, lang: "ja", parent: null, stepStatus: null, createdAt: at, updatedAt: at, publication: null };
         setList((current) => ({ ...current, pages: toTop(current.pages, page) }));
+      },
+      registerPageSaver: (saveNow) => {
+        pageSaver.current = saveNow;
+        return () => {
+          if (pageSaver.current === saveNow) pageSaver.current = null;
+        };
       },
     }),
     [],
@@ -191,6 +216,34 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     : pathname === "/p/new" && searchParams.get("from") === "recording"
       ? "録音から"
       : (settings?.title ?? "");
+
+  // 公開の状態・ボタン・シートは、開いている（一覧か開いたページで分かっている）自分のページにだけ出す
+  const openPage = currentId ? (list.opened?.id === currentId ? list.opened : list.pages.find((page) => page.id === currentId)) : undefined;
+  // シートが読んだ公開の状態で、その行の 2 行目を替える（公開・やめる・発信先を変えたあと、読み直さずに）
+  const onPublication = useCallback(
+    (id: string, publication: SidebarPublication | null) =>
+      setList((current) => {
+        const row = current.pages.find((page) => page.id === id) ?? (current.opened?.id === id ? current.opened : undefined);
+        if (!row || samePublication(row.publication, publication)) return current;
+        return {
+          ...current,
+          pages: current.pages.map((page) => (page.id === id ? { ...page, publication } : page)),
+          opened: current.opened?.id === id ? { ...current.opened, publication } : current.opened,
+        };
+      }),
+    [],
+  );
+  const saveFirst = useCallback(() => pageSaver.current?.() ?? Promise.resolve(true), []);
+  const publishing = usePagePublish({
+    pageId: openPage?.id ?? null,
+    isArticle: openPage?.kind === "article",
+    onPublication,
+    onNavigate: (path) => router.push(path),
+    saveFirst,
+  });
+  useEffect(() => {
+    publishSaved.current = publishing.pageSaved;
+  }, [publishing.pageSaved]);
 
   // 一覧をしまう: デスクトップでは列を閉じ、狭い画面ではページへ戻る（`/` では一覧がその画面なので出さない）
   const collapse = narrow ? (pathname === "/" ? undefined : () => setListFor(null)) : () => setCollapsed(true);
@@ -233,8 +286,11 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               plain={settings !== undefined}
               showListButton={!sidebarOpen}
               onToggleList={() => (narrow ? setListFor(pathname) : setCollapsed(false))}
+              status={publishing.status}
+              publish={publishing.publish}
             />
           }
+          overlay={publishing.overlay ?? undefined}
         >
           {children}
         </EditorShell>

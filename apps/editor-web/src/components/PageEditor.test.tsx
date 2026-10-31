@@ -80,7 +80,7 @@ async function settleIdb() {
   });
 }
 
-async function renderEditor(page: Partial<EditablePage> & { revision: number }, options: { drafts?: DraftStorage | null } = {}) {
+async function renderEditor(page: Partial<EditablePage> & { revision: number }, options: { drafts?: DraftStorage | null; events?: PageEditorEvents } = {}) {
   // 自動保存・下書きの時計だけを差し替える（開いたときに下書きを載せると、その時点で自動保存の時計が動く）
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   container = document.createElement("div");
@@ -88,7 +88,7 @@ async function renderEditor(page: Partial<EditablePage> & { revision: number }, 
   root = createRoot(container);
   const full: EditablePage = { id: PAGE_ID, title: "合成の題名", blocks: [], updatedAt: UPDATED_AT, ...page };
   await act(async () => {
-    root!.render(<PageEditor page={full} drafts={options.drafts === undefined ? null : options.drafts} />);
+    root!.render(<PageEditor page={full} drafts={options.drafts === undefined ? null : options.drafts} {...options.events} />);
   });
   // 端末の下書きを読み終えて書けるようになるまで待つ
   for (let index = 0; index < 100; index++) {
@@ -238,6 +238,24 @@ describe("PageEditor autosave", () => {
     expect(ctrl.defaultPrevented).toBe(true);
     expect(bodies.at(-1)).toEqual({ title: "今すぐ2", baseRevision: 2 });
     expect(status()?.textContent).toBe("保存済み");
+  });
+
+  it("hands the frame a save-now that sends what is pending and resolves after it reached the server (#39), and takes it back on unmount", async () => {
+    const { bodies } = acceptingFetch();
+    const unregister = vi.fn();
+    let saveNow: (() => Promise<boolean>) | null = null;
+    await renderEditor({ revision: 1 }, { events: { registerSaveNow: (fn) => ((saveNow = fn), unregister) } });
+    expect(saveNow).not.toBeNull();
+    await act(async () => typeTitle("公開の直前"));
+    let saved: boolean | null = null;
+    await act(async () => {
+      saved = await saveNow!();
+    });
+    expect(saved).toBe(true);
+    expect(bodies).toEqual([{ title: "公開の直前", baseRevision: 1 }]);
+    await act(async () => root!.unmount());
+    root = null;
+    expect(unregister).toHaveBeenCalledTimes(1);
   });
 
   it("shows offline when the network fails, keeps retrying, and saves when the browser comes back online", async () => {
