@@ -398,7 +398,7 @@ describe("/api/pages", () => {
     const first = (await (await listPages(request("GET", "/api/pages"), deps("user-a", store))).json()) as PageChunk;
     expect(first.pages).toHaveLength(5);
     expect(first.next).toBeNull();
-    expect(Object.keys(first.pages[0]!).sort()).toEqual(["createdAt", "id", "kind", "lang", "parent", "publication", "stepStatus", "title", "updatedAt"]);
+    expect(Object.keys(first.pages[0]!).sort()).toEqual(["createdAt", "id", "kind", "lang", "parent", "publication", "sortOrder", "stepStatus", "title", "updatedAt"]);
 
     const seen: string[] = [];
     let cursor: string | null = null;

@@ -159,7 +159,7 @@ async function mount() {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  const initial: FrameInitial = { pages: [summary()], next: null, now: Date.parse("2026-10-31T03:00:00.000Z"), me: { name: "開発ユーザー", caption: "stub", initial: "開" }, initialNarrow: false };
+  const initial: FrameInitial = { pages: [summary()], next: null, recent: [], now: Date.parse("2026-10-31T03:00:00.000Z"), me: { name: "開発ユーザー", caption: "stub", initial: "開" }, initialNarrow: false };
   await act(async () => root!.render(<EditorFrame initial={initial}>{<FakePage />}</EditorFrame>));
 }
 
@@ -381,7 +381,7 @@ describe("公開のシート", () => {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
-    const initial: FrameInitial = { pages: [summary(), pageB], next: null, now: Date.parse("2026-10-31T03:00:00.000Z"), me: { name: "開発ユーザー", caption: "stub", initial: "開" }, initialNarrow: false };
+    const initial: FrameInitial = { pages: [summary(), pageB], next: null, recent: [], now: Date.parse("2026-10-31T03:00:00.000Z"), me: { name: "開発ユーザー", caption: "stub", initial: "開" }, initialNarrow: false };
     const render = () => act(async () => root!.render(<EditorFrame initial={initial}>{<FakePage />}</EditorFrame>));
     await render();
     await click($(".es-pubbtn"));

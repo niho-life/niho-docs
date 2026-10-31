@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { EMPTY_PAGE_FIELDS, type Page, type PageFields, type PageFieldsPatch, type PageSummary } from "@niho/editor-store";
+import { EMPTY_PAGE_FIELDS, type Block, type Page, type PageFields, type PageFieldsPatch, type PageSummary } from "@niho/editor-store";
 import { describe, expect, it, vi } from "vitest";
 import { stubAuthProvider } from "../auth/stub";
 import type { AuthProvider } from "../auth/types";
@@ -23,7 +23,7 @@ function authAs(userId: string | null): AuthProvider {
 
 const paragraph = (text: string) => ({ type: "paragraph", content: [{ type: "text", text }] });
 
-function pageOf(id: string, title: string, blocks: unknown[] = [paragraph("合成の本文")]): Page {
+function pageOf(id: string, title: string, blocks: Block[] = [paragraph("合成の本文")]): Page {
   const at = "2026-11-01T00:00:00.000Z";
   return { id, kind: "note", title, lang: "ja", blocks, cover: null, lead: null, parent: null, recipe: null, stepStatus: null, sortOrder: 0, revision: 1, createdAt: at, updatedAt: at };
 }

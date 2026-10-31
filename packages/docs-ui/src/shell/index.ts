@@ -15,6 +15,7 @@ export { ShellRail, ShellRailSection, type ShellRailProps, type ShellRailSection
 export { ShellSteps, type ShellStep } from "./steps";
 export { ShellChat, type ShellChatAction, type ShellChatMessage, type ShellChatProps } from "./chat";
 export { ShellPageSettings, type ShellPageSettingsProps } from "./page-settings";
+export { ShellEntitiesEditor, ShellTermsEditor, type EditorSettingsEntityDraft } from "./editor-settings";
 export { ShellBubbleMenu, ShellSelectionBar, type ShellBubbleMenuProps, type ShellSelectionActions } from "./bubble";
 export {
   ShellAddRow,
