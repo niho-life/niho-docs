@@ -35,6 +35,7 @@ import {
   updateRecording,
 } from "@niho/editor-store";
 import { getAuthProvider } from "../auth";
+import { getGoogleDocsCredential, getGoogleDocsGateway } from "../google-docs/runtime";
 import { publishConfig } from "../publish/config";
 import { pgDraftFingerprints, pgPublishStore } from "../publish/pg-store";
 import { assetUrlsOf, faceDeclarations, roleReaderOf, sessionAuthors, wirePublishPorts } from "../publish/ports";
@@ -44,6 +45,7 @@ import { getTranscriptionRunner } from "../transcription/runtime";
 import type { AudioApiDeps } from "./audio-api";
 import type { AudioStreamApiDeps } from "./audio-stream-api";
 import { getPool, getStore } from "./db";
+import type { GoogleDocsApiDeps } from "./google-docs-api";
 import type { ImageApiDeps } from "./images-api";
 import { faceCredentialsFromEnv } from "../public-api/source";
 import type { PublicApiRouteDeps } from "../public-api/http";
@@ -250,4 +252,15 @@ export const imageDeps: ImageApiDeps = {
     };
   },
   storage: () => getStorage(process.env),
+};
+
+/**
+ * Google ドキュメントへの書き出し（docs/architecture/editor-google-docs-export.md）の実行時の依存。
+ * 方式（`EDITOR_GOOGLE_DOCS_MODE`）と本人の token は要求のたびに読む。どちらも無ければ null（503 `google_docs_unavailable`）。
+ */
+export const googleDocsDeps: GoogleDocsApiDeps = {
+  auth: () => getAuthProvider(),
+  store: () => getStore(),
+  gateway: () => getGoogleDocsGateway(process.env),
+  credential: (session) => getGoogleDocsCredential(getAuthProvider(), session),
 };

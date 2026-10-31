@@ -168,3 +168,55 @@ export async function restorePageVersion(id: string, version: number, baseRevisi
   }
   return { id, title, blocks, revision, updatedAt };
 }
+
+/**
+ * Google ドキュメントへの書き出し（docs/architecture/editor-google-docs-export.md）。
+ *
+ * 本文は送らない（サーバーが保存済みの blocks から作る）。送るのは受付の id だけで、同じ id の呼び出しは
+ * **同じ内容の再試行**に使う（二重に文書を作らないため）。`pending` は受け付けたがまだできていない（202）。
+ */
+export type GoogleDocExportResult =
+  | { status: "completed"; documentId: string; url: string }
+  | { status: "pending"; retryable: boolean };
+
+/** 受付の id（小文字の UUID。サーバーもこの形だけを受ける）。 */
+export function newGoogleDocExportId(): string {
+  return crypto.randomUUID().toLowerCase();
+}
+
+function googleDocExportOf(value: unknown): GoogleDocExportResult | null {
+  if (typeof value !== "object" || value === null) return null;
+  const result = value as Record<string, unknown>;
+  if (result.status === "completed") {
+    const { documentId, url } = result;
+    // url はサーバーが documentId から組み立てたもの（Google の応答そのままではない）
+    if (typeof documentId !== "string" || typeof url !== "string") return null;
+    if (url !== `https://docs.google.com/document/d/${documentId}/edit`) return null;
+    return { status: "completed", documentId, url };
+  }
+  if (result.status === "pending") return { status: "pending", retryable: result.retryable === true };
+  return null;
+}
+
+async function googleDocExportRequest(path: string, method: "GET" | "POST", body?: unknown): Promise<GoogleDocExportResult> {
+  const response = await fetch(path, {
+    method,
+    ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) throw await refusal(response);
+  const result = googleDocExportOf(await response.json().catch(() => null));
+  if (!result) throw new PageActionError(500);
+  return result;
+}
+
+/** このページを Google ドキュメントへ書き出す。 */
+export function exportPageToGoogleDoc(id: string, exportId: string): Promise<GoogleDocExportResult> {
+  return googleDocExportRequest(pagePath(id, "/export/google-doc"), "POST", { exportId });
+}
+
+/** 受け付けた書き出しの状態（結果が分からなかったときに確かめる）。 */
+export function googleDocExportStatus(exportId: string): Promise<GoogleDocExportResult> {
+  return googleDocExportRequest(`/api/google-docs/exports/${encodeURIComponent(exportId)}`, "GET");
+}

@@ -177,11 +177,13 @@ const WEB_TERMS = [
 const webTermDrafts = (): EditorSettingsTermDraft[] => WEB_TERMS.map((entry) => ({ ...entry, variants: entry.variants.join("・") }));
 
 /** editor-web の設定（#108）。開いている編集は `?terms=1` / `?recipe=tpl-1` で決める。 */
-export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: boolean; recipe?: string } }) {
+export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: boolean; recipe?: string; about?: boolean } }) {
   const [aiLang, setAiLang] = useState<EditorSettingsAiLang>("same");
   const [glossary, setGlossary] = useState(WEB_TERMS);
   const [recipes, setRecipes] = useState(WEB_RECIPES);
   const [termsDraft, setTermsDraft] = useState<EditorSettingsTermDraft[] | null>(forced.terms ? webTermDrafts() : null);
+  const [about, setAbout] = useState("鎌倉で小さな宿を営んでいます。読んだ人が歩きたくなるように、短い文で書きます。");
+  const [aboutDraft, setAboutDraft] = useState<string | null>(forced.about ? about : null);
   const opened = forced.recipe ? (WEB_RECIPES.find((recipe) => recipe.id === forced.recipe) ?? null) : null;
   const [recipeDraft, setRecipeDraft] = useState<EditorSettingsRecipe | null>(opened);
   let serial = 0;
@@ -202,6 +204,15 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
             setGlossary(termsDraft.map((entry) => ({ ...entry, variants: entry.variants.split("・").map((part) => part.trim()).filter((part) => part.length > 0) })));
           }
           setTermsDraft(null);
+        }}
+        about={about}
+        aboutDraft={aboutDraft}
+        onEditAbout={() => setAboutDraft(about)}
+        onAboutDraft={setAboutDraft}
+        onCancelAbout={() => setAboutDraft(null)}
+        onSaveAbout={() => {
+          if (aboutDraft !== null) setAbout(aboutDraft);
+          setAboutDraft(null);
         }}
         recipes={recipes}
         recipeDraft={recipeDraft}
@@ -224,7 +235,7 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
         usageNote={null}
         transcription={{ engine: "deepgram", timeoutSec: 1200, maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30, extensions: ["m4a", "mp3", "wav", "aac", "ogg", "flac"] }}
         storage="CLOUD"
-        limits={{ glossary: 200, recipes: 20, steps: 12 }}
+        limits={{ glossary: 200, recipes: 20, steps: 12, aboutChars: 2_000 }}
       />
     </SettingsFrame>
   );

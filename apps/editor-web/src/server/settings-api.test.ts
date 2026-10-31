@@ -95,7 +95,7 @@ describe("GET /api/settings", () => {
     expect((await read(deps(OWNER, null))).status).toBe(503);
   });
 
-  it("answers the defaults for someone who never saved, with the three default 手順", async () => {
+  it("answers the defaults for someone who never saved, with every default 手順", async () => {
     const dto = await settingsOf(await read(deps(OWNER, memoryStore())));
     expect(dto.aiLang).toBe("same");
     expect(dto.glossary).toEqual([]);
@@ -103,6 +103,7 @@ describe("GET /api/settings", () => {
       ["tpl-1", true, false],
       ["tpl-2", true, false],
       ["tpl-3", true, false],
+      ["tpl-4", true, false],
     ]);
     expect(dto.recipes[0]?.steps.map((step) => step.name)).toEqual(DEFAULT_RECIPES[0]?.steps.map((step) => step.name));
     expect(dto.limits).toEqual(SETTINGS_LIMITS);
@@ -164,10 +165,11 @@ describe("PATCH /api/settings", () => {
       ["tpl-1", "記事制作"],
       ["tpl-2", "議事録（短め）"],
       ["tpl-3", DEFAULT_RECIPES[2]!.name],
+      ["tpl-4", DEFAULT_RECIPES[3]!.name],
     ]);
     const reset = effective(saved).map((recipe) => (recipe.id === "tpl-2" ? { id: recipe.id, ...saved.recipes[1]!.defaults! } : recipe));
     const back = await settingsOf(await write({ recipes: reset }, d));
-    expect(back.recipes.map((recipe) => recipe.modified)).toEqual([false, false, false]);
+    expect(back.recipes.map((recipe) => recipe.modified)).toEqual([false, false, false, false]);
     expect(back.recipes[1]?.name).toBe("議事録");
     expect(store.recipeRows.get(OWNER)).toEqual(DEFAULT_RECIPES);
   });
@@ -184,13 +186,14 @@ describe("PATCH /api/settings", () => {
       ["tpl-1", false],
       ["tpl-2", true],
       ["tpl-3", false],
+      ["tpl-4", false],
     ]);
     expect(saved.recipes[1]?.name).toBe("議事録（短め）");
     // 工程のプロファイルは画面が送らないので、表の値がそのまま残る
     expect(store.recipeRows.get(OWNER)?.[1]?.steps.map((step) => step.profile)).toEqual(DEFAULT_RECIPES[1]!.steps.map((step) => step.profile));
 
     const back = await settingsOf(await write({ recipes: effective(before) }, d));
-    expect(back.recipes.map((recipe) => recipe.modified)).toEqual([false, false, false]);
+    expect(back.recipes.map((recipe) => recipe.modified)).toEqual([false, false, false, false]);
     expect(store.recipeRows.get(OWNER)).toEqual(DEFAULT_RECIPES);
   });
 
@@ -205,14 +208,15 @@ describe("PATCH /api/settings", () => {
       ["tpl-1", true],
       ["tpl-2", true],
       ["tpl-3", true],
+      ["tpl-4", true],
       ["r-copy", false],
       ["r-talk", false],
     ]);
     // 足したものは段階の id を自由に持てる（既定の写しは既定と同じ id を保つ）
-    expect(saved.recipes[3]?.steps.map((step) => step.id)).toEqual(DEFAULT_RECIPES[0]?.steps.map((step) => step.id));
+    expect(saved.recipes.find((recipe) => recipe.id === "r-copy")?.steps.map((step) => step.id)).toEqual(DEFAULT_RECIPES[0]!.steps.map((step) => step.id));
 
     const removed = await settingsOf(await write({ recipes: [...base, added] }, d));
-    expect(removed.recipes.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3", "r-talk"]);
+    expect(removed.recipes.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3", "tpl-4", "r-talk"]);
   });
 
   it("refuses a 手順 list that drops a default, repeats one, or renumbers a default's 段階", async () => {
@@ -241,7 +245,7 @@ describe("PATCH /api/settings", () => {
 
   it("never hands the response a key the screen does not need", async () => {
     const dto = await settingsOf(await read(deps(OWNER, memoryStore())));
-    expect(Object.keys(dto).sort()).toEqual(["aiLang", "glossary", "limits", "recipes"]);
+    expect(Object.keys(dto).sort()).toEqual(["about", "aiLang", "glossary", "limits", "recipes"]);
     expect(Object.keys(dto.recipes[0]!).sort()).toEqual(["defaults", "guide", "id", "isDefault", "modified", "name", "steps"]);
   });
 });

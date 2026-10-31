@@ -53,6 +53,8 @@ export type SettingsDto = {
   glossary: SettingsTerm[];
   /** 効いている手順（既定の並び → 足したものの並び）。 */
   recipes: SettingsRecipeDto[];
+  /** 「あなたについて」（AI に渡す本人の説明と書き方の希望）。 */
+  about: string;
   limits: typeof SETTINGS_LIMITS;
 };
 
@@ -73,6 +75,7 @@ export function settingsDto(settings: EditorSettings, recipes: readonly RecipeDe
   return {
     aiLang: settings.aiLang,
     glossary: settings.glossary,
+    about: settings.about,
     recipes: recipes.map((stored) => {
       const recipe = toSettingsRecipe(stored);
       const base = findRecipeIn(DEFAULT_RECIPES, recipe.id);

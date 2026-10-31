@@ -35,6 +35,7 @@ type MemoryAttempt = {
   tries: number;
   leaseUntil: number | null;
   errorCode: string | null;
+  partialBlocks: Block[] | null;
   inputBasis: string | null;
   finishedAt: number | null;
 };
@@ -104,6 +105,11 @@ export class MemoryStepRunStore implements StepRunStore {
     };
   }
 
+  /** test 用: その段階に残った「書けたところまでの本文」（無ければ null）。 */
+  partialOf(runId: string, stepIndex: number): Block[] | null {
+    return this.#attempt(runId, stepIndex)?.attempt.partialBlocks ?? null;
+  }
+
   #attempt(runId: string, stepIndex: number): { run: MemoryRun; attempt: MemoryAttempt } | null {
     const run = this.runs.get(runId);
     const attempt = run?.attempts[stepIndex];
@@ -166,6 +172,7 @@ export class MemoryStepRunStore implements StepRunStore {
         tries: 0,
         leaseUntil: null,
         errorCode: null,
+        partialBlocks: null,
         inputBasis: null,
         finishedAt: index < fromStep ? this.#now() : null,
       })),
@@ -243,6 +250,7 @@ export class MemoryStepRunStore implements StepRunStore {
     attempt.tries += 1;
     attempt.leaseUntil = Date.now() + (options.leaseSeconds ?? DEFAULT_LEASE_SECONDS) * 1000;
     attempt.errorCode = null;
+    attempt.partialBlocks = null;
     run.state = "running";
     this.#setStatus(run.owner, attempt.pageId, "run");
     return {
@@ -314,6 +322,7 @@ export class MemoryStepRunStore implements StepRunStore {
       return { ok: true, outcome: "retry", generation: attempt.generation, tries: attempt.tries };
     }
     attempt.state = "failed";
+    attempt.partialBlocks = input.partial === undefined ? null : [...input.partial];
     attempt.finishedAt = this.#now();
     this.#setStatus(run.owner, attempt.pageId, "failed");
     this.#failRunFrom(run, input.stepIndex);

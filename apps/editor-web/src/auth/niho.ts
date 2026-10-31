@@ -13,6 +13,8 @@ import type { AuthProvider } from "./types";
  * - completeLogin: state を照合し、cookie の戻り先を safeReturnTo でもう一度確かめてから、そこへ 303。
  * - セッションはサーバー側の HttpOnly cookie。NIHO の認証 cookie は共有しない。
  * - token はサーバーだけが持ち、ブラウザの JavaScript・storage に渡さない。
+ * - apiToken: NIHO の API を本人として呼ぶための ID token を返す（Google ドキュメントの書き出しが使う。
+ *   docs/architecture/editor-google-docs-export.md §6）。
  * - 役割は毎 request で NIHO から読み、editor に保存しない。
  * - logout: サーバー側のセッションと cookie を消して `/auth/login` へ 303。
  */
@@ -29,5 +31,8 @@ export const nihoAuthProvider: AuthProvider = {
   },
   async logout() {
     return seeOther("/auth/login");
+  },
+  async apiToken() {
+    return null;
   },
 };

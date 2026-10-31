@@ -20,6 +20,7 @@
     "allow-docs-google-docs",
     "allow-docs-personal-run",
     "allow-docs-pc-runner",
+    "allow-editor-shell",
     "niho-desktop-account:default",
     "core:event:allow-listen",
     "core:event:allow-unlisten"

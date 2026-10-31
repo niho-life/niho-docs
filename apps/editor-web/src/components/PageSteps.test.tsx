@@ -162,7 +162,7 @@ describe("PageSteps（手順の帯）", () => {
     vi.stubGlobal("fetch", api.fetchImpl);
     await mount({ pageId: api.recording, kind: "rec", parentId: null });
     expect(band()).toEqual([]);
-    expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "手順を変える"]);
+    expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "コーチングにする", "手順を変える"]);
 
     await pressEntry("記事にする");
     await settle();
@@ -193,7 +193,7 @@ describe("PageSteps（手順の帯）", () => {
     vi.stubGlobal("fetch", api.fetchImpl);
     await mount({ pageId: api.recording, kind: "rec", parentId: null });
     // 既定の名前のままの手順は決まった言い方、変えた・足した手順はその名前から
-    expect(entry()).toEqual(["記事にする", "座談会メモにする", "インサイトを整理する", "対談にする", "手順を変える"]);
+    expect(entry()).toEqual(["記事にする", "座談会メモにする", "インサイトを整理する", "コーチングにする", "対談にする", "手順を変える"]);
 
     // 足した手順を始めると、帯の名前も段階の名前もその人の定義に従う
     await pressEntry("対談にする");
@@ -296,7 +296,7 @@ describe("PageSteps（手順の帯）", () => {
     ]);
     expect(note()).toBe("「記事方針」が失敗しました。AI の答えを本文にできませんでした。手順の指示やお手本を見直すと直ることがあります。");
     // 失敗したあとは、別の手順も始められる
-    expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "手順を変える"]);
+    expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "コーチングにする", "手順を変える"]);
 
     await pressAction("「記事方針」からやり直す");
     await settle();
@@ -322,7 +322,7 @@ describe("PageSteps（手順の帯）", () => {
     expect(bandActions()).toEqual([]);
     expect(container!.textContent).not.toContain("ai_unavailable");
     // 録音ページの入口は残る（直ったあとに始め直せる）
-    expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "手順を変える"]);
+    expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "コーチングにする", "手順を変える"]);
   });
 
   it("今月の上限に達した失敗では、やり直しの代わりに使用量への案内だけを出す", async () => {
@@ -403,7 +403,7 @@ describe("PageSteps（手順の帯）", () => {
     await settle();
     expect(note()).toBe("手順を取消しました。もう一度始められます。");
     expect(band().map((step) => step.say)).toEqual(["待機", "待機"]);
-    expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "手順を変える"]);
+    expect(entry()).toEqual(["記事にする", "議事録にする", "インサイトを整理する", "コーチングにする", "手順を変える"]);
 
     await pressEntry("記事にする");
     await settle();

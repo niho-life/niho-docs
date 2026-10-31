@@ -2,8 +2,9 @@ import { FLOW_TEMPLATES, STANDARD_PROFILE_ID } from "@niho/docs-core";
 import { SETTINGS_ID_PATTERN, type RecipeInput, type RecipeSample, type SettingsRecipe, type SettingsTerm, type StoredRecipe } from "@niho/editor-store";
 
 /**
- * 手順の定義（設計 §7.2）。docs-core のテンプレート（指示文の正）から、記事制作・議事録・インサイト整理の 3 つを写す。
- * コーチング（tpl-4）は §7.2 に無いので含めない（旧 NIHO docs にはあるので、入れ直すかはオーナー確認待ち）。
+ * 手順の定義（設計 §7.2）。docs-core のテンプレート（指示文の正）から、既定の 4 つ（記事制作・議事録・
+ * インサイト整理・コーチング）を写す。**旧 NIHO docs のテンプレートは 4 つで、editor も 4 つ**（オーナー
+ * 「旧版の機能は全部必要」2026-11-01。設計 docs/architecture/editor-steps-recipes.md §1.5）。
  * テンプレートが無ければ読み込んだ時点で落とす（起動・build で気づく）。
  *
  * **既定の手順を増やすのはこの `DEFAULT_RECIPE_IDS` に 1 つ足すだけ**（docs-core にテンプレートがあれば中身はそこから来る）。
@@ -11,9 +12,11 @@ import { SETTINGS_ID_PATTERN, type RecipeInput, type RecipeSample, type Settings
  *
  * 実行のときに使う手順は、表 `recipes`（migration 20261101001500_recipes）から読む（`src/server/recipe-source.ts`）。この定数はその表の
  * 既定の中身で、手順が 1 つも無い人の最初の読み出しで表へ写される。設定（#108）で段階の名前・指示・お手本を変えたもの・
- * 足したものも同じ表の行になる。手順を変えると、次に手順を始めたときから効く（進行中の run は claim したときの定義で続く）。
+ * 足したものも同じ表の行になる。手順を変えると、次に手順を始めたときから効く。
+ * **進行中の run も、段階を claim するたびに今の定義を読む**ので、途中で手順を直すとその先の段階は新しい定義で走る
+ * （run に手順の写しを固定するのは設計 §2.7。まだ入っていない）。
  */
-export const DEFAULT_RECIPE_IDS = ["tpl-1", "tpl-2", "tpl-3"] as const;
+export const DEFAULT_RECIPE_IDS = ["tpl-1", "tpl-2", "tpl-3", "tpl-4"] as const;
 export type DefaultRecipeId = (typeof DEFAULT_RECIPE_IDS)[number];
 
 /** 1 つの工程。`profile` は AI の設定のプロファイル（標準・高性能・軽量）、`provider` は指す AI。 */

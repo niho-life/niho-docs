@@ -80,6 +80,7 @@ function App() {
     note: params.get("note") === "1",
     // 設定（editor-web）の、開いている編集
     terms: params.get("terms") === "1",
+    about: params.get("about") === "1",
     recipe: params.get("recipe") ?? undefined,
     // 発信先（editor-web）の、開いている下書き・確認・新しい鍵
     add: params.get("add") === "1",

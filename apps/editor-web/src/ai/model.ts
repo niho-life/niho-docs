@@ -12,10 +12,17 @@ export type AiParagraph = { index: number; kind: "paragraph" | "heading" | "cont
 export type AiRequest = {
   intent: AiIntent;
   paragraphs: AiParagraph[];
-  /** 固有名詞と誤りやすい表記（設定の保存は後段。いまは空）。 */
+  /** 固有名詞と誤りやすい表記（設定）。 */
   glossary: GlossaryEntry[];
   lang: "ja" | "en";
+  /** 「あなたについて」（設定。空なら渡さない）。 */
+  about?: string;
+  /** 自動参考ページ（同じフォルダの直下のほかのページ。無ければ空）。 */
+  references?: AiReference[];
 };
+
+/** 参考に入れるページ 1 枚（本文は信頼しないデータとして包んで渡す）。 */
+export type AiReference = { title: string; text: string };
 
 export type AiInsertKind = "paragraph" | "heading" | "callout";
 

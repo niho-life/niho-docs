@@ -20,4 +20,10 @@ export interface AuthProvider {
   completeLogin(request: Request): Promise<Response>;
   /** `/auth/logout`（POST・同じ origin だけ）。 */
   logout(request: Request): Promise<Response>;
+  /**
+   * NIHO の API（`me/docs-drive/*` など）を**本人として**呼ぶための ID token。サーバーの中だけで使い、
+   * ブラウザの JavaScript・storage には渡さない。app-connect の契約（niho-app #19459）が出るまでは null
+   * （Google ドキュメントの書き出しは 503 `google_docs_unavailable` のまま）。
+   */
+  apiToken?(session: Session): Promise<string | null>;
 }
