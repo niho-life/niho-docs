@@ -62,7 +62,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **本文**: niho-docs-ui の `BlockEditor`（TipTap）を使い、`blocks` は TipTap の doc の `content`（ブロックの配列）をそのまま保存する。サーバーが見るのは「`type` を持つ object の配列で、大きさと深さが上限の内側」だけ。**限定 AST としての厳密な検証（許すブロックの種類・HTML の正規化）は #33。**
 - **React を 1 本にする**: `.npmrc` の `install-links=true` で packages/* を node_modules に複製して入れる。docs-ui の側の node_modules（React 18）を拾わず、react・TipTap はこの app の 1 本に解決する（`src/components/PageEditor.test.tsx` が確かめる）。packages を書き換えたら `npm install` し直し、`apps/editor-web/.next` も消す（packages の version が同じだと webpack の cache が古い版を使い続け、`next build` は警告だけで通って実行時に 500 になる。CI は毎回新しい checkout なので影響しない）。
 - **bundler は webpack**（`--webpack`）: docs-core は `./types.js` で `./types.ts` を指す書き方で、Turbopack は node_modules の中のこれを解決しないため。`experimental.extensionAlias` で `.js` を `.ts` にも当てる。
-- **packages/editor-store**: migration（`migrations/NNNN_*.sql`、BEGIN/COMMIT で包み辞書順）と `EditorStore`。全てのクエリが `owner` と `deleted_at IS NULL` で絞る。`page_versions` には保存・上書き・戻す直前の本文を書く。`assets`・`publications` は表だけで、書くコードはまだ無い。
+- **packages/editor-store**: migration（`migrations/NNNN_*.sql`、BEGIN/COMMIT で包み辞書順）と `EditorStore`。全てのクエリが `owner` と `deleted_at IS NULL` で絞る。`page_versions` には保存・上書き・戻す直前の本文を書く。`assets` は表だけで、書くコードはまだ無い。公開（公開版・転送・接続・鍵・プレビューの token）の表は `0009_publications.sql`、SQL は `src/publications.ts`。
 
 ## 検索（#35）
 
@@ -70,7 +70,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **索引**: migration `0003_search_text.sql` が `pages.search_text`（題名 + 本文の text ノードの文字だけ。generated column なので保存のコードは触らない）と pg_trgm の GIN（`deleted_at IS NULL`）を足す。pg_trgm は PostgreSQL の contrib（Cloud SQL・postgres:16-alpine・homebrew の postgresql@16 に入っている）。検索のコードは `packages/editor-store/src/search.ts`。
 - **フック**: `usePageSearch(query)`（150ms 止まってから 1 回だけ問い合わせ、古い要求は中止。`idle | loading | ready | error`）と `useSearchShortcut(onOpen)`（Mac は ⌘K、それ以外は Ctrl+K。入力欄の中でも効き、IME の変換中は無視）。
 - **画面（`EditorFrame`）**: サイドバーの検索入力に打つと、サーバーで題名と本文を探し、結果を更新順に出す（2 行目に当たった所の一文）。検索中は続きの読み込みを止め、一覧の下に状況（「N 件」「探しています…」「見つかりませんでした」と失敗）を `role="status"` で出す。検索語が空に戻ればふつうの一覧。⌘K（Mac 以外は Ctrl+K）で、畳まれた一覧を出し（狭い画面ではページから一覧へ）、検索入力を開いてフォーカスする。すでに開いていれば入力へフォーカスを戻す。専用のパレットは作っていない（モック v6 にもサイドバー内の検索しかない）。
-- **まだ**: 絞り込み（公開中・録音・日記。`/api/search` に引数が無く、公開中は `publications` の join が要る＝公開の配線の後）。
+- **まだ**: 絞り込み（公開中・録音。`/api/search` に引数が無く、公開中は `publications` の join が要る＝公開の配線の後）。
 
 ## リンクで共有・複製・書き出し（#34）
 
@@ -109,6 +109,10 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **上限**: VTT は UTF-8 で 4 MiB（取り込みの要求の本文は 5 MiB まで。超えたら 413）、段落は 20,000 個・1 段落 5,000 文字・本文の合計 8 MiB（docs-core の文字起こしの同期上限と同じ）、1 回の `edits` は 200 件（`PATCH` の本文は 4 MiB まで）。
 - **表**: migration `0007_page_recordings.sql`（録音ページに 1 行。ページを消す（hard delete）と消える。ゴミ箱の間は残る）。コードは `packages/editor-store/src/recordings.ts`、段落と話者の操作（純粋な関数）は `src/recording/`。
 - **まだ**: 音声の取り込み・エンジン（段 2）、マイク録音・再生・タイムスタンプの画面（段 3）。
+- **画面（段 3a。音声に依存しない部分）**:
+  - **できること**: 「録音から」（`/p/new?from=recording`）で文字起こし済みの `.vtt` を選ぶ（ドロップも可。4 MiB 超は送る前に断る）と、`importVtt` で録音ページを作って `/p/{id}` へ移る。失敗は画面に日本語で出し、選んだファイルは残す。録音ページ（`kind=rec`）は、`PageEditor` の上に文字起こし（`RecordingTranscript`）が入る。段落をその場で直して確定（フォーカスが外れたとき・Enter。変換中は確定しない）すると保存し、話者を押すと名前を変えられ、別の話者にまとめられる（確認は 1 回）。時刻の表示は端末ごとの好み（localStorage）。
+  - **保存**: 書き込みは 1 本ずつ順に送り、`baseRevision` は直前の応答の revision。別の画面が先に直していたら（409）自分の文章は消さず、最新に合わせて「別の場所で先に直されました。最新に合わせました」と出す。直した段落は止めておき、「もう一度保存」か書き直して確定すると送る（勝手には送り直さない）。クライアントは `src/lib/recording-client.ts`、サーバーの reason の日本語は `recordingErrorMessage`。
+  - **まだできない**: 音声ファイル（.m4a .mp3 .wav）とマイクは「まだ使えません」と知らせるだけ。再生・波形は出さない（音声は段 2 のあと）。「この録音から」（`ShellMakeFrom`）とサブページは手順（#37）の画面で出す。背景情報と「このあと」は入力できるが、まだ使われない（登場人物・固有名詞も未接続）。サイドバーの行は、取り込んだ直後は「録音」の 2 行目が出ない（読み込み直すと出る。`EditorFrame` の `pageCreated` が種類を受けない）。段落の数が多い録音の仮想化はしていない。
 
 ## 録音の音声（#36 段 2a）
 

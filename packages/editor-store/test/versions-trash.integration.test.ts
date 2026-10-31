@@ -16,6 +16,20 @@ const MINUTE = 60_000;
 const paragraph = (text: string): Block => ({ type: "paragraph", content: [{ type: "text", text }] });
 const acceptAll = (blocks: unknown) => blocks as Block[];
 
+/** 公開の行を store を通さずに入れる（0009 の形: NIHO への公開版 1 と、それを指す公開）。 */
+async function insertPublication(db: Pick<PgPool, "query">, pageId: string, slug: string, options: { stopped?: boolean } = {}): Promise<void> {
+  await db.query(
+    "INSERT INTO publication_versions (page_id, version, handle, snapshot) VALUES ($1, 1, 'niho', jsonb_build_object('id', $2::text, 'version', 1, 'dest', 'niho'))",
+    [pageId, pageId],
+  );
+  await db.query(
+    `INSERT INTO publications (page_id, dest, handle, slug, range, extras_app, extras_news, extras_xp, version, published_at, updated_at, stopped_at)
+     VALUES ($1, 'niho', 'niho', $2, 'live', false, false, false, 1, clock_timestamp(), clock_timestamp(),
+             CASE WHEN $3::boolean THEN clock_timestamp() END)`,
+    [pageId, slug, options.stopped === true],
+  );
+}
+
 function expectSaved(result: SaveResult | RestoreResult | null): Page {
   assert.ok(result !== null && (result.status === "saved" || result.status === "restored"), `expected a write, got ${result === null ? "null" : result.status}`);
   return result.page;
@@ -264,10 +278,10 @@ describe("PostgreSQL editor store: revisions, versions and trash", { skip: datab
       assert.deepEqual((await versionsOf(other.id)).map((version) => version.version), [1, 2], "numbers are per page");
     });
 
-    it("keeps at most the newest versions, dropping the oldest unprotected autosave versions first", async () => {
+    it("keeps at most the newest versions, dropping the oldest autosave versions first", async () => {
       const store = new EditorStore(pool, { autosaveVersionIntervalMs: 0 });
       const page = await store.createPage(OWNER, { blocks: [paragraph("上限")] });
-      // v1 autosave（公開に使う）、v2 ai、v3 overwrite、v4.. autosave で上限ちょうど
+      // v1 autosave、v2 ai、v3 overwrite、v4.. autosave で上限ちょうど
       await pool.query(
         `INSERT INTO page_versions (page_id, version, blocks, reason)
          SELECT $1, n, jsonb_build_array(jsonb_build_object('type', 'paragraph', 'n', n)),
@@ -275,17 +289,15 @@ describe("PostgreSQL editor store: revisions, versions and trash", { skip: datab
            FROM generate_series(1, $2::int) AS n`,
         [page.id, VERSION_KEEP_LIMIT],
       );
-      await pool.query(
-        "INSERT INTO publications (page_id, dest, slug, range, published_version, stopped_at) VALUES ($1, 'synthetic', $2, 'live', 1, clock_timestamp())",
-        [page.id, `cap-${page.id.slice(0, 8)}`],
-      );
+      // 公開は publication_versions に自分の公開版を持つので、公開していても page_versions の版は守らない（0009）
+      await insertPublication(pool, page.id, `cap-${page.id.slice(0, 8)}`, { stopped: true });
       const added = await store.createVersion(OWNER, page.id, "ai");
       assert.equal(added?.version, VERSION_KEEP_LIMIT + 1);
       let numbers = (await versionsOf(page.id)).map((version) => version.version);
       assert.equal(numbers.length, VERSION_KEEP_LIMIT);
-      assert.ok(numbers.includes(1), "the published version is kept");
+      assert.ok(!numbers.includes(1), "the oldest autosave version is dropped");
       assert.ok(numbers.includes(2) && numbers.includes(3), "ai and overwrite versions are kept");
-      assert.ok(!numbers.includes(4), "the oldest unprotected autosave version is dropped");
+      assert.ok(numbers.includes(4));
 
       // 今の本文は直前の ai の版と同じなので、1 回目の保存は版を残さない。2 回目で autosave の版が増える
       expectSaved(await store.savePage(OWNER, page.id, { blocks: [paragraph("次")] }, { baseRevision: 1 }));
@@ -294,8 +306,9 @@ describe("PostgreSQL editor store: revisions, versions and trash", { skip: datab
       numbers = (await versionsOf(page.id)).map((version) => version.version);
       assert.equal(numbers.length, VERSION_KEEP_LIMIT);
       assert.equal(numbers.at(-1), VERSION_KEEP_LIMIT + 2, "numbers are never reused");
-      assert.ok(!numbers.includes(5));
-      assert.ok(numbers.includes(1) && numbers.includes(2) && numbers.includes(3) && numbers.includes(6));
+      assert.ok(!numbers.includes(4));
+      assert.ok(numbers.includes(2) && numbers.includes(3) && numbers.includes(5));
+      assert.equal((await pool.query("SELECT 1 FROM publication_versions WHERE page_id = $1", [page.id])).rows.length, 1, "the published version is untouched");
     });
 
     it("lists versions newest first without bodies and reads one version with its body", async () => {
@@ -433,11 +446,7 @@ describe("PostgreSQL editor store: revisions, versions and trash", { skip: datab
     it("refuses to trash a published page or a page with a published descendant, and never touches another owner's page", async () => {
       const store = new EditorStore(pool);
       const published = await store.createPage(OWNER, { title: "公開中", blocks: [paragraph("公開")] });
-      await store.createVersion(OWNER, published.id, "publish");
-      await pool.query("INSERT INTO publications (page_id, dest, slug, range, published_version) VALUES ($1, 'synthetic', $2, 'live', 1)", [
-        published.id,
-        `pub-${published.id.slice(0, 8)}`,
-      ]);
+      await insertPublication(pool, published.id, `pub-${published.id.slice(0, 8)}`);
       assert.equal(await store.deletePage(OWNER, published.id), "published");
       assert.equal((await rowOf(published.id))?.deleted_at, null);
 
@@ -527,11 +536,7 @@ describe("PostgreSQL editor store: revisions, versions and trash", { skip: datab
         await trashAgo(OTHER, otherOld, 31);
         // 公開の記録がある（公開をやめた）ページは消さない
         const wasPublished = await make(OWNER, "公開をやめた");
-        await store.createVersion(OWNER, wasPublished.id, "publish");
-        await purgePool.query(
-          "INSERT INTO publications (page_id, dest, slug, range, published_version, stopped_at) VALUES ($1, 'synthetic', 'stopped', 'live', 1, clock_timestamp())",
-          [wasPublished.id],
-        );
+        await insertPublication(purgePool, wasPublished.id, "stopped", { stopped: true });
         await trashAgo(OWNER, wasPublished, 31);
         // 生きているページのカバーが使っている資産を持つページは消さない
         const coverSource = await make(OWNER, "カバーの元");

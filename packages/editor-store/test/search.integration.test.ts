@@ -142,7 +142,7 @@ describe("searchPages on PostgreSQL", { skip: databaseUrl === undefined }, () =>
     const seeds: Record<string, PageSeed> = {
       titleOnly: { title: "Quokka の観察", blocks: [paragraph(text("本文はふつうのことば"))], at: 10 },
       bodyOnly: { title: "別の題名", blocks: [paragraph(text("今日は quokka を見た"))], at: 11 },
-      both: { title: "QUOKKA 両方", blocks: [heading("見出し"), paragraph(text("本文にも QuOkKa がいる"))], at: 12, kind: "journal" },
+      both: { title: "QUOKKA 両方", blocks: [heading("見出し"), paragraph(text("本文にも QuOkKa がいる"))], at: 12, kind: "article" },
       deleted: { title: "Quokka ゴミ箱", blocks: [paragraph(text("quokka"))], at: 13, deleted: true },
       theirs: { owner: OTHER, title: "Quokka 他人", blocks: [paragraph(text("quokka ペンギン 鰻 100%"))], at: 14 },
       eel: { title: "夕飯", blocks: [paragraph(text("鰻を食べた"))], at: 15 },
@@ -185,7 +185,7 @@ describe("searchPages on PostgreSQL", { skip: databaseUrl === undefined }, () =>
     const both = hits[0];
     assert.ok(both);
     assert.deepEqual(Object.keys(both).sort(), ["id", "kind", "snippet", "title", "updatedAt"], "no search_text or owner in the result");
-    assert.equal(both.kind, "journal");
+    assert.equal(both.kind, "article");
     assert.equal(both.title, "QUOKKA 両方");
     assert.equal(both.updatedAt, new Date(BASE_TIME + 12_000).toISOString());
     assert.equal(both.snippet, "見出し 本文にも QuOkKa がいる");

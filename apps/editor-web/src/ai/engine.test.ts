@@ -56,7 +56,6 @@ function applied(blocks: Block[], adoptions: Adoptions): Block[] {
 describe("presets", () => {
   it("offers the candidates of each kind of page", () => {
     const labels = (kind: Parameters<typeof presetsFor>[0], lang: "ja" | "en") => presetsFor(kind, lang).map((preset) => preset.label);
-    expect(labels("journal", "ja")).toEqual(["整える", "要約", "記事にできそうな部分"]);
     expect(labels("note", "ja")).toEqual(["整える", "要約", "見出しをつける", "英語にする"]);
     expect(labels("article", "en")).toEqual(["Tighten", "Add headings", "日本語にする", "Check facts to confirm"]);
     expect(labels("rec", "ja")).toEqual(["要約"]);

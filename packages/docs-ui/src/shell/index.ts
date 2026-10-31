@@ -26,7 +26,16 @@ export {
   type ShellMetaItem,
   type ShellPageProps,
 } from "./page";
-export { ShellMakeFrom, ShellRecording, type ShellRecordingProps, type ShellSegment } from "./transcript";
+export {
+  SHELL_TONES,
+  ShellMakeFrom,
+  ShellRecording,
+  type ShellRecordingProps,
+  type ShellSegment,
+  type ShellSpeaker,
+  type ShellSpeakerResult,
+  type ShellTone,
+} from "./transcript";
 export { ShellProposal, type ShellDiffPart, type ShellProposalBlock, type ShellProposalProps } from "./proposal";
 export { RecordingStart, type RecordingHow, type RecordingNext, type RecordingStartProps } from "./recording-start";
 export { ShellSheet, type ShellSheetProps } from "./sheet";

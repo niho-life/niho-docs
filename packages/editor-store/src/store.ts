@@ -14,6 +14,8 @@ import {
   type PageSummary,
   type PageVersion,
   type PageVersionSummary,
+  type PublishDest,
+  type PublishRange,
   type PurgeResult,
   type Queryable,
   type RestoreOptions,
@@ -31,7 +33,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 export const PAGE_LIST_LIMIT = 500;
 /** 版の一覧で返す上限（新しい順）。 */
 export const VERSION_LIST_LIMIT = 100;
-/** 1 ページに残す版の数。超えたら古い autosave の版から捨てる（公開中の版と autosave 以外の版は捨てない）。 */
+/** 1 ページに残す版の数。超えたら古い autosave の版から捨てる（autosave 以外の版は捨てない）。公開版は別の表（publication_versions）。 */
 export const VERSION_KEEP_LIMIT = 200;
 /** 自動保存で版を残す間隔の既定（10 分）。 */
 export const DEFAULT_AUTOSAVE_VERSION_INTERVAL_MS = 10 * 60 * 1000;
@@ -91,9 +93,18 @@ type PageRow = {
   updated_at: Date;
 };
 
-type SummaryRow = Pick<PageRow, "id" | "kind" | "title" | "lang" | "parent" | "step_status" | "created_at" | "updated_at">;
+type SummaryRow = Pick<PageRow, "id" | "kind" | "title" | "lang" | "parent" | "step_status" | "created_at" | "updated_at"> & {
+  pub_dest: PublishDest | null;
+  pub_handle: string | null;
+  pub_range: PublishRange | null;
+  pub_stopped: boolean | null;
+};
 
-const SUMMARY_COLUMNS = "id, kind, title, lang, parent, step_status, created_at, updated_at";
+/** 一覧の列（pages を p、公開を LEFT JOIN した publications を pub として読む）。 */
+const SUMMARY_COLUMNS = `p.id, p.kind, p.title, p.lang, p.parent, p.step_status, p.created_at, p.updated_at,
+       pub.dest AS pub_dest, pub.handle AS pub_handle, pub.range AS pub_range, pub.stopped_at IS NOT NULL AS pub_stopped`;
+
+const SUMMARY_FROM = "pages p LEFT JOIN publications pub ON pub.page_id = p.id";
 
 /** 一覧の区切りの行。cursor_time は updated_at の UTC の文字列（マイクロ秒まで）。 */
 type ChunkRow = SummaryRow & { cursor_time: string };
@@ -130,6 +141,10 @@ function toSummary(row: SummaryRow): PageSummary {
     stepStatus: row.step_status,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+    publication:
+      row.pub_dest === null || row.pub_handle === null || row.pub_range === null
+        ? null
+        : { dest: row.pub_dest, handle: row.pub_handle, range: row.pub_range, stopped: row.pub_stopped === true },
   };
 }
 
@@ -216,9 +231,9 @@ export class EditorStore {
     const limit = Math.max(1, Math.min(options.limit ?? PAGE_LIST_LIMIT, PAGE_LIST_LIMIT));
     const result = await this.#db.query<SummaryRow>(
       `SELECT ${SUMMARY_COLUMNS}
-         FROM pages
-        WHERE owner = $1 AND deleted_at IS NULL
-        ORDER BY updated_at DESC, id
+         FROM ${SUMMARY_FROM}
+        WHERE p.owner = $1 AND p.deleted_at IS NULL
+        ORDER BY p.updated_at DESC, p.id
         LIMIT $2`,
       [owner, limit],
     );
@@ -241,10 +256,10 @@ export class EditorStore {
     try {
       const result = await this.#db.query<ChunkRow>(
         `SELECT ${SUMMARY_COLUMNS},
-                to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_time
-           FROM pages
-          WHERE owner = $1 AND deleted_at IS NULL${after ? " AND (updated_at, id) < ($3::timestamptz, $4::uuid)" : ""}
-          ORDER BY updated_at DESC, id DESC
+                to_char(p.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_time
+           FROM ${SUMMARY_FROM}
+          WHERE p.owner = $1 AND p.deleted_at IS NULL${after ? " AND (p.updated_at, p.id) < ($3::timestamptz, $4::uuid)" : ""}
+          ORDER BY p.updated_at DESC, p.id DESC
           LIMIT $2`,
         params,
       );
@@ -448,6 +463,7 @@ export class EditorStore {
         );
         const ids = tree.rows.map((row) => row.id);
         if (!ids.includes(id)) return null;
+        // 公開の transaction もページの行を押さえてから公開を書く（publications.ts の getDraftPage）ので、同時の公開とすれ違わない
         const published = await client.query(
           "SELECT 1 FROM publications WHERE page_id = ANY($1::uuid[]) AND stopped_at IS NULL LIMIT 1",
           [ids],
@@ -527,7 +543,7 @@ export class EditorStore {
    * ゴミ箱に `olderThanDays` 日より長くあるページを、全ての owner について完全に消す（版・資産の行は FK の CASCADE で消える）。
    * - 親子は子から先に消す（`pages (owner, parent)` の FK は RESTRICT。1 文の DELETE の中の順序に頼らない）。
    * - 消すページを親にしている残るページ（先に戻された子など）は、親を外して残す。
-   * - publications に行があるページ・残るページのカバーに資産が使われているページは消さない（ゴミ箱に残す）。
+   * - 公開の行（publications。公開をやめたものも含む）があるページ・残るページのカバーに資産が使われているページは消さない（ゴミ箱に残す）。
    * - 資産の実体（bucket の object）は消さない。消した行の bucket_path を返す。
    */
   async purgeTrash(options: { olderThanDays?: number } = {}): Promise<PurgeResult> {
@@ -611,13 +627,12 @@ export class EditorStore {
     );
     const row = inserted.rows[0];
     if (!row) return null;
-    // 上限を超えた分だけ、古い autosave の版から捨てる（公開に使っている版・今残した版は捨てない）
+    // 上限を超えた分だけ、古い autosave の版から捨てる（今残した版は捨てない。公開版は publication_versions にあり、ここは指さない）
     await client.query(
       `WITH victims AS (
          SELECT v.version
            FROM page_versions v
           WHERE v.page_id = $1 AND v.reason = 'autosave' AND v.version < $2
-            AND NOT EXISTS (SELECT 1 FROM publications pub WHERE pub.page_id = v.page_id AND pub.published_version = v.version)
           ORDER BY v.version
           LIMIT GREATEST((SELECT count(*) FROM page_versions WHERE page_id = $1) - $3, 0)
        )
