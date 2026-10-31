@@ -10,7 +10,8 @@ export type ShellLang = "ja" | "en";
 export type ShellPageKind = "note" | "rec" | "step" | "article";
 /** 状態の丸。private＝自分だけ、published＝公開中、updated＝更新あり、limited＝限定公開、stopped＝公開をやめた。 */
 export type ShellStatusState = "private" | "published" | "updated" | "limited" | "stopped";
-export type ShellStepState = "done" | "run" | "wait";
+/** 段階の状態。done＝済み、run＝作成中、wait＝待機、failed＝失敗、stale＝前提変更（上流が変わった）。設計 §7.2。 */
+export type ShellStepState = "done" | "run" | "wait" | "failed" | "stale";
 /** 主ボタンは面と文字をセット（--ed-primary-bg / --ed-primary-ink）。outline は白地の縁、quiet は面なし。 */
 export type ShellButtonTone = "primary" | "outline" | "quiet";
 
@@ -27,15 +28,24 @@ export type ShellMenuItem = {
   current?: boolean;
 };
 
-/** 一覧の1行。2行目（sub）は公開先・録音・作成中のときだけ持つ。 */
+/**
+ * 一覧の1行。2行目（sub）は公開先・録音・作成中のときだけ持つ。
+ * 木は `depth` の並びで表す（深い行は、直前の浅い行の中に入る）。段はフォルダ（0）› ページ（1）› 録音のサブページ（2）まで。
+ */
 export type ShellListItem = {
   id: string;
   /** 空なら「無題」と薄く出す。 */
   title: string;
   /** 更新の時刻（「たった今」「昨日」「10月24日」）。 */
   when: string;
-  /** 録音から作ったサブページ（親の下に少し下げる）。 */
-  child?: boolean;
+  /** 木の段。省けば 0（上の段）。 */
+  depth?: 0 | 1 | 2;
+  /** 子を持つ行（フォルダ）。開閉のボタンを出す。 */
+  folder?: boolean;
+  /** フォルダを開いているか（`folder` のときだけ見る。閉じているあいだ、呼ぶ側は中の行を渡さない）。 */
+  open?: boolean;
+  /** 手順が動いている行の回るマーク（設計 §7.2）。印だけでは状態を表さないので、sub の文字（「作成中…」）と一緒に渡す。 */
+  busy?: boolean;
   sub?: { text: string; dest?: ShellDest };
 };
 

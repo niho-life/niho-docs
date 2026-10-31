@@ -1,5 +1,6 @@
 // 本番の起動の守り（#47）。`npm run build` の後に `npm run test:startup` で動かす。
-// NODE_ENV=production で EDITOR_AUTH_MODE が niho でなければ（未設定を含む）、stub へ落とさずに起動が失敗し、port を開かないこと。
+// NODE_ENV=production で EDITOR_AUTH_MODE が niho でも（許可リストのある）google でもなければ（未設定を含む）、
+// stub へ落とさずに起動が失敗し、port を開かないこと。
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -38,6 +39,8 @@ function childEnv(port, mode) {
   const env = { ...process.env, NODE_ENV: "production", PORT: String(port), HOSTNAME: "127.0.0.1", NEXT_TELEMETRY_DISABLED: "1" };
   delete env.EDITOR_AUTH_MODE;
   delete env.DATABASE_URL;
+  // google の許可リストは渡さない（#47 google: 空なら起動しない）
+  delete env.EDITOR_GOOGLE_ALLOWED_EMAILS;
   if (mode !== undefined) env.EDITOR_AUTH_MODE = mode;
   return env;
 }
@@ -78,7 +81,14 @@ async function waitForHttp(port, timeoutMs = 30_000) {
 }
 
 describe("production start with the server entry (Dockerfile / npm start)", () => {
-  for (const [label, mode] of [["EDITOR_AUTH_MODE=stub", "stub"], ["EDITOR_AUTH_MODE unset", undefined], ["EDITOR_AUTH_MODE empty", ""], ["EDITOR_AUTH_MODE=STUB", "STUB"]]) {
+  for (const [label, mode] of [
+    ["EDITOR_AUTH_MODE=stub", "stub"],
+    ["EDITOR_AUTH_MODE unset", undefined],
+    ["EDITOR_AUTH_MODE empty", ""],
+    ["EDITOR_AUTH_MODE=STUB", "STUB"],
+    // google は許可リストが空だと起動しない（設定の誤りで誰でも入れる状態にしない。#47 google）
+    ["EDITOR_AUTH_MODE=google without an allowlist", "google"],
+  ]) {
     it(`refuses to start and never opens the port with ${label}`, async () => {
       const port = await freePort();
       const result = await runUntilExit(["scripts/server-entry.mjs", standaloneServer], childEnv(port, mode), port);

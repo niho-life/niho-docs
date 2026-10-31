@@ -188,7 +188,10 @@ describe("EditorFrame", () => {
 
     await click(".es-sb-me");
     const items = [...container!.querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitem"]')];
-    expect(items.map((item) => item.textContent)).toEqual(["発信先", "役割とつながり", "設定", "ログアウト"]);
+    // 左下は「設定」。本人の名前は「役割とつながり」の行に出る（#37 T9）
+    expect(container!.querySelector(".es-sb-me")?.textContent).toContain("設定");
+    expect(container!.querySelector(".es-sb-me")?.textContent).not.toContain("開発ユーザー");
+    expect(items.map((item) => item.textContent)).toEqual(["発信先", "開発ユーザー役割とつながり", "設定", "ログアウト"]);
     await act(async () => items[2]!.click());
     expect(nav.push).toHaveBeenLastCalledWith("/settings");
 
@@ -439,6 +442,60 @@ describe("EditorFrame", () => {
     await act(async () => buttonByText("ページから公開")!.click());
     expect(dialog()?.getAttribute("aria-label")).toBe("公開");
   });
+
+  describe("手順のサブページ（#37 の stepPagesChanged）", () => {
+    const REC = "00000000-0000-4000-8000-0000000000aa";
+    const STEP_1 = "00000000-0000-4000-8000-0000000000b1";
+    const STEP_2 = "00000000-0000-4000-8000-0000000000b2";
+    type Step = { id: string; title: string; stepStatus: "done" | "run" | "wait" | "stale" | "failed" | null };
+    let send: (parentId: string, steps: Step[]) => void = () => undefined;
+
+    function FromBand() {
+      const { stepPagesChanged } = useEditorFrame();
+      send = stepPagesChanged;
+      return <p>合成の中身</p>;
+    }
+
+    const recording = (): PageSummary => ({ ...page(REC, "録音"), kind: "rec" });
+
+    it("まだ一覧に無いサブページを、親の下に段階の順で足す", async () => {
+      await mount({ pages: [recording()] }, <FromBand />);
+      await act(async () =>
+        send(REC, [
+          { id: STEP_1, title: "文字起こし修正", stepStatus: "done" },
+          { id: STEP_2, title: "記事方針", stepStatus: "run" },
+        ]),
+      );
+      expect(rows()).toEqual(["録音", "文字起こし修正", "記事方針"]);
+      // 済みの段階は 2 行目を出さず、作成中の段階は言葉（と回るマーク）を出す
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["録音", "作成中…"]);
+      expect(container!.querySelectorAll(".es-sb-list .es-busy")).toHaveLength(1);
+    });
+
+    it("サブページがゴミ箱に入っている段階（stepStatus が null）の行は作らない", async () => {
+      await mount({ pages: [recording()] }, <FromBand />);
+      await act(async () =>
+        send(REC, [
+          { id: STEP_1, title: "文字起こし修正", stepStatus: "done" },
+          // 実行の記録（attempt）は残るので run から届くが、押しても 404 のページへ行くだけ
+          { id: STEP_2, title: "記事方針", stepStatus: null },
+        ]),
+      );
+      expect(rows()).toEqual(["録音", "文字起こし修正"]);
+    });
+
+    it("同じ知らせを繰り返しても、行は増えず、状態だけが替わる", async () => {
+      await mount({ pages: [recording()] }, <FromBand />);
+      const run: Step[] = [{ id: STEP_1, title: "文字起こし修正", stepStatus: "run" }];
+      await act(async () => send(REC, run));
+      await act(async () => send(REC, run));
+      expect(rows()).toEqual(["録音", "文字起こし修正"]);
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["録音", "作成中…"]);
+      await act(async () => send(REC, [{ id: STEP_1, title: "文字起こし修正", stepStatus: "done" }]));
+      expect(rows()).toEqual(["録音", "文字起こし修正"]);
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["録音"]);
+    });
+  });
 });
 
 describe("EditorFrame: the header's state and the … menu (#34)", () => {
@@ -482,7 +539,8 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
   }
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-  const tip = () => container!.querySelector(".es-dt .es-st-tip")?.textContent;
+  // 状態の丸は公開中だけ出す（#37 T9）。非公開のときは、保存の状態を読み上げる見えない live region が同じ文を持つ
+  const tip = () => (container!.querySelector(".es-dt .es-st-tip") ?? container!.querySelector(".es-dt .es-st-wrap--quiet"))?.textContent;
   const dot = () => container!.querySelector(".es-dt .es-st");
   const moreButton = () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="その他"]');
   const menu = () => container!.querySelector<HTMLElement>('[role="menu"][aria-label="その他"]');
@@ -524,7 +582,8 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
   it("shows the open page's save state as 「自分だけ」 (no publish state; the 公開 button is the frame's, #43), and nothing outside a page", async () => {
     const a = fakePage(A);
     await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={a} />);
-    expect(dot()?.classList.contains("es-st--private")).toBe(true);
+    // 非公開のページには丸を出さない（公開ボタンの文言で分かる）。文は読み上げのための live region に残る
+    expect(dot()).toBeNull();
     expect(tip()).toBe("自分だけ · 保存済み");
     expect(container!.querySelector(".es-dt .es-st-wrap")?.getAttribute("aria-live")).toBe("polite");
     // 公開ボタンは枠（#43）が出す。公開のシートが読めていない（この suite では読み込みを無効にしている）間は、丸は「自分だけ」
@@ -537,8 +596,8 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     for (const status of ["error", "conflict", "signedOut"] as SaveStatus[]) {
       await rerender(<FakePage page={{ ...a, status }} />);
       expect(tip()).toBe(`自分だけ · ${SAVE_STATUS_TEXT[status]}`);
-      // 公開の状態（公開中・更新あり・限定公開・公開をやめた）は出さない
-      expect(dot()?.classList.contains("es-st--private")).toBe(true);
+      // 公開していないので丸は出さない（出すのは公開中・限定公開・更新ありだけ）
+      expect(dot()).toBeNull();
     }
 
     // ページを離れたら（設定）、状態も「…」も出さない
@@ -1869,5 +1928,153 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
         expect(calls[0]?.body).toMatchObject({ title: "合成の題名", lang: "en", baseRevision: 1 });
       });
     });
+  });
+});
+
+describe("EditorFrame: フォルダの木と、常設の書式の帯（#37 T2・T9）", () => {
+  /** ページの中の PageEditor の代わり（枠に登録するだけ）。 */
+  function FakePage({ page: attached }: { page: AttachedPage }) {
+    const { attachPage } = useEditorFrame();
+    useEffect(() => attachPage(attached), [attachPage, attached]);
+    return <p>合成の本文</p>;
+  }
+  function fakePage(id: string | null): AttachedPage {
+    return {
+      id,
+      status: "saved",
+      flush: vi.fn(async () => true),
+      revision: () => 1,
+      reopen: vi.fn(),
+      shared: null,
+      setShared: vi.fn(),
+      lang: "ja",
+      setLang: vi.fn(),
+      langNote: null,
+      text: { read: () => "", subscribe: () => () => undefined },
+    };
+  }
+  async function until(condition: () => boolean) {
+    for (let tries = 0; tries < 200 && !condition(); tries++) await act(async () => await new Promise((resolve) => setTimeout(resolve, 5)));
+    expect(condition()).toBe(true);
+  }
+
+  const PARENT = "00000000-0000-4000-8000-00000000000a";
+  const CHILD = "00000000-0000-4000-8000-00000000000b";
+  const SUB = "00000000-0000-4000-8000-00000000000c";
+  const inside = (parent: string, id: string, title: string): PageSummary => ({ ...page(id, title), parent });
+
+  /** 木の行（段つき）。段は入れ子の <ul> の深さで数える。 */
+  const tree = () =>
+    [...container!.querySelectorAll(".es-sb-list li")].map((li) => {
+      let depth = 0;
+      for (let at = li.parentElement; at && !at.classList.contains("es-sb-list"); at = at.parentElement) if (at.tagName === "UL") depth++;
+      return [li.querySelector(".es-di-t")?.textContent, depth - 1];
+    });
+  const twisty = (title: string) => container!.querySelector<HTMLButtonElement>(`.es-sb-list button[aria-label="${title} の中"]`);
+
+  it("出すのは 1 本の木（フォルダ › ページ › 録音のサブページ）。フォルダの行で開閉できる", async () => {
+    await mount({ pages: [page(PARENT, "鎌倉の記事"), inside(PARENT, CHILD, "取材メモ"), inside(CHILD, SUB, "文字起こし修正")] });
+    expect(tree()).toEqual([
+      ["鎌倉の記事", 0],
+      ["取材メモ", 1],
+      ["文字起こし修正", 2],
+    ]);
+    expect(twisty("鎌倉の記事")?.getAttribute("aria-expanded")).toBe("true");
+
+    // 閉じると中の行が消え、もう一度押すと戻る（ページは失われない）
+    await act(async () => twisty("鎌倉の記事")!.click());
+    expect(tree()).toEqual([["鎌倉の記事", 0]]);
+    expect(twisty("鎌倉の記事")?.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => twisty("鎌倉の記事")!.click());
+    expect(tree()).toHaveLength(3);
+  });
+
+  it("情報パネルの「フォルダ」で入れる・出す（本文・revision は送らない）", async () => {
+    const calls: { url: string; method?: string; body?: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, method: init?.method, body: init?.body === undefined ? undefined : JSON.parse(String(init.body)) });
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+    nav.pathname = `/p/${CHILD}`;
+    await mount({ pages: [page(PARENT, "鎌倉の記事"), page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
+    await click('.es-dt button[aria-label="このページの設定と AI"]');
+    const select = container!.querySelector<HTMLSelectElement>('.es-rail select[aria-label="フォルダ"]')!;
+    expect([...select.options].map((option) => option.textContent)).toEqual(["フォルダに入れない", "鎌倉の記事"]);
+    expect(select.value).toBe("");
+
+    await act(async () => {
+      select.value = PARENT;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(calls).toEqual([{ url: `/api/pages/${CHILD}/parent`, method: "PATCH", body: { parent: PARENT } }]);
+    // 一覧の行はすぐ動く（木の中へ）
+    expect(tree()).toEqual([
+      ["鎌倉の記事", 0],
+      ["取材メモ", 1],
+    ]);
+
+    await act(async () => {
+      container!.querySelector<HTMLSelectElement>('.es-rail select[aria-label="フォルダ"]')!.value = "";
+      container!.querySelector<HTMLSelectElement>('.es-rail select[aria-label="フォルダ"]')!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(calls.at(-1)).toEqual({ url: `/api/pages/${CHILD}/parent`, method: "PATCH", body: { parent: null } });
+    expect(tree()).toEqual([
+      ["鎌倉の記事", 0],
+      ["取材メモ", 0],
+    ]);
+  });
+
+  it("入れられなかったときは行を戻して一言（ページは失われない）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "too_deep" }), { status: 409, headers: { "content-type": "application/json" } })));
+    nav.pathname = `/p/${CHILD}`;
+    await mount({ pages: [page(PARENT, "鎌倉の記事"), page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
+    await click('.es-dt button[aria-label="このページの設定と AI"]');
+    const select = () => container!.querySelector<HTMLSelectElement>('.es-rail select[aria-label="フォルダ"]')!;
+    await act(async () => {
+      select().value = PARENT;
+      select().dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(container!.querySelector('.es-rail [role="alert"]')?.textContent).toBe("このフォルダには入れられませんでした");
+    expect(select().value).toBe("");
+    expect(tree()).toEqual([
+      ["鎌倉の記事", 0],
+      ["取材メモ", 0],
+    ]);
+  });
+
+  it("「フォルダ」の節は、入れ先が無く上の段にいるページには出さない", async () => {
+    nav.pathname = `/p/${CHILD}`;
+    await mount({ pages: [page(CHILD, "取材メモ")] }, <FakePage page={fakePage(CHILD)} />);
+    await click('.es-dt button[aria-label="このページの設定と AI"]');
+    expect(container!.querySelector('.es-rail select[aria-label="フォルダ"]')).toBeNull();
+  });
+
+  it("書式の帯はヘッダーに常設で、録音は枠が受けて録音から始める画面へ移る", async () => {
+    nav.pathname = `/p/${PAGE_ID}`;
+    const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })));
+    await mount(
+      { pages: [page(PAGE_ID, "合成の題名")] },
+      <PageEditor page={{ id: PAGE_ID, title: "合成の題名", blocks: [{ type: "paragraph", content: [{ type: "text", text: "本文" }] }], revision: 1, updatedAt: "2026-10-31T02:00:00.000Z" }} drafts={drafts} />,
+    );
+    await until(() => container!.querySelector('.es-dt [role="toolbar"]') !== null);
+    const bar = container!.querySelector<HTMLElement>('.es-dt [role="toolbar"]')!;
+    expect(bar.getAttribute("aria-label")).toBe("書式とブロック");
+    expect([...bar.querySelectorAll("button")].map((button) => button.getAttribute("aria-label"))).toEqual([
+      "ブロックを足す",
+      "テキスト、行の種類",
+      "太字",
+      "斜体",
+      "リンク",
+      "見出し",
+      "箇条書き",
+      "画像",
+      "録音",
+    ]);
+    await act(async () => bar.querySelector<HTMLButtonElement>('button[aria-label="録音"]')!.click());
+    expect(nav.push).toHaveBeenLastCalledWith("/p/new?from=recording");
   });
 });

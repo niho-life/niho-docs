@@ -118,11 +118,11 @@ jobs:
   # 配備の道具（docs/ops/editor-deploy.md）。本番には触れない: 構文・Secret と env の組み立て・image の build だけを確かめる。
   editor-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -x scripts/editor-deploy/lib.sh scripts/editor-deploy/gcp-bootstrap.sh scripts/editor-deploy/deploy.sh scripts/editor-deploy/set-ai-key.sh scripts/editor-deploy/set-transcribe-key.sh scripts/editor-deploy/steps-infra.sh scripts/editor-deploy/transcribe-infra.sh scripts/editor-deploy/lib-test.sh scripts/editor-deploy/steps-infra.test.sh scripts/editor-deploy/transcribe-infra.test.sh
+        run: shellcheck -x scripts/editor-deploy/lib.sh scripts/editor-deploy/gcp-bootstrap.sh scripts/editor-deploy/deploy.sh scripts/editor-deploy/set-ai-key.sh scripts/editor-deploy/set-transcribe-key.sh scripts/editor-deploy/set-google-oauth-secret.sh scripts/editor-deploy/steps-infra.sh scripts/editor-deploy/transcribe-infra.sh scripts/editor-deploy/lib-test.sh scripts/editor-deploy/steps-infra.test.sh scripts/editor-deploy/transcribe-infra.test.sh scripts/editor-deploy/dockerfile-test.sh
       - name: The example env file sets every variable the scripts require
         run: |
           set -euo pipefail
@@ -134,5 +134,11 @@ jobs:
         run: scripts/editor-deploy/transcribe-infra.test.sh
       - name: The service's secrets and env with and without the AI key (gcloud is stubbed)
         run: bash scripts/editor-deploy/lib-test.sh
+      - name: "Every file: dependency of apps/editor-web is copied into the image before npm ci"
+        run: scripts/editor-deploy/dockerfile-test.sh
       - name: Build the migrate image
         run: DOCKER_BUILDKIT=1 docker build -f scripts/editor-deploy/Dockerfile.migrate -t editor-migrate-ci .
+      # 画面の image も build する。ここを見ていなかったため、editor-publish と editor-publish-contract が増えた
+      # とき（#64・#93）に Dockerfile の COPY が追いつかず、本番の image が数週間 build できない状態に気づけなかった。
+      - name: Build the web image (the deploy builds this one; keep it buildable)
+        run: DOCKER_BUILDKIT=1 docker build -f apps/editor-web/Dockerfile -t editor-web-ci .

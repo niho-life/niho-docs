@@ -404,8 +404,12 @@
   min-width: 170px;
 }
 
-/* ── タイトル（文書のページ） ── */
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .page-title {
+/*
+ * ── タイトル（文書のページ） ──
+ * クラスを 2 回書いて 1 段強くしている。新しい画面の枠（shell.css）が `button・input・textarea` に `font: inherit` を
+ * 当てており（クラス＋要素なのでこちらより詳しい）、そのままだと題名が本文と同じ大きさになるため。
+ */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .page-title.page-title {
   display: block;
   width: 100%;
   resize: none;

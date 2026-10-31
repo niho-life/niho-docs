@@ -36,7 +36,19 @@ export function safeReturnTo(raw: string | null | undefined): string {
   return url.pathname;
 }
 
-export type LoginError = "unavailable";
+/**
+ * ログインの画面に出す失敗の種類。
+ * - unavailable: いまログインできない（方式が未設定・上流の失敗・途中の cookie が無い）。
+ * - forbidden: 本人は分かったが、このサイトに入れないアカウント（`google` の許可リストの外。アドレスは出さない）。
+ */
+export type LoginError = "unavailable" | "forbidden";
+
+const LOGIN_ERRORS: readonly string[] = ["unavailable", "forbidden"];
+
+/** `/auth/login?error=` の値を読む（知らない値は null）。 */
+export function loginErrorOf(raw: string | string[] | undefined): LoginError | null {
+  return typeof raw === "string" && LOGIN_ERRORS.includes(raw) ? (raw as LoginError) : null;
+}
 
 /** ログインの画面の path。戻り先が `/` なら `next` を付けない。 */
 export function loginPath(returnTo: string, error?: LoginError): string {

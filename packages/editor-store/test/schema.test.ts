@@ -7,6 +7,15 @@ import type { Database } from "../src/types.ts";
 
 const TABLES = ["pages", "page_versions", "assets", "publications"] as const;
 
+/**
+ * 取り合いを見つけるための印。連番（`0008_…`）は人が選ぶ番号なので、4 桁の番号が同じなら衝突とみなす。
+ * 日時（`20261101153000_…`）は取り合いが起きない作りで、同じ秒でも名前が違えば両方入る（new-migration-cli.ts）ので、
+ * 名前そのものを印にする。先頭 4 文字だけを見ると、同じ年の日時の名前がすべて衝突する（`2026`）。
+ */
+function migrationKey(name: string): string {
+  return /^\d{4}_/.test(name) ? name.slice(0, 4) : name;
+}
+
 /** SQL の行コメントを除いた本文（列の名前の検査をコメントの言葉で誤らないように）。 */
 function withoutComments(sql: string): string {
   return sql.replace(/--[^\n]*/g, "");
@@ -27,14 +36,23 @@ describe("migration files", () => {
     const names = (await readdir(new URL("../migrations/", import.meta.url))).filter((name) => !name.startsWith("."));
     assert.ok(names.length > 0);
     for (const name of names) assert.match(name, MIGRATION_FILE_PATTERN, `${name} does not follow NNNN_name.sql`);
-    const prefixes = names.map((name) => name.slice(0, 4));
-    assert.equal(new Set(prefixes).size, prefixes.length, "migration numbers must be unique");
+    const keys = names.map(migrationKey);
+    assert.equal(new Set(keys).size, keys.length, "migration numbers (or timestamps) must be unique");
     const files = await readMigrations();
     assert.deepEqual(files.map((file) => file.name), [...names].sort());
     for (const file of files) assert.doesNotThrow(() => migrationBody(file));
   });
 
-  it("0020 drops the journal kind: the check is replaced and existing journal rows become note, nothing else is touched", async () => {
+  it("tells numbered and timestamped names apart: same-year timestamps do not collide, a taken number does", () => {
+    const unique = (names: string[]) => new Set(names.map(migrationKey)).size === names.length;
+    assert.ok(unique(["0001_init.sql", "0020_remove_journal_kind.sql", "20261101153000_recipes.sql", "20261102090000_folders.sql"]));
+    // 同じ秒でも名前が違えば別の migration（どちらも入る）
+    assert.ok(unique(["20261101153000_recipes.sql", "20261101153000_folders.sql"]));
+    // 人が選ぶ連番の取り合いは、これまでどおり見つける
+    assert.ok(!unique(["0008_a.sql", "0008_b.sql"]));
+  });
+
+  it("0020 drops the journal kind:the check is replaced and existing journal rows become note, nothing else is touched", async () => {
     const file = (await readMigrations()).find((item) => item.name === "0020_remove_journal_kind.sql");
     assert.ok(file, "0020 is in the ordered list");
     const sql = withoutComments(file.sql);

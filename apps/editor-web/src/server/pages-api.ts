@@ -10,7 +10,7 @@ import {
   notFoundResponse,
   readJsonBody,
 } from "./http";
-import { parseCreatePage, parseListQuery, parsePageSave } from "./page-input";
+import { parseCreatePage, parseListQuery, parseMoveParent, parsePageSave } from "./page-input";
 
 /** API の route が使う store の操作。 */
 export type PagesStore = Pick<
@@ -19,6 +19,7 @@ export type PagesStore = Pick<
   | "listPageChunk"
   | "getPage"
   | "savePage"
+  | "movePage"
   | "deletePage"
   | "listVersions"
   | "getVersion"
@@ -109,6 +110,31 @@ export function patchPage(request: Request, id: string, deps: PagesApiDeps): Pro
     const result = await store.savePage(session.userId, id, patch, { baseRevision, overwrite });
     if (!result) return notFoundResponse();
     return result.status === "saved" ? jsonResponse(200, { page: result.page }) : conflictResponse(result.page);
+  });
+}
+
+/**
+ * PATCH /api/pages/{id}/parent — フォルダへ入れる・出す（`{ parent: id | null }`。`null` で上の段へ出す）。
+ * 変わるのは親だけで、本文・`revision`・`updated_at` は動かない（移動は編集ではない）。
+ * 段が深くなりすぎる移動は 409 `too_deep`、自分自身・自分の子孫の下へ入れる移動は 409 `cycle`（どちらも何も書かない）。
+ * 自分のページでない・入れ先が自分のページでないときは、どれも同じ 404。
+ */
+export function movePage(request: Request, id: string, deps: PagesApiDeps): Promise<Response> {
+  return guarded("PATCH /api/pages/[id]/parent", async () => {
+    const session = await sessionOf(request, deps);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+    // 本文の検査は id の有無より先（どの id でも同じ順に判定し、存在を漏らさない）
+    const body = await readJsonBody(request);
+    if (!body.ok) return body.response;
+    const parent = parseMoveParent(body.value);
+    if (!parent.ok) return errorResponse("bad_request");
+    const result = await store.movePage(session.userId, id, parent.value);
+    if (!result) return notFoundResponse();
+    if (result === "moved") return jsonResponse(200, { parent: parent.value });
+    return errorResponse(result === "too_deep" ? "too_deep" : "cycle");
   });
 }
 

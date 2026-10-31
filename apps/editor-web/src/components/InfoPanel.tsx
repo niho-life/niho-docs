@@ -52,6 +52,12 @@ export type InfoPanelProps = {
   author: { name: string; initial: string };
   /** 録音の長さ（秒。録音ページでない・分からなければ null）。 */
   recordingSec: number | null;
+  /** 入れられるフォルダ（上の段のページ）。渡さなければ「フォルダ」の節を出さない。 */
+  folders?: { id: string; title: string }[];
+  /** フォルダへ入れられなかったときの一言。 */
+  folderNote?: string | null;
+  /** フォルダを選んだ（`null` は上の段へ出す）。 */
+  onFolder?: (parent: string | null) => void;
   /** 「ページ設定」の節を開いているか（閉じると見出しに「自分だけ」）。 */
   open: boolean;
   onToggle: () => void;
@@ -62,6 +68,8 @@ export type InfoPanelProps = {
 /**
  * 情報パネル（右のレール。設計 §5.4 のうち今つなげるもの）。見た目は niho-docs-ui の ShellRail・ShellPageSettings。
  * - 公開: 発信先・カテゴリ・関連する体験・公開ボタンは出さない（公開の配線が無い間は、いつも「自分だけ」。節を閉じると見出しに出る）。
+ * - フォルダ: フォルダ＝子を持てるふつうのページ。選ぶとそのフォルダへ入れ、「フォルダに入れない」で上の段へ出す
+ *   （`PATCH /api/pages/{id}/parent`。本文・revision は変わらない）。入れられなかったときは下に一言。
  * - 言語: 変えるとページの言語を保存する（PageEditor の自動保存。届かなければ前の言語に戻り、言語の下に一言）。
  * - 著者: ログイン中の人の名前。肩書（NIHO の役割）はまだ取れないので出さない。
  * - ページ: 作成・更新（日付）・録音（録音ページの長さ）・文字数（ja は文字数・en は語数）。
@@ -69,7 +77,7 @@ export type InfoPanelProps = {
  * - ページを削除: 「…」の削除と同じ確認のダイアログを開く。
  * 手順・「AIと作る」の節はまだ出さない。
  */
-export function InfoPanel({ summary, page, author, recordingSec, open, onToggle, onExportMarkdown, onDelete }: InfoPanelProps) {
+export function InfoPanel({ summary, page, author, recordingSec, folders, folderNote, onFolder, open, onToggle, onExportMarkdown, onDelete }: InfoPanelProps) {
   const text = page?.text ?? null;
   const store = useMemo(() => countStore(text), [text]);
   const counts = useSyncExternalStore(store.subscribe, store.get, noCounts);
@@ -78,6 +86,7 @@ export function InfoPanel({ summary, page, author, recordingSec, open, onToggle,
     <ShellRail label="このページの設定">
       <ShellRailSection title="ページ設定" summary={RAIL_SUMMARY} open={open} onToggle={onToggle}>
         <ShellPageSettings
+          folder={folders && onFolder ? { value: summary.parent, options: folders, note: folderNote ?? undefined, onPick: onFolder } : undefined}
           lang={lang}
           onLang={page?.setLang}
           langNote={page?.langNote ?? undefined}

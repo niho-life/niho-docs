@@ -125,6 +125,26 @@ export async function savePageRequest(id: string, body: PageBody, options: SaveR
   return revision;
 }
 
+/**
+ * ページをフォルダへ入れる・出す（`parent` に `null` で上の段へ）。本文・revision は変わらない。
+ * 段が深くなりすぎる・自分の中へ入れる移動は PageRequestError（409。何も保存されていない）。
+ */
+export async function movePageRequest(id: string, parent: string | null): Promise<void> {
+  await send(`/api/pages/${encodeURIComponent(id)}/parent`, "PATCH", { parent });
+}
+
+/**
+ * ページの今の中身（題名・本文・revision・言語）。手順の worker がサブページの本文を入れ替えたあと、開いている
+ * エディタを今の内容で開き直すために読む（#37）。自分のページでなければ・無ければ PageRequestError(404)。
+ */
+export async function readPageRequest(id: string): Promise<ConflictPage> {
+  const response = await fetch(`/api/pages/${encodeURIComponent(id)}`, { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) throw new PageRequestError(response.status);
+  const page = conflictPageOf(await response.json().catch(() => null));
+  if (!page) throw new PageRequestError(500);
+  return page;
+}
+
 /** 一覧の続き（cursor は前の応答の next）。 */
 export async function listPagesRequest(cursor: string): Promise<PageChunk> {
   const response = await fetch(`/api/pages?limit=${PAGE_CHUNK}&cursor=${encodeURIComponent(cursor)}`, { credentials: "same-origin", cache: "no-store" });
