@@ -14,7 +14,7 @@ export default defineConfig({
     server: {
       deps: {
         // TypeScript のままの packages（install-links で node_modules に複製）を Vite で変換する
-        inline: ["@niho/docs-core", "@niho/editor-store", "niho-docs-ui", "niho-ui"],
+        inline: ["@niho/docs-core", "@niho/editor-publish", "@niho/editor-publish-contract", "@niho/editor-store", "niho-docs-ui", "niho-ui"],
       },
     },
   },
