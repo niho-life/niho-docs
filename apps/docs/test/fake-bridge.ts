@@ -41,6 +41,7 @@ import type {
   Bridge,
   DeepgramRequest,
   CommandError,
+  DocsCapabilities,
   DocsDriveConnection,
   DocsDriveExportRequest,
   DocsDriveExportResult,
@@ -296,6 +297,8 @@ export type ChatScript = (request: ChatTurnRequest, call: number, stored: Staged
 export type FakeFlowIndex = { version: 1; order: string[]; lastUsed: string | null };
 
 export class FakeBridge implements Bridge {
+  /** 端末の機能。未設定は旧い画面（#45 の新しい editor の画面は `editorShell: true` のときだけ出る）。 */
+  capabilities: DocsCapabilities | undefined = undefined;
   importSampleUrl(flowId: string, url: string) { return importSampleUrl(this, flowId, url); }
   audioSourceUrl(path: string) { return `asset://localhost/${encodeURIComponent(path)}`; }
   pageShares = new Map<string, DocsPageShareState>();

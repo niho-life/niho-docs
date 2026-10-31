@@ -49,6 +49,16 @@ else
   log "AI: off (the newest version of $SECRET_ANTHROPIC_KEY is missing or not enabled)"
 fi
 
+# Transcription (#36): same rule as AI (set-transcribe-key.sh). Without the key the engine stays off; the VTT import,
+# which needs no engine, keeps working.
+tr=0
+if transcribe_key_ready; then
+  tr=1
+  log "transcription: on (deepgram${TRANSCRIBE_TIMEOUT_SEC:+, timeout ${TRANSCRIBE_TIMEOUT_SEC}s})"
+else
+  log "transcription: off (the newest version of $SECRET_DEEPGRAM_KEY is missing or not enabled)"
+fi
+
 if [[ $build -eq 1 ]]; then
   log "build $IMAGE:$TAG (Cloud Build)"
   gcp builds submit --config scripts/editor-deploy/cloudbuild.yaml --substitutions="_IMAGE=$IMAGE,_TAG=$TAG" .
@@ -78,8 +88,8 @@ gcp run deploy "$SERVICE" \
   --cpu 1 --memory 512Mi --cpu-boost --concurrency 40 --timeout 300 \
   --add-cloudsql-instances "$CONNECTION" \
   --network "$VPC_NETWORK" --subnet "$VPC_SUBNET" --vpc-egress private-ranges-only \
-  --set-secrets "$(service_secrets "$ai")" \
-  --set-env-vars "$(service_env_vars "$ai")$(steps_env_vars)" \
+  --set-secrets "$(service_secrets "$ai" "$tr")" \
+  --set-env-vars "$(service_env_vars "$ai" "$tr")$(steps_env_vars)" \
   --labels "$COST_LABEL,commit=${TAG:0:12}"
 
 # 一度でも特定の revision へ traffic を割り当てる（docs/ops/editor-deploy.md §9 の戻し方）と、Cloud Run は以降のデプロイもその割り当てを

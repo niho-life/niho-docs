@@ -520,4 +520,20 @@ describe("ページの部品", () => {
     expect(file).toContain("dinner-1029.m4a");
     expect(file).toContain("文字起こしをはじめる");
   });
+
+  it("録音から: 取り込める形式の一言と主ボタンの文言は、呼ぶ側が替えられる（渡さなければ今まで通り。#36 段 3b-1）", () => {
+    const base = { onHow: noop, background: "", onBackground: noop, people: [], terms: "", next: "none" as const, onNext: noop, onStart: noop };
+    const hinted = renderToStaticMarkup(<RecordingStart {...base} how="file" fileHint=".m4a .mp3 .wav .aac .ogg .flac .webm、文字起こし済みの .vtt も" startLabel="取り込む" />);
+    expect(hinted).toContain(".m4a .mp3 .wav .aac .ogg .flac .webm、文字起こし済みの .vtt も");
+    expect(hinted).toContain(">取り込む</button>");
+    expect(hinted).not.toContain("文字起こしをはじめる");
+    const stopping = renderToStaticMarkup(<RecordingStart {...base} how="mic" startLabel="止める" />);
+    expect(stopping).toContain(">止める</button>");
+    expect(stopping).not.toContain("録音をはじめる");
+    // 選んだファイルがあれば、一言ではなくファイルを出す
+    const chosen = renderToStaticMarkup(<RecordingStart {...base} how="file" fileHint="一言" file={{ name: "録音 2030-01-02 09-05.webm", detail: "00:12 · 96 KB" }} />);
+    expect(chosen).toContain("録音 2030-01-02 09-05.webm");
+    expect(chosen).not.toContain("一言");
+    expect(unlabeledButtons(hinted + stopping + chosen)).toEqual([]);
+  });
 });

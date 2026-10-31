@@ -146,3 +146,165 @@ describe("GCS storage: readObject (identity encoding, header-only timeout)", () 
     expect(await readAll(opened!.body)).toEqual([7, 8]);
   });
 });
+
+// 範囲の読み取り（録音の再生 #36 段 3b-2）。中身は位置が分かる並び（i 番目のバイトが i）
+const SEQUENCE = Uint8Array.from({ length: 10 }, (_, index) => index);
+
+describe("fake storage: readObject with a range (#36 段 3b-2)", () => {
+  async function storageWith(bytes: Uint8Array) {
+    const storage = createFakeStorage();
+    const ticket = await storage.startUpload({ objectPath: OBJECT, contentType: "audio/mp4", sizeBytes: bytes.byteLength, origin: null });
+    expect(storage.putFakeObject(ticket.url.split("/").pop()!, bytes, "audio/mp4")).toBe("ok");
+    return storage;
+  }
+
+  it("slices the head, the middle and the tail, and reports the range and the whole size", async () => {
+    const storage = await storageWith(SEQUENCE);
+    const head = await storage.readObject(OBJECT, { range: { start: 0, end: 0 } });
+    expect(head).toMatchObject({ sizeBytes: 1, range: { start: 0, end: 0 }, totalBytes: 10, contentType: "audio/mp4" });
+    expect(await readAll(head!.body)).toEqual([0]);
+    const middle = await storage.readObject(OBJECT, { range: { start: 2, end: 5 } });
+    expect(middle).toMatchObject({ sizeBytes: 4, range: { start: 2, end: 5 }, totalBytes: 10 });
+    expect(await readAll(middle!.body)).toEqual([2, 3, 4, 5]);
+    const tail = await storage.readObject(OBJECT, { range: { start: 7, end: 9 } });
+    expect(await readAll(tail!.body)).toEqual([7, 8, 9]);
+  });
+
+  it("cuts the end at the end of the object, and refuses a start at or past the end", async () => {
+    const storage = await storageWith(SEQUENCE);
+    const over = await storage.readObject(OBJECT, { range: { start: 8, end: 100 } });
+    expect(over).toMatchObject({ sizeBytes: 2, range: { start: 8, end: 9 }, totalBytes: 10 });
+    expect(await readAll(over!.body)).toEqual([8, 9]);
+    for (const range of [
+      { start: 10, end: 10 },
+      { start: 11, end: 20 },
+    ]) {
+      await expect(storage.readObject(OBJECT, { range })).rejects.toMatchObject({ code: "range_not_satisfiable" });
+    }
+    // 形の違う範囲は呼び出し側の誤り（rejected）
+    for (const range of [
+      { start: 5, end: 2 },
+      { start: -1, end: 2 },
+      { start: 0.5, end: 2 },
+    ]) {
+      await expect(storage.readObject(OBJECT, { range })).rejects.toMatchObject({ code: "rejected" });
+    }
+    expect(await storage.readObject("audio/6f1d0d7c-6f6c-4c39-9a52-000000000000", { range: { start: 0, end: 1 } })).toBeNull();
+  });
+
+  it("reads without a range exactly as before (no range or whole size in the answer)", async () => {
+    const storage = await storageWith(SEQUENCE);
+    const whole = await storage.readObject(OBJECT);
+    expect(Object.keys(whole!).sort()).toEqual(["body", "contentType", "sizeBytes"]);
+    expect(await readAll(whole!.body)).toEqual([...SEQUENCE]);
+  });
+});
+
+describe("GCS storage: readObject with a range (#36 段 3b-2)", () => {
+  const make = (...responses: Parameters<typeof fakeFetch>) => {
+    const fetched = fakeFetch(...responses);
+    return { storage: createGcsStorage({ bucket: BUCKET, fetch: fetched.fetch, accessToken: async () => TOKEN }), calls: fetched.calls };
+  };
+
+  it("sends Range: bytes=start-end with the same GET, and reads the served range and the whole size from Content-Range of a 206", async () => {
+    const { storage, calls } = make(
+      new Response(SEQUENCE.slice(2, 6), { status: 206, headers: { "content-range": "bytes 2-5/10", "content-length": "4", "content-type": "audio/mp4" } }),
+    );
+    const opened = await storage.readObject(OBJECT, { range: { start: 2, end: 5 } });
+    expect(calls[0]!.url).toBe(`${GCS_JSON_BASE}${BUCKET}/o/${encodeURIComponent(OBJECT)}?alt=media`);
+    expect(calls[0]!.init.redirect).toBe("error");
+    expect(calls[0]!.init.headers).toEqual({ Authorization: `Bearer ${TOKEN}`, "Accept-Encoding": "identity", Range: "bytes=2-5" });
+    expect(opened).toMatchObject({ sizeBytes: 4, range: { start: 2, end: 5 }, totalBytes: 10, contentType: "audio/mp4" });
+    expect(await readAll(opened!.body)).toEqual([2, 3, 4, 5]);
+  });
+
+  it("accepts a 206 whose end is cut at the end of the object, and a large object past 2 GiB", async () => {
+    const cut = make(new Response(SEQUENCE.slice(8), { status: 206, headers: { "content-range": "bytes 8-9/10" } }));
+    expect(await cut.storage.readObject(OBJECT, { range: { start: 8, end: 100 } })).toMatchObject({ sizeBytes: 2, range: { start: 8, end: 9 }, totalBytes: 10 });
+    const big = 3 * 1024 * 1024 * 1024;
+    const large = make(new Response(new Uint8Array(2), { status: 206, headers: { "content-range": `bytes 2147483648-2147483649/${big}`, "content-length": "2" } }));
+    const opened = await large.storage.readObject(OBJECT, { range: { start: 2147483648, end: 2147483649 } });
+    expect(large.calls[0]!.init.headers).toMatchObject({ Range: "bytes=2147483648-2147483649" });
+    expect(opened).toMatchObject({ sizeBytes: 2, range: { start: 2147483648, end: 2147483649 }, totalBytes: big });
+  });
+
+  it("treats a 200 as the whole object (the range was ignored)", async () => {
+    const { storage } = make(new Response(SEQUENCE, { status: 200, headers: { "content-length": "10", "content-type": "audio/mp4" } }));
+    const opened = await storage.readObject(OBJECT, { range: { start: 2, end: 5 } });
+    expect(opened).toMatchObject({ sizeBytes: 10, range: { start: 0, end: 9 }, totalBytes: 10 });
+    expect(await readAll(opened!.body)).toEqual([...SEQUENCE]);
+    // 空の object には範囲が無い
+    const empty = make(new Response(new Uint8Array(0), { status: 200, headers: { "content-length": "0" } }));
+    await expect(empty.storage.readObject(OBJECT, { range: { start: 0, end: 0 } })).rejects.toMatchObject({ code: "range_not_satisfiable" });
+  });
+
+  it("maps 416 to range_not_satisfiable and 404 to null, without leaking the token, the bucket or the path", async () => {
+    try {
+      await make(new Response(`no range for ${BUCKET}/${OBJECT}`, { status: 416, headers: { "content-range": "bytes */10" } })).storage.readObject(OBJECT, { range: { start: 10, end: 12 } });
+      throw new Error("expected a failure");
+    } catch (error) {
+      expectNoSecrets(error);
+      expect((error as StorageError).code).toBe("range_not_satisfiable");
+    }
+    expect(await make(new Response("missing", { status: 404 })).storage.readObject(OBJECT, { range: { start: 0, end: 1 } })).toBeNull();
+    // 範囲を求めていない 416 は今までどおり rejected
+    await expect(make(new Response("x", { status: 416 })).storage.readObject(OBJECT)).rejects.toMatchObject({ code: "rejected" });
+  });
+
+  it("does not trust a 206 whose range or length differs from the request, and cancels its body", async () => {
+    const untrusted: Record<string, string>[] = [
+      { "content-range": "bytes 0-3/10" },
+      { "content-range": "bytes 2-4/10" },
+      { "content-range": "bytes 2-5/*" },
+      { "content-range": "bytes */10" },
+      { "content-range": "bytes 2-5/5" },
+      { "content-range": "items 2-5/10" },
+      { "content-range": "bytes 2-5/10", "content-length": "9" },
+      {},
+    ];
+    for (const headers of untrusted) {
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          cancelled = true;
+        },
+      });
+      try {
+        await make(new Response(body, { status: 206, headers })).storage.readObject(OBJECT, { range: { start: 2, end: 5 } });
+        throw new Error("expected a failure");
+      } catch (error) {
+        expectNoSecrets(error);
+        expect((error as StorageError).code, JSON.stringify(headers)).toBe("unavailable");
+      }
+      expect(cancelled, JSON.stringify(headers)).toBe(true);
+    }
+    // 範囲を求めて 200・206 以外の 2xx も信じない
+    await expect(make(new Response(null, { status: 204 })).storage.readObject(OBJECT, { range: { start: 0, end: 1 } })).rejects.toMatchObject({ code: "unavailable" });
+  });
+
+  it("refuses a malformed range before asking, and keeps the same failure mapping (403 unavailable, 400 rejected)", async () => {
+    const none = make();
+    await expect(none.storage.readObject(OBJECT, { range: { start: 3, end: 1 } })).rejects.toMatchObject({ code: "rejected" });
+    expect(none.calls).toHaveLength(0);
+    for (const [response, code] of [
+      [new Response(`denied ${TOKEN}`, { status: 403 }), "unavailable"],
+      [new Response("bad", { status: 400 }), "rejected"],
+      [new Error(`connect failed ${TOKEN} ${BUCKET}`), "unavailable"],
+    ] as const) {
+      try {
+        await make(response).storage.readObject(OBJECT, { range: { start: 0, end: 1 } });
+        throw new Error("expected a failure");
+      } catch (error) {
+        expectNoSecrets(error);
+        expect((error as StorageError).code).toBe(code);
+      }
+    }
+  });
+
+  it("does not add a Range header, a range or a whole size when no range is asked (the existing reads)", async () => {
+    const { storage, calls } = make(new Response(BYTES, { status: 200, headers: { "content-length": "5" } }));
+    const opened = await storage.readObject(OBJECT);
+    expect(calls[0]!.init.headers).toEqual({ Authorization: `Bearer ${TOKEN}`, "Accept-Encoding": "identity" });
+    expect(Object.keys(opened!).sort()).toEqual(["body", "contentType", "sizeBytes"]);
+  });
+});

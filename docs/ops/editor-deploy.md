@@ -12,7 +12,7 @@
 | Cloud Run ジョブ | `niho-editor-migrate` | 配備のたびに 1 回。migration の適用と、アプリ用ロールの作成・権限付与 |
 | Cloud SQL | 既存の共有インスタンスに データベース `niho_editor` | ロール 2 つ: `niho_editor_migrate`（表の所有者。migrate ジョブだけが使う）と `niho_editor_app`（DML だけ。DDL と migration の記録の書き換えは不可） |
 | GCS | 資産バケット（private） | 均一なバケットレベルのアクセス、公開アクセス禁止。実行 ID は作成と閲覧だけ（削除・上書き不可） |
-| Secret Manager | `niho-editor-database-url`（アプリ）、`niho-editor-migrate-database-url`（migrate）、`niho-editor-anthropic-key`（AI の鍵） | アプリは自分の URL と AI の鍵だけ読める。migrate ジョブは DB の 2 つを読む（アプリ用ロールを作るため）。AI の鍵の版はオーナーが入れる（§10） |
+| Secret Manager | `niho-editor-database-url`（アプリ）、`niho-editor-migrate-database-url`（migrate）、`niho-editor-anthropic-key`（AI の鍵）、`niho-editor-deepgram-key`（文字起こしの鍵） | アプリは自分の URL と AI の鍵だけ読める。migrate ジョブは DB の 2 つを読む（アプリ用ロールを作るため）。AI の鍵の版はオーナーが入れる（§10） |
 | サービスアカウント | `niho-editor-runner`（画面）、`niho-editor-migrate`（ジョブ） | 別々にして、画面からは表の所有者の資格情報に届かないようにする |
 | Artifact Registry | `niho-editor`（Docker） | 配備の image。直近 5 個だけ残す |
 | Cloud Build | — | `scripts/editor-deploy/cloudbuild.yaml` で web と migrate の 2 つの image を 1 回で作る |
@@ -29,7 +29,11 @@
 | --- | --- | --- |
 | `EDITOR_AUTH_MODE` | `niho` | 本番は `niho` 以外だと起動しない（[apps/editor-web/README.md](../../apps/editor-web/README.md)） |
 | `EDITOR_ORIGIN` | `https://<APP_DOMAIN>` | 更新系の要求の `Origin` 検査。独自ドメインが無いうちは `run.app` の URL |
-| `EDITOR_ASSETS_BUCKET` | 資産バケット名 | アプリはまだ読まない（画像と音声は #33 以降） |
+| `EDITOR_STORAGE` | `gcs` | 資産の保存先。**毎回渡す**。未設定は本番で `off` の扱いになり、画像と音声の API が 503 `storage_unavailable` を返す（`apps/editor-web/src/storage/config.ts`） |
+| `EDITOR_ASSETS_BUCKET` | 資産バケット名 | 画像（#33）と音声（#36）の実体。実行 ID はこのバケットに作成と閲覧だけできる |
+| `EDITOR_TRANSCRIBE_ENGINE` | `deepgram` | 文字起こしのエンジン。`niho-editor-deepgram-key` に有効な版があるときだけ渡す（§12） |
+| `DEEPGRAM_API_KEY` | Secret | 同上 |
+| `EDITOR_TRANSCRIBE_TIMEOUT_SEC` | `TRANSCRIBE_TIMEOUT_SEC` | 同上。任意。空ならアプリの既定（1200 秒） |
 | `DATABASE_URL` | Secret | アプリ用ロール |
 | `ANTHROPIC_API_KEY` | Secret | AI の鍵。`niho-editor-anthropic-key` の最新の版が有効なときだけ渡す（§10） |
 | `EDITOR_AI_MODE` | `anthropic` | 同上。版が無ければ渡さない（AI は 503 のまま） |
@@ -47,7 +51,7 @@ migrate ジョブには `DATABASE_URL`（migrate ロール）と `EDITOR_APP_DAT
 1. API の有効化
 2. サービスアカウント 2 つと `roles/cloudsql.client`
 3. Cloud SQL にデータベース `niho_editor` と migrate ロール（アプリ用ロールは migrate ジョブが作る）
-4. Secret 3 つと、読める人の限定（AI の鍵は版なしで作る。鍵はオーナーが §10 の手順で入れる）
+4. Secret 4 つと、読める人の限定（AI と文字起こしの鍵は版なしで作る。鍵はオーナーが §10・§12 の手順で入れる）
 5. Artifact Registry（直近 5 個だけ残す）
 6. 資産バケット（private）
 7. 手順の実行基盤（`scripts/editor-deploy/steps-infra.sh`。§11）
@@ -219,3 +223,34 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 ### 制約
 
 - 1 つの段階は 1 回の要求。今の `deploy.sh` の Cloud Run の要求の上限（`--timeout 60`）を超える段階は途中で切れる（Cloud Tasks が再試行し、lease が切れれば掃除が拾う）。偽物の実行器はすぐ終わるので今は当たらない。本物の実行器をつなぐ段で、段階の長さに合わせて上げる（上限は task の 30 分）。
+
+## 12. 文字起こし（#36）
+
+録音の音声をサーバー側で文字起こしする。エンジンは Deepgram（`apps/editor-web/src/transcription/deepgram.ts`）。
+
+> **いまは本番で音声からの文字起こしができません。** 呼び出し口（dispatcher）が本番に無いためです:
+> `apps/editor-web/src/transcription/dispatch.ts` の `resolveDispatcherKind()` は `NODE_ENV=production` で必ず `null` を返し
+> （inline は開発と CI だけ）、`getTranscriptionRunner()` も `null` になります。**鍵を入れても、起こす処理は動きません**（開始は 503）。
+> 手順（#37）と同じ Cloud Tasks の呼び出し口を足すのが残りの作業で、Issue #36 に残しています。
+> この節は**鍵を入れる所まで**の手順です。鍵は先に入れておいても害がなく（版が有効でも呼び出し口が無ければ起こせないだけ）、
+> 呼び出し口が入った配備で、そのまま有効になります。鍵は Secret Manager の `niho-editor-deepgram-key` に置き、画面の実行 ID（`niho-editor-runner`）だけが読める。**Secret に版が無い、または最新の版が無効なあいだ、エンジンは閉じたまま**（文字起こしの開始は 503）。`deploy.sh` は配備のたびに最新の版の状態を見て、有効なときだけ鍵と環境変数を足す（ログに `transcription: on` / `transcription: off`）。
+
+**VTT の取り込みは鍵を必要としません。** 既に文字起こし済みのファイルを持ち込む経路は、エンジンが閉じていても動きます。鍵が要るのは音声から起こすときだけです。
+
+鍵の扱いは AI（§10）と同じ規則です。**鍵は公開リポジトリ・Issue・PR・チャット・ログ・シェルの履歴に出さない。** 入れる経路は `set-transcribe-key.sh` だけ（標準入力から読み、画面・ファイル・コマンドラインに出さない。引数では受け付けない）。
+
+### 有効にする
+
+1. （初回だけ）`scripts/editor-deploy/gcp-bootstrap.sh resources` — Secret `niho-editor-deepgram-key` を版なしで作り、実行 ID に `roles/secretmanager.secretAccessor` を付ける。
+2. Deepgram の Console で、この用途だけの API キーを作る（使用上限も付けておくと歯止めになる）。
+3. `scripts/editor-deploy/set-transcribe-key.sh` — 端末で実行すると、入力を画面に出さずに鍵を求める。パスワード管理の CLI から渡すときは `<鍵を出すコマンド> | scripts/editor-deploy/set-transcribe-key.sh`。
+4. `scripts/editor-deploy/deploy.sh --no-build` — `DEEPGRAM_API_KEY`（Secret の `latest`）と `EDITOR_TRANSCRIBE_ENGINE=deepgram` が付く。
+5. （呼び出し口が入ったあと）短い音声を 1 つ起こして、段落と話者が出ることを確かめる。
+
+### 無効にする・回す
+
+AI（§10）と同じ手順です。版を無効にして `deploy.sh --no-build`（ログに `transcription: off`）。回すときは新しい版を足して配備し、古い版を無効にします。
+
+### 時間切れと費用
+
+1 回の文字起こしの時間切れは `TRANSCRIBE_TIMEOUT_SEC`（空ならアプリの既定 1200 秒＝20 分。60〜3300 秒）。音声の長さと容量の上限は `apps/editor-web/src/recording/audio-limits.ts` にあり、超えたら保存の前に断ります。クラウドに置いた音声は 30 日で消えます（バケットのライフサイクル規則）。請求の正は Deepgram の Console です。

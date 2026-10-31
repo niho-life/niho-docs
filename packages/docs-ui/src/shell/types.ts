@@ -71,6 +71,7 @@ export type ShellIconName =
   | "people"
   | "gear"
   | "play"
+  | "pause"
   | "doc"
   | "cal"
   | "type"

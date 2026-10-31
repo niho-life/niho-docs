@@ -31,6 +31,21 @@ npm -C apps/docs run dev:fake        # 偽の claude・codex・agy と偽の nih
 - 開発・試験の起動（`dev`・`dev:fake` の debug ビルドと、上の環境変数で CLI・音声認識を差し替えた起動）は、文書作成用のデータを本番と分ける: app data は `~/Library/Application Support/life.niho.docs.dev`（設定・アプリ用の CODEX_HOME・ログ `logs/local-ai.log`）、保存先の既定は `~/Documents/NIHO docs dev`、API キーはその app data の `api-keys/`（以前の版の鍵を移すときは Keychain の `life.niho.docs.dev.api-key` を読む）、窓の題名は「NIHO docs（開発版）」、自動更新はしない。場所を決めたいときは `NIHO_DOCS_DATA_DIR`・`NIHO_DOCS_ROOT`。本番の窓と同時に開いても、本番の AI 接続・設定・案件に書かない。NIHO アカウントの接続は次節のとおり共有する。クラウドの保管庫は本番のアカウントのものなので、開発・試験の起動では同期しない（設定の「クラウド」は理由を返す）。試すときだけ `NIHO_DOCS_CLOUD=1` を付けて起動する（試験の案件が本人の保管庫に上がる）。
 - `dev:fake` の偽物: `codex` は状態の確認とログインだけ（ログインの印は app data の `codex-home/` に置く。工程の実行は失敗で返す）。`agy` は状態・`/usage`・工程の 1 往復・区切りの文字起こし（偽の niho-speech の `slice` が書いた範囲を返す）。`sidecar/fake/.agy-logged-out` を置くと未ログインとして振る舞う。
 
+### 新しい editor の画面（#45 第 1 段）
+
+`editor.niho.life` と同じ shell の枠・同じ本文のエディタ（限定 AST・「/」・書式の帯・囲み）で、保管庫のページを一覧して書く画面。
+**既定は今までの画面**で、環境変数を立てたときだけ出る（利用者のデータと権限は今までのまま。bundle identifier・deep link・保存先・配布物の名前は変えない）。
+
+```sh
+VITE_NIHO_DOCS_EDITOR_SHELL=true npm -C apps/docs run dev:fake
+```
+
+- 本文の正本はこの Mac の保管庫の既存の口（Rust の `open_page_document` / `save_opened_document`）。editor にフォルダは無いので、
+  **フォルダの外**の空間（保存先直下の `pages.json` と `pages/<id>.md`）だけを使う。旧い画面のフォルダには触らない。
+- 保管庫は Markdown、エディタは限定 AST なので `niho-docs-ui/page` の往復を通す。表・コード・画像・やることのリストなど
+  限定 AST の外の要素があるページは、**黙って欠けさせず開かずに知らせる**（移行は #45 第 2 段）。
+- まだ無いもの: 公開のシート・発信先・情報パネル・手順の帯・AI・録音・本文の画像・版と履歴・⌘K の全文検索（一覧の題名の絞り込みだけ）。
+
 ### NIHO アカウント（L5 #18557）
 
 - 設定 › 接続設定の「NIHO アカウント」の丸ボタンから接続する。ログインは任意で、未ログインでも文書作成・工程・AI 接続を使える。

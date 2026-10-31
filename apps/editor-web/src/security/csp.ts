@@ -6,11 +6,16 @@
  * - **style は `'self' 'unsafe-inline'`**。TipTap(ProseMirror) が実行時に nonce の無い `<style>` を注入し、
  *   共有の docs-ui が `style=""` 属性を SSR で出すため。XSS で致命的なのは script なので、style の緩和は許容している。
  *   絞るには docs-ui 側で TipTap の `injectNonce` を渡し、`style=""` を class に置き換える必要がある。
- * - 外部 origin を許さない（`default-src 'self'`）。画像・音声を GCS の署名付き URL から読む段階（#33・#36）で、
- *   その origin だけを `img-src` / `media-src` に足す。
+ * - 外部 origin を許さない（`default-src 'self'`）。例外は `connect-src` の GCS（`https://storage.googleapis.com`）だけで、
+ *   録音の音声をブラウザから保存先の resumable upload のセッション URI へ直接 PUT するため（#36 段 3b-1）。
+ *   音声の再生（#36 段 3b-2）は、同じ origin の route（`/api/pages/{id}/recording/audio`）がサーバーで保存先から読み出して流す
+ *   （署名付き URL を使わない）ので、`media-src` は `'self' blob:` のまま変えない。
  * - 開発（`next dev`）だけ、React の debug 用の `unsafe-eval` と HMR の WebSocket を許す。本番にはどちらも入れない。
  */
 export type CspOptions = { nonce: string; dev: boolean };
+
+/** 録音の音声を PUT する保存先の origin（GCS の resumable upload のセッション URI。src/storage/gcs.ts と同じ）。 */
+export const AUDIO_UPLOAD_ORIGIN = "https://storage.googleapis.com";
 
 export function buildCsp({ nonce, dev }: CspOptions): string {
   const directives = [
@@ -19,7 +24,7 @@ export function buildCsp({ nonce, dev }: CspOptions): string {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self'",
-    `connect-src 'self'${dev ? " ws: wss:" : ""}`,
+    `connect-src 'self' ${AUDIO_UPLOAD_ORIGIN}${dev ? " ws: wss:" : ""}`,
     "media-src 'self' blob:",
     "manifest-src 'self'",
     "worker-src 'self'",

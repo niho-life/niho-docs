@@ -38,6 +38,27 @@ export {
   type SharedPage,
 } from "./shares.ts";
 export { DUPLICATE_TITLE_SUFFIX, duplicatePage, duplicateTitle, type DuplicatedPage } from "./duplicate.ts";
+export {
+  DEFAULT_EDITOR_SETTINGS,
+  SETTINGS_AI_LANGS,
+  SETTINGS_ID_PATTERN,
+  SETTINGS_LIMITS,
+  cleanSettingsPatch,
+  getEditorSettings,
+  isSettingsAiLang,
+  isSettingsRecipe,
+  isSettingsStep,
+  isSettingsTerm,
+  saveEditorSettings,
+  settingsProblem,
+  type EditorSettings,
+  type EditorSettingsPatch,
+  type SettingsAiLang,
+  type SettingsProblem,
+  type SettingsRecipe,
+  type SettingsStep,
+  type SettingsTerm,
+} from "./settings.ts";
 export * from "./step-runs.ts";
 export {
   InvalidRecordingError,

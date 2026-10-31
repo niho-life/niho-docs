@@ -93,6 +93,12 @@ resources() {
   gcp secrets add-iam-policy-binding "$SECRET_ANTHROPIC_KEY" \
     --member "serviceAccount:$RUNNER_SA_EMAIL" --role roles/secretmanager.secretAccessor > /dev/null
 
+  log "transcription key secret (#36): created without a version; the owner adds the key with set-transcribe-key.sh (no version = the engine stays off)"
+  ensure_secret "$SECRET_DEEPGRAM_KEY"
+  # Only the web service reads it (the migration job does not).
+  gcp secrets add-iam-policy-binding "$SECRET_DEEPGRAM_KEY" \
+    --member "serviceAccount:$RUNNER_SA_EMAIL" --role roles/secretmanager.secretAccessor > /dev/null
+
   log "Cloud Build: the build runs as the compute default service account; it reads the source tarball"
   gcp storage buckets add-iam-policy-binding "gs://${GCP_PROJECT}_cloudbuild" \
     --member "serviceAccount:$number-compute@developer.gserviceaccount.com" \

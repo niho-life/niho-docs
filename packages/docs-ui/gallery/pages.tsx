@@ -2,7 +2,10 @@ import { useState, type ReactNode } from "react";
 import {
   AccountPage,
   DestinationsPage,
+  EditorDestinationsPage,
+  EditorSettingsPage,
   EditorShell,
+  EditorSitePage,
   LoginScreen,
   PublishPreview,
   PublishSheet,
@@ -10,6 +13,11 @@ import {
   ShellHeader,
   SitePage,
   type AccountLink,
+  type EditorAddSiteDraft,
+  type EditorDestinationMode,
+  type EditorSettingsAiLang,
+  type EditorSettingsRecipe,
+  type EditorSettingsTermDraft,
   type SettingsAiLang,
   type SettingsEngine,
   type SettingsSaveTo,
@@ -140,6 +148,168 @@ export function AccountDemo({ forced }: { forced: PagesForced }) {
         links={links}
         onAccept={() => setPending(false)}
         onDecline={() => setPending(false)}
+      />
+    </SettingsFrame>
+  );
+}
+
+/** 既定の 3 つの手順（editor-web の DEFAULT_RECIPES と同じ並び。中身は短い合成の値）。 */
+const WEB_RECIPES: EditorSettingsRecipe[] = [
+  { id: "tpl-1", name: "記事制作", guide: "## 構成\n見出しを 4〜6 本。", steps: [
+    { id: "k7m2q9xa", name: "文字起こし修正", instruction: "読みやすい文字起こし修正版に整える。" },
+    { id: "r4t8wz3c", name: "記事方針", instruction: "論点ごとの見出しを立てる。" },
+    { id: "h2n6v5pe", name: "記事本文", instruction: "方針のとおりに本文を書く。" },
+  ], isDefault: true, modified: false },
+  { id: "tpl-2", name: "議事録", guide: "", steps: [
+    { id: "d9c3x7mf", name: "議事録", instruction: "決まったことと宿題を並べる。" },
+    { id: "w5q1j8ks", name: "共有用の要約", instruction: "3 行にまとめる。" },
+  ], isDefault: true, modified: true },
+  { id: "tpl-3", name: "インサイト整理", guide: "", steps: [{ id: "u3e7z6rh", name: "インサイト", instruction: "気づきを並べる。" }], isDefault: true, modified: false },
+  { id: "r-talk", name: "対談", guide: "二人の声を残す。", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。" }], isDefault: false, modified: false },
+];
+
+const WEB_TERMS = [
+  { term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "駅名は「北鎌倉」" },
+  { term: "円覚寺", reading: "えんがくじ", variants: [], note: "" },
+];
+
+/** 編集の下書きは、誤りやすい表記を打ったままの文字列で持つ（配列に分けるのは保存のとき）。 */
+const webTermDrafts = (): EditorSettingsTermDraft[] => WEB_TERMS.map((entry) => ({ ...entry, variants: entry.variants.join("・") }));
+
+/** editor-web の設定（#108）。開いている編集は `?terms=1` / `?recipe=tpl-1` で決める。 */
+export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: boolean; recipe?: string } }) {
+  const [aiLang, setAiLang] = useState<EditorSettingsAiLang>("same");
+  const [glossary, setGlossary] = useState(WEB_TERMS);
+  const [recipes, setRecipes] = useState(WEB_RECIPES);
+  const [termsDraft, setTermsDraft] = useState<EditorSettingsTermDraft[] | null>(forced.terms ? webTermDrafts() : null);
+  const opened = forced.recipe ? (WEB_RECIPES.find((recipe) => recipe.id === forced.recipe) ?? null) : null;
+  const [recipeDraft, setRecipeDraft] = useState<EditorSettingsRecipe | null>(opened);
+  let serial = 0;
+  return (
+    <SettingsFrame current="settings" title="設定" sidebar={forced.sidebar} pendingInvites={1}>
+      <EditorSettingsPage
+        status=""
+        busy={false}
+        aiLang={aiLang}
+        onAiLang={setAiLang}
+        glossary={glossary}
+        termsDraft={termsDraft}
+        onEditTerms={() => setTermsDraft(glossary.map((entry) => ({ ...entry, variants: entry.variants.join("・") })))}
+        onTermsDraft={setTermsDraft}
+        onCancelTerms={() => setTermsDraft(null)}
+        onSaveTerms={() => {
+          if (termsDraft) {
+            setGlossary(termsDraft.map((entry) => ({ ...entry, variants: entry.variants.split("・").map((part) => part.trim()).filter((part) => part.length > 0) })));
+          }
+          setTermsDraft(null);
+        }}
+        recipes={recipes}
+        recipeDraft={recipeDraft}
+        onEditRecipe={(id) => setRecipeDraft(recipes.find((recipe) => recipe.id === id) ?? null)}
+        onRecipeDraft={setRecipeDraft}
+        onCancelRecipe={() => setRecipeDraft(null)}
+        onSaveRecipe={() => {
+          if (recipeDraft) setRecipes(recipes.map((recipe) => (recipe.id === recipeDraft.id ? { ...recipeDraft, modified: recipe.isDefault } : recipe)));
+          setRecipeDraft(null);
+        }}
+        onDuplicateRecipe={(id) => {
+          const base = recipes.find((recipe) => recipe.id === id);
+          if (base) setRecipes([...recipes, { ...base, id: `r-copy-${recipes.length}`, name: `${base.name}のコピー`, isDefault: false, modified: false }]);
+        }}
+        onResetRecipe={(id) => setRecipes(recipes.map((recipe) => (recipe.id === id ? { ...recipe, modified: false } : recipe)))}
+        onRemoveRecipe={(id) => setRecipes(recipes.filter((recipe) => recipe.id !== id))}
+        onAddRecipe={() => setRecipes([...recipes, { id: `r-new-${recipes.length}`, name: "新しい手順", guide: "", steps: [{ id: "s-new", name: "まとめ", instruction: "" }], isDefault: false, modified: false }])}
+        newStepId={() => `s-${(serial += 1)}`}
+        usage={{ month: "2026-10", inputTokens: 128_400, outputTokens: 12_900, costUsd: 4.21, limitUsd: 5, nearLimit: true }}
+        usageNote={null}
+        transcription={{ engine: "deepgram", timeoutSec: 1200, maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30, extensions: ["m4a", "mp3", "wav", "aac", "ogg", "flac"] }}
+        storage="CLOUD"
+        limits={{ glossary: 200, recipes: 20, steps: 12 }}
+      />
+    </SettingsFrame>
+  );
+}
+
+/** editor-web の発信先（#41）。開いている追加の下書きは `?add=1`、鍵は `?key=1` で出す。 */
+export function WebDestDemo({ forced }: { forced: PagesForced & { add?: boolean; issuedKey?: boolean } }) {
+  const [draft, setDraft] = useState<EditorAddSiteDraft | null>(forced.add ? { mode: "api", handle: "mika-note", siteUrl: "https://note.mika-sato.example", path: "posts" } : null);
+  const [issued, setIssued] = useState(Boolean(forced.issuedKey));
+  return (
+    <SettingsFrame current="dest" title="発信先" sidebar={forced.sidebar} pendingInvites={1}>
+      <EditorDestinationsPage
+        status={issued ? "新しい鍵はこの 1 回だけ出ます" : ""}
+        busy={false}
+        faces={[
+          { id: "exp", label: DEST.exp.label, host: DEST.exp.host, path: DEST.exp.path, who: DEST.exp.who, role: DEST.exp.role, available: true, reason: null, published: 1 },
+          { id: "niho", label: DEST.niho.label, host: null, path: null, who: DEST.niho.who, role: DEST.niho.role, available: false, reason: "role", published: 0 },
+        ]}
+        sites={[
+          { id: "site-1", handle: "mika-sato", host: ME.site, path: "posts", mode: "api", published: 1 },
+          { id: "site-2", handle: "mika-note", host: `note.${ME.site}`, path: "", mode: "wordpress", published: 0 },
+        ]}
+        onOpenSite={() => navigate("site-web")}
+        draft={draft}
+        onAdd={() => setDraft({ mode: "api", handle: "", siteUrl: "https://", path: "" })}
+        onDraft={setDraft}
+        onCancelAdd={() => setDraft(null)}
+        onCreate={() => {
+          setDraft(null);
+          setIssued(true);
+        }}
+        issuedKey={issued ? { masked: "ek_••••••••3f9a", plaintext: "ek_this-is-a-synthetic-key-shown-once-only-0" } : null}
+        onCopyKey={() => undefined}
+        onCloseKey={() => setIssued(false)}
+      />
+    </SettingsFrame>
+  );
+}
+
+/** editor-web の自分のサイト（#41）。`?url=1`（URL の編集）・`?confirm=key|disconnect`・`?key=1`（新しい鍵）。 */
+export function WebSiteDemo({ forced }: { forced: PagesForced & { url?: boolean; confirm?: string; issuedKey?: boolean } }) {
+  const [mode, setMode] = useState<EditorDestinationMode>("api");
+  const [urlDraft, setUrlDraft] = useState<{ host: string; path: string } | null>(forced.url ? { host: ME.site, path: "posts" } : null);
+  const [confirmingKey, setConfirmingKey] = useState(forced.confirm === "key");
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState(forced.confirm === "disconnect");
+  const [issued, setIssued] = useState(Boolean(forced.issuedKey));
+  return (
+    <SettingsFrame current="dest" title={ME.site} sidebar={forced.sidebar} pendingInvites={1}>
+      <EditorSitePage
+        status=""
+        busy={false}
+        handle="mika-sato"
+        host={ME.site}
+        path="posts"
+        mode={mode}
+        apiUrl="https://api.editor.niho.life/v1/mika-sato/published.json"
+        articleUrl={`https://${ME.site}/posts/{slug}`}
+        keys={[
+          { id: "k2", masked: "ek_••••••••3f9a", createdAt: "2026-10-30T00:00:00.000Z", active: true },
+          { id: "k1", masked: "ek_••••••••1111", createdAt: "2026-10-01T00:00:00.000Z", active: false },
+        ]}
+        published={PAGES.filter((page) => isPublished(page) && page.pub?.dest === "site").map((page) => ({ pageId: page.id, title: page.title, url: urlOf(page, "site"), status: "published" as const }))}
+        urlDraft={urlDraft}
+        onBack={() => navigate("dest-web")}
+        onCopyApi={() => undefined}
+        onEditUrl={() => setUrlDraft({ host: ME.site, path: "posts" })}
+        onUrlDraft={setUrlDraft}
+        onCancelUrl={() => setUrlDraft(null)}
+        onSaveUrl={() => setUrlDraft(null)}
+        onMode={setMode}
+        onExport={() => undefined}
+        confirmingKey={confirmingKey}
+        onAskKey={() => setConfirmingKey(true)}
+        onCancelKey={() => setConfirmingKey(false)}
+        onRotateKey={() => {
+          setConfirmingKey(false);
+          setIssued(true);
+        }}
+        issuedKey={issued ? { masked: "ek_••••••••7b2c", plaintext: "ek_this-is-a-synthetic-key-shown-once-only-1" } : null}
+        onCopyKey={() => undefined}
+        onCloseKey={() => setIssued(false)}
+        confirmingDisconnect={confirmingDisconnect}
+        onAskDisconnect={() => setConfirmingDisconnect(true)}
+        onCancelDisconnect={() => setConfirmingDisconnect(false)}
+        onDisconnect={() => setConfirmingDisconnect(false)}
       />
     </SettingsFrame>
   );

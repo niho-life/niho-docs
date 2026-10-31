@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { AiUsageDelta, AiUsageTotals, Block, CreatePageInput, Page, PagePatch, PageVersionSummary, SaveOptions, SaveResult, VersionReason } from "@niho/editor-store";
+import { DEFAULT_EDITOR_SETTINGS, type AiUsageDelta, type AiUsageTotals, type Block, type CreatePageInput, type EditorSettings, type Page, type PagePatch, type PageVersionSummary, type SaveOptions, type SaveResult, type VersionReason } from "@niho/editor-store";
 import { AnthropicError, createAnthropicModel } from "../ai/anthropic";
 import { resolveAiBackend, type AiBackend } from "../ai/config";
 import type { Proposal } from "../ai/engine";
@@ -130,7 +130,7 @@ function authAs(userId: string | null): AuthProvider {
   };
 }
 
-type Options = { usage?: MemoryUsage | null; ai?: () => AiBackend | null; limitUsd?: number | null };
+type Options = { usage?: MemoryUsage | null; ai?: () => AiBackend | null; limitUsd?: number | null; settings?: EditorSettings | null };
 
 function deps(userId: string | null, store: MemoryStore | null, options: Options = {}): AiApiDeps {
   const usage = options.usage === undefined ? memoryUsage() : options.usage;
@@ -138,6 +138,7 @@ function deps(userId: string | null, store: MemoryStore | null, options: Options
     auth: () => authAs(userId),
     store: () => store,
     usage: () => (store ? usage : null),
+    settings: options.settings === undefined ? undefined : () => (options.settings === null ? null : async () => options.settings!),
     ai: options.ai ?? fake,
     limitUsd: () => options.limitUsd ?? null,
     now: () => NOW,
@@ -195,6 +196,30 @@ describe("POST /api/pages/{id}/ai/proposals", () => {
     expect(store.writes).toEqual([]);
     expect(store.versions).toEqual([]);
     expect(store.rows.get(page.id)).toEqual(before);
+  });
+
+  it("sends the 固有名詞 and the 提案の言語 from the settings (#108) to the model", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の 一")], lang: "ja" });
+    const glossary = [{ term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "合成" }];
+    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
+    const settings: EditorSettings = { aiLang: "en", glossary, recipes: [] };
+    const d = deps("user-a", store, { ai: () => stub.backend, settings });
+    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
+    expect(stub.calls[0]?.glossary).toEqual(glossary);
+    expect(stub.calls[0]?.lang).toBe("en");
+  });
+
+  it("falls back to the page's language and no 語彙 when the settings say 書いた言語のまま or cannot be read", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の 一")], lang: "ja" });
+    for (const settings of [DEFAULT_EDITOR_SETTINGS, null, undefined]) {
+      const stub = stubBackend(() => ({ edits: [], inserts: [] }));
+      const d = deps("user-a", store, { ai: () => stub.backend, settings });
+      expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
+      expect(stub.calls[0]?.glossary).toEqual([]);
+      expect(stub.calls[0]?.lang).toBe("ja");
+    }
   });
 
   it("adds the usage of every proposal to the owner's month", async () => {

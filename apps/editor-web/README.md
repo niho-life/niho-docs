@@ -52,9 +52,9 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 
 - **認証（#47）**: `NODE_ENV=production` で `EDITOR_AUTH_MODE` が `niho` でなければ（未設定を含む）起動しない。本番の入口 `scripts/server-entry.mjs` が server を読み込む前（port を開く前）に `src/auth/config.ts` で検査し、`src/instrumentation.ts`（`next start` 用）と要求ごとの方式の選択でも同じ検査をする。`next build` の途中では検査しない。`niho` は `src/auth/niho.ts` の 1 ファイルに閉じ、niho-app #19459 の契約が出るまで fail-closed（いつも未認証）。stub は cookie も token も作らない。
 - **ログイン（#32）**: `/auth/login`（枠の外の画面）、`/auth/login/start?next=`（GET）、`/auth/callback`（GET）、`/auth/logout`（POST。同じ origin でなければ 403）。route の応答は `Cache-Control: no-store`。未ログインで画面を開くと `/auth/login?next=…` へ移る（今の path は `src/proxy.ts` が header で渡すだけで、認証は読まない）。戻り先は `src/auth/return-to.ts` の `safeReturnTo` で editor の画面の path（`/`・`/p/new`・`/p/{uuid}`・`/destinations`・`/account`・`/settings` など）だけにし、それ以外（外の URL・`/auth/*`・`/api/*`）は `/`。stub はいつもログイン済みで、`/auth/login` は戻り先へ移る。
-- **画面（#32）**: 枠は `app/(editor)/layout.tsx`（niho-docs-ui の shell）。`/` はデスクトップでは最後に開いたページ（cookie `editor_last_page` の id。無い・消えたなら `/p/new`）へ移る。`/p/new` は題名か本文を入力した時点で POST して作り、`history.replaceState` で `/p/{id}` に替える（エディタは作り直さない）。`/p/new?from=recording` は開始の画面だけ。`/destinations`・`/account`・`/settings` は題名だけ。900px 以下（shell.css と同じ）では `/` が一覧の画面で、ページと設定は全画面、ヘッダーの左のボタンで一覧を出す。
+- **画面（#32）**: 枠は `app/(editor)/layout.tsx`（niho-docs-ui の shell）。`/` はデスクトップでは最後に開いたページ（cookie `editor_last_page` の id。無い・消えたなら `/p/new`）へ移る。`/p/new` は題名か本文を入力した時点で POST して作り、`history.replaceState` で `/p/{id}` に替える（エディタは作り直さない）。`/p/new?from=recording` は開始の画面だけ。`/settings` は設定（#108）、`/destinations`・`/destinations/{id}` は発信先の設定（#41。どちらも下の節）、`/account` は題名だけ。900px 以下（shell.css と同じ）では `/` が一覧の画面で、ページと設定は全画面、ヘッダーの左のボタンで一覧を出す。
 - **一覧（#32）**: 更新順（同じ時刻は id の降順）で 100 件ずつ。layout が最初の 100 件を描き、末尾が近づいたら `GET /api/pages?limit=&cursor=` で続きを読む。cursor は `<updated_at（UTC・マイクロ秒まで）>_<id>`。読み込んだ親の下に子ページを作った順で並べる。検索はサイドバーの検索入力から（下の「検索（#35）」）。
-- **CSP と HSTS（#44）**: ページの CSP は `src/proxy.ts` が要求ごとに作る nonce で付ける（`src/security/csp.ts`）。script は nonce ＋ `strict-dynamic` で、インラインの script・`unsafe-eval`・外部 origin を許さない。style だけ `'self' 'unsafe-inline'`（TipTap が実行時に nonce なしの `<style>` を注入し、共有の docs-ui が SSR で `style=""` を出すため。絞るには docs-ui 側の変更が要る）。nonce は静的な HTML に入れられないので、root layout で `connection()` を呼び全 route を要求のときに描く。`/api` は何も読み込まない固定の CSP（`default-src 'none'`）。`Strict-Transport-Security` は全応答。**画像（#33）は署名付き URL を使わずサーバーが中継する**（`/api/assets/{id}`・`/s/{token}/a/{id}`）ので、`img-src` は `'self' data: blob:` のまま変えない。音声を GCS から直に読む段階（#36 段 3）で、その origin だけを `media-src` に足す。開発（`next dev`）だけ `unsafe-eval` と HMR の WebSocket を許す。
+- **CSP と HSTS（#44）**: ページの CSP は `src/proxy.ts` が要求ごとに作る nonce で付ける（`src/security/csp.ts`）。script は nonce ＋ `strict-dynamic` で、インラインの script・`unsafe-eval`・外部 origin を許さない。style だけ `'self' 'unsafe-inline'`（TipTap が実行時に nonce なしの `<style>` を注入し、共有の docs-ui が SSR で `style=""` を出すため。絞るには docs-ui 側の変更が要る）。nonce は静的な HTML に入れられないので、root layout で `connection()` を呼び全 route を要求のときに描く。`/api` は何も読み込まない固定の CSP（`default-src 'none'`）。`Strict-Transport-Security` は全応答。**画像（#33）は署名付き URL を使わずサーバーが中継する**（`/api/assets/{id}`・`/s/{token}/a/{id}`）ので、`img-src` は `'self' data: blob:` のまま変えない。`connect-src` は `'self'` と `https://storage.googleapis.com`（録音の音声をブラウザから GCS のセッション URI へ直接 PUT するため。#36 段 3b-1）。音声は、同じ origin の `/api/pages/{id}/recording/audio` が保存先から読み出して流す（#36 段 3b-2）ので、`media-src`（`'self' blob:`）は変えない。開発（`next dev`）だけ `unsafe-eval` と HMR の WebSocket を許す。
 - **PWA（#49）**: `src/app/manifest.ts`（`/manifest.webmanifest`。`display: standalone`、`start_url: /`）、アイコンは `public/icons`（NIHO docs の `icon.svg` から `node scripts/build-icons.mjs` で作る。any 192/512、maskable 512、apple-touch 180。再生成は Chrome が要る）。`public/sw.js` は**殻だけ**: `/_next/static/` と offline 画面だけを手元に置き、圏外でページを開くと `/offline.html`（「つながっていません」）を出す。ページの HTML・`/api`・認証の絡む応答はキャッシュしない。オフライン編集は含まない（#50）。登録は本番だけ（`RegisterServiceWorker`）。インストール後も全ページ noindex。standalone の出力には `public/` が入らないので、`postbuild`（`scripts/copy-standalone-assets.mjs`）と Dockerfile で置く。
 - **API**: `GET/POST /api/pages`、`GET/PATCH /api/pages/{id}`。`GET /api/pages` は `{ pages, next }`（next が null なら終わり。ゴミ箱のページは出さない）。未認証 401、別の人・存在しない・UUID として不正な id は同じ 404、本文は 1 MiB まで（超えたら 413）、JSON でない・形が違う・読めない limit や cursor は 400、更新系は同じ origin でなければ 403。エラーの本文は短い code だけ。
 - **保存の競合**: `PATCH /api/pages/{id}` は `baseRevision`（読んだときの revision。必須）を付ける。今の revision と違えば何も書かずに 409 と今のページ（`{ error: "conflict", page }`）。自分のページでなければ revision によらず 404。「この内容で上書き」は 409 の revision を付け直し、`overwrite: true` で再送する（上書き前の本文は版に残る）。`/p/new` で作ったページは、POST の応答の revision（1）から `baseRevision` を始める。
@@ -130,11 +130,11 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **VTT**（`src/recording/vtt-import.ts`）: docs-core の `parseVtt` で検査し、cue を段落にする。`<v 話者>` は最初に出た順に 1 から番号を付け、規則に合わない名前は番号だけ。1 つの cue に別々の話者がいれば話者ごとに分ける。タグは外し、文字参照は文字に戻す。題名はファイル名（パスと拡張子を除く）、原本は SHA-256 と名前だけを持つ。
 - **上限**: VTT は UTF-8 で 4 MiB（取り込みの要求の本文は 5 MiB まで。超えたら 413）、段落は 20,000 個・1 段落 5,000 文字・本文の合計 8 MiB（docs-core の文字起こしの同期上限と同じ）、1 回の `edits` は 200 件（`PATCH` の本文は 4 MiB まで）。
 - **表**: migration `0007_page_recordings.sql`（録音ページに 1 行。ページを消す（hard delete）と消える。ゴミ箱の間は残る）。コードは `packages/editor-store/src/recordings.ts`、段落と話者の操作（純粋な関数）は `src/recording/`。
-- **まだ**: 音声の取り込み・エンジン（段 2）、マイク録音・再生・タイムスタンプの画面（段 3）。
+- 音声の取り込み・エンジンは段 2a・2b、マイク録音と文字起こしの開始の画面は段 3b-1、再生とタイムスタンプの画面は段 3b-2（下の各節）。
 - **画面（段 3a。音声に依存しない部分）**:
   - **できること**: 「録音から」（`/p/new?from=recording`）で文字起こし済みの `.vtt` を選ぶ（ドロップも可。4 MiB 超は送る前に断る）と、`importVtt` で録音ページを作って `/p/{id}` へ移る。失敗は画面に日本語で出し、選んだファイルは残す。録音ページ（`kind=rec`）は、`PageEditor` の上に文字起こし（`RecordingTranscript`）が入る。段落をその場で直して確定（フォーカスが外れたとき・Enter。変換中は確定しない）すると保存し、話者を押すと名前を変えられ、別の話者にまとめられる（確認は 1 回）。時刻の表示は端末ごとの好み（localStorage）。
   - **保存**: 書き込みは 1 本ずつ順に送り、`baseRevision` は直前の応答の revision。別の画面が先に直していたら（409）自分の文章は消さず、最新に合わせて「別の場所で先に直されました。最新に合わせました」と出す。直した段落は止めておき、「もう一度保存」か書き直して確定すると送る（勝手には送り直さない）。クライアントは `src/lib/recording-client.ts`、サーバーの reason の日本語は `recordingErrorMessage`。
-  - **まだできない**: 音声ファイル（.m4a .mp3 .wav）とマイクは「まだ使えません」と知らせるだけ。再生・波形は出さない（音声は段 2 のあと）。「この録音から」（`ShellMakeFrom`）とサブページは手順（#37）の画面で出す。背景情報と「このあと」は入力できるが、まだ使われない（登場人物・固有名詞も未接続）。サイドバーの行は、取り込んだ直後は「録音」の 2 行目が出ない（読み込み直すと出る。`EditorFrame` の `pageCreated` が種類を受けない）。段落の数が多い録音の仮想化はしていない。
+  - **まだできない**: 実データの波形は出さない。音声ファイルとマイクは段 3b-1（下の「画面（段 3b-1）」）、再生は段 3b-2（下の「画面（段 3b-2）」）。「この録音から」（`ShellMakeFrom`）とサブページは手順（#37）の画面で出す。背景情報と「このあと」は入力できるが、まだ使われない（登場人物・固有名詞も未接続）。サイドバーの行は、取り込んだ直後は「録音」の 2 行目が出ない（読み込み直すと出る。`EditorFrame` の `pageCreated` が種類を受けない）。段落の数が多い録音の仮想化はしていない。
 
 ## 録音の音声（#36 段 2a）
 
@@ -147,8 +147,8 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **流れ**: start → ブラウザが `upload.url` へ `upload.headers` を付けて直接 PUT（credentials なし。サーバーは音声を受け取らない）→ complete（保存先の object の大きさが申告と同じなら uploaded）。画面から呼ぶ関数は `src/lib/audio-upload-client.ts`（画面への組み込みは段 3）。
 - **エラー**: 400 `{"error":"bad_request","reason":…}`（`body`・`idempotency_key`・`name`・`content_type`・`extension`・`size`・`too_large`・`sha256`・`lang`・`duration`・`too_long`）、413（開始の本文が 16 KiB 超）、503 `storage_unavailable`（保存先を使わない設定）、502 `storage_failed`（保存先の失敗。中身は出さない）、409 `idempotency_conflict`（同じキーで内容が違う・そのキーのページがゴミ箱にある）、409 `{"error":"incomplete","reason":"missing"|"size_mismatch"}`。
 - **冪等**: 同じ `Idempotency-Key`・同じ内容（名前・種類・大きさ・sha256・言語・長さを正規化した SHA-256 で比べる）は 200 で同じページ。アップロード中なら ticket を作り直し、済んでいれば `upload: null`。complete は何度呼んでもよい（済んだものは保存先に問い合わせない）。
-- **上限**（`src/recording/audio-limits.ts` の 1 か所。**仮置き・オーナーの決定待ち**）: 1 ファイル 2 GiB・6 時間（長さは申告があるときだけ確かめる）・保持 30 日。形式は m4a・mp3・wav・aac・ogg・flac で、ファイル名の拡張子と content type が対応すること（`.vtt` は VTT の取り込みを使う）。超えたら保存（ページ・資産・保存先のセッション）の前に断る。
-- **申告値**: `sha256`・`contentType`・`sizeBytes`・`durationSec` はクライアントの申告。サーバーは音声を読まず、sha256 を検証しない（assets.sha256 にも申告のまま入れる）。大きさだけは complete で保存先と照らす。ブラウザで sha256 を計算する部分は段 3（2 GiB の計算は画面の設計が要る）。
+- **上限**（`src/recording/audio-limits.ts` の 1 か所。**仮置き・オーナーの決定待ち**）: 1 ファイル 2 GiB・6 時間（長さは申告があるときだけ確かめる）・保持 30 日。形式は m4a・mp3・wav・aac・ogg・flac・webm（`audio/webm`。ブラウザのマイク録音の形）で、ファイル名の拡張子と content type が対応すること（content type はパラメータ（`;codecs=opus` など）を除いて比べ、除いた形で持つ。`.vtt` は VTT の取り込みを使う）。超えたら保存（ページ・資産・保存先のセッション）の前に断る。
+- **申告値**: `sha256`・`contentType`・`sizeBytes`・`durationSec` はクライアントの申告。サーバーは音声を読まず、sha256 を検証しない（assets.sha256 にも申告のまま入れる）。大きさだけは complete で保存先と照らす。ブラウザでは自前の逐次の SHA-256（`src/lib/sha256-stream.ts`。依存を足さず、`node:crypto` と突き合わせてテスト）で 4 MiB ずつ計算する（段 3b-1）。
 - **表**: migration `0008_recording_audio.sql`（page_recordings に `audio_asset`・`audio_status`（none／uploading／uploaded）・`audio_expires_at`・`audio_upload_key`・`audio_request_hash`）。資産は assets（`kind=audio`、`bucket_path` = `audio/{asset id}`）。コードは `packages/editor-store/src/recording-audio.ts`。ページの複製では音声を写さない（音声から作った録音は、録音の行ごと写さない）。
 - **保存先**（`src/storage/`。画像（#33）も同じ口で足せる形）: `fake` はメモリの偽物で、ticket の url は同じ origin の `/api/dev/fake-storage/{token}`（`EDITOR_STORAGE` が fake で `NODE_ENV` が production でないときだけ動き、それ以外は 404）。`gcs` は fetch と Cloud Run のメタデータサーバーの token だけ（依存を足さない）で、サーバーが resumable upload のセッションを `ifGenerationMatch=0`（上書きしない）で始め、そのセッション URI を返す（署名付き URL は使わない。実行 ID に署名の権限が無い前提）。ticket の url・token・bucket 名・object の場所はログにもエラーにも出さない。**gcs は実際の GCS では未検証**（fetch を差し替えたテストだけ）。
 - **本番の守り**: `NODE_ENV=production` で `EDITOR_STORAGE=fake`、`gcs` で `EDITOR_ASSETS_BUCKET` が無い・不正、未知の値は起動しない（`src/startup-check.ts`。値は表示しない）。要求ごとの解決（`src/storage/runtime.ts`）でも同じ規則で、誤りは 503。入口 `scripts/server-entry.mjs` と Dockerfile は認証だけを見る（AI の設定と同じく変えていない）ので、保存先の誤りは server の起動処理の中で止まる。
@@ -160,7 +160,22 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **CORS**: `origin` は editor の origin（`EDITOR_ORIGIN` と同じ）だけ、`method` は `PUT`、`responseHeader` は `Content-Type`、`maxAgeSeconds` は 3600 など。resumable のセッション URI は開始の要求の `Origin` に応じる仕様だが、あわせて設定しておく。
 - **権限**: 実行 ID（`niho-editor-runner`）に作成と閲覧（`storage.objects.create`・`storage.objects.get`）だけ。削除・上書き・署名は要らない。
 - 配備で `EDITOR_STORAGE=gcs` を渡すまで、本番の音声の API は 503 `storage_unavailable`。
-- 画面の CSP の `connect-src` に `https://storage.googleapis.com` を足すのは、画面に組み込む段 3（今の CSP は `'self'` だけなので、ブラウザから GCS への PUT は通らない）。
+- 画面の CSP の `connect-src` に `https://storage.googleapis.com` を足した（段 3b-1）。bucket の CORS が無いと、ブラウザの PUT は断られる（画面では「音声を送れませんでした」）。
+
+### 画面（段 3b-1。音声ファイルとマイク、文字起こしの開始と状態）
+
+- **「録音から」**（`src/components/RecordingStartScreen.tsx`）: 音声ファイル（.m4a .mp3 .wav .aac .ogg .flac .webm）を選ぶ・ドロップすると「取り込む」。上限（`GET …/limits` の値。画面の間は覚える）で送る前に断り、sha256（4 MiB ずつ・8 MiB ごとに処理を譲る。`src/lib/file-sha256.ts`）→ 開始（`Idempotency-Key`。同じファイルの取り込み直しは同じキーで同じ録音ページ）→ `XMLHttpRequest` で保存先へ PUT（upload の進み具合・中止）→ 完了 → `/p/{id}`。進み具合は `<progress>` と段階（確認しています・準備しています・送っています・仕上げています）の `aria-live`、失敗は `role="alert"`（URL・内部の情報は出さない）。流れは `src/lib/audio-upload-client.ts` の `uploadAudioFile`。再開（resumable の続き）は無く、失敗したら最初から。
+- **マイク**（`src/lib/mic-recorder.ts`・`use-mic-capture.ts`）: 「録音する」→「録音をはじめる」で `MediaRecorder`（`audio/webm;codecs=opus` → `audio/webm` → `audio/mp4` → 既定）。経過時間・「止める」（止めると同じ取り込みの流れに乗る）・「やり直す」（確認 1 回で捨てる）。ファイル名は `録音 YYYY-MM-DD HH-mm.webm`（mp4 は `.m4a`）。6 時間で自動で止める。止めた・捨てた・画面を離れたらトラックを止める。許可の拒否・マイクなし・非対応は文言を分ける。録音中・取り込み中・まだ取り込んでいない録音があるときは、閉じる前にブラウザの確認を出す（画面の中の移動では確かめない）。
+- **録音ページ**（`src/components/RecordingTranscription.tsx`。音声のある録音だけ）: 音声がアップロード済みで段落が空なら「文字起こしをはじめる」。状態（待機中・文字起こし中）は 3 秒ごとに読む（画面が見えない間は 15 秒。済んだ・失敗・画面を離れたら止める。続けて 3 回読めなければ「更新できません」で止め、「更新する」で読み直す。`src/lib/use-transcription.ts`）。失敗は理由（`errorCode` ごと）と「もう一度」。段落があるときの「もう一度文字起こしする」・失敗の「もう一度」は、置き換えを 1 回確かめてから `replace: true`。音声の期限（「音声は M月D日に削除されます」／過ぎたら「音声は削除されました」）を小さく出す。外部のエンジンに音声が渡る一言（「音声は文字起こしのため外部のサービスに送られます」）は始めるボタンの近くに 1 行だけ（**文言はオーナー確認待ちの仮置き**）。
+- **未検証**: 実際のブラウザのマイク・GCS（CORS を含む）・Deepgram では動かしていない（偽物の XHR・MediaRecorder・fetch のテストだけ）。
+
+### 画面（段 3b-2。再生とタイムスタンプ）
+
+- **音声を読み出す route**（`GET /api/pages/{id}/recording/audio`。HEAD も。`src/server/audio-stream-api.ts`）: 実行 ID には署名 URL の権限が無いので、同じ origin のこの route が保存先から読み出して流す（`<audio src>` がここを指す）。本人の・ゴミ箱でないページの録音で、音声がアップロード済みかつ期限内のときだけ。他人・存在しない・不正な id・削除済み・録音なし・音声なし・アップロード途中・期限切れ・保存先に無いは、どれも同じ 404（本文・header とも）。保存先を使わない設定は 503、保存先の失敗は 502。object の場所は DB の値だけ。本文は保存先の stream をそのまま渡し（全部を読まない）、要求が切られたら・応答の流れが cancel されたら保存先の stream も cancel する。`Content-Type` は開始で受け付けた音声の種類だけ（他は `application/octet-stream`）、`Content-Disposition: inline`（名前は出さない）、`Cache-Control: private, no-store`、`nosniff`。
+- **`Range`**（`src/recording/audio-range.ts`）: 範囲は 1 つだけ（`a-b`・`a-`・`-n`）。範囲なしは 200 で全体、ありは 206 と `Content-Range`。終わりが全体を超えたら全体の終わりで切り、`-n` が全体より大きければ先頭から返す。416（`Content-Range: bytes */全体`）は、複数の範囲・形の不正・始まりが全体以上・`-0`・空の音声への範囲。単位が `bytes` 以外は無視して 200（RFC 9110 §14.2）、`If-Range` が付いていたら範囲を無視して 200（検証子を出していないため）。全体の大きさは DB の値（完了のときに保存先の大きさと照らした値）。保存先が範囲を無視して全体を返したら 200 で全体、大きさが食い違ったら 502。
+- **画面**（`RecordingTranscript`・`PlaybackSeek`・`src/lib/use-recording-playback.ts`・`playback.ts`）: 音声が再生できるときだけ `<audio preload="metadata">` を持つ。段落の時刻を押すとそこから再生（`onPlayFrom`）、再生ボタン（`onPlay`）は再生と一時停止のトグル、スライダーで再生位置を動かす（キーボードで操作できる）。再生中の段落は現在位置から**二分探索**で求める（timeupdate・seeked・play・pause のたび。時刻の無い段落は対象外、同じ開始時刻なら最初の段落、終わりの時刻は見ない）。変わったときだけ状態を更新し、段落をその場で直している最中でも入力を壊さない。段落の行は `memo`（段落 20,000 の録音で、強調が移るたびの全行の描き直しを避ける）。音声の `error` は「音声を再生できません」と「もう一度」。画面を離れたら止めて `src` を外し、期限の時刻に再生の部品を外す。
+- **まだ**: 段落がまだ無い録音（文字起こしの前・失敗のあと）では再生の部品を出さない（3b-1 で段落の欄自体を出さない設計に合わせた。聞けるようにするかは決める）。実データの波形は後続（今はスライダー）。
+- **未検証**: 実際の GCS（206・`Content-Range`・416 の実物）・本物の音声（m4a・マイクの webm）・Safari と iOS・本番 build を実ブラウザで開いての確認はしていない（実ブラウザは `next dev` と偽の保存先、合成の WAV）。
 
 ## ショートカット（#43）
 
@@ -244,6 +259,47 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - 共有ページ（`/s/{token}`）も同じ `aside[data-callout]` で描く（`src/share/render-blocks.tsx`）。
 - Markdown の書き出しでは引用と同じ `:::note`（`src/export/markdown.ts`。#69 で入っていたので、ここでは変えていない）。
 
+## 発信先の設定（#41）
+
+`/destinations` と `/destinations/{id}`。画面は共有の docs-ui（`packages/docs-ui/src/shell/editor-destinations.tsx` の
+`EditorDestinationsPage`・`EditorSitePage`。モック v6 の V.dest・V.site）で、`src/components/DestinationsView.tsx`・`SiteView.tsx` が
+状態と通信だけを持つ。実処理は `@niho/editor-publish` の `ConnectionService`（docs/architecture/editor-publish-core.md「#41 発信先の設定」）。
+
+- **一覧**: NIHO の面（`exp`・`niho`）は役割で自動に出て、役割が無い・宣言が読めないときは理由を一言。本人のサイトは接続ごとに 1 行
+  （公開中の数つき）。「発信先を追加」で `mode`（公開 API で受け取る／WordPress／Ghost）・handle・サイトの URL・記事の前に付く path を入れる。
+- **サイトの設定**: 公開 API の URL（コピー）、鍵（伏せ字と再発行）、送り方、書き出し（Markdown ＋写真の zip）、URL の形の編集、
+  この発信先に公開した一覧（公開をやめたものも）、接続の解除。
+- **鍵**: 平文は**作ったとき・再発行したときの応答にだけ**入り、画面はその 1 回だけ出す（「閉じる」で消える）。保存するのは
+  SHA-256 と末尾 4 文字で、ほかの場所に出るのは `ek_••••••••` ＋末尾 4 文字。URL・localStorage・ログ・エラーの本文には出さない。
+  再発行は旧鍵の失効と同じトランザクションで、**次の request から**公開 API が旧鍵を 401 にする。
+- **接続の解除**: 鍵の失効・接続の解除・その接続に公開中のページを「公開をやめた」にすることを同じトランザクションで行う（ページは残る）。
+  解除した接続は設定できず、画面は一覧へ戻る。書き出しだけは解除のあとでも呼べる。
+- **WordPress・Ghost**: v1 では入口だけ（`mode` を保存できるが送信は動かない。`pushEnabled` は常に false）。画面にも一言出す。
+- **API**: `GET/POST /api/destinations`、`GET/PATCH /api/destinations/{id}`、`POST /api/destinations/{id}/key`、
+  `POST /api/destinations/{id}/disconnect`、`GET /api/destinations/{id}/export`（`src/server/connections-api.ts`）。
+  未認証 401、別の origin からの更新 403、別の人・存在しない・不正な id はどれも同じ 404、DB なし 503。
+  書き出しの写真は保存先から読む（`src/publish/export-assets.ts`。1 回で 200 MiB まで。超えたら 413 で、公開版と下書きは変わらない）。
+
+## 設定（#108）
+
+`/settings`。画面は共有の docs-ui（`packages/docs-ui/src/shell/editor-settings.tsx` の `EditorSettingsPage`。モック v6 の V.settings）で、
+`src/components/SettingsView.tsx` が状態と通信だけを持つ。節は AI・手順・文字起こし・保存の 4 つ（モックのプロフィールは NIHO アカウントの値なので持たない）。
+
+- **変えられるもの**（`editor_settings`。migration `0013_editor_settings.sql`、コードは `packages/editor-store/src/settings.ts`）:
+  - **AI の提案の言語**（書いた言語のまま／日本語／English）。`buildRequest` の `lang` になる（`src/ai/engine.ts`）。
+  - **固有名詞と誤りやすい表記**。AI の提案のプロンプトの表になる（`src/ai/prompt.ts` の `glossary`）。
+  - **手順**（段階の名前・指示・お手本）。既定の 3 つ（docs-core の `FLOW_TEMPLATES`）に手を入れた写しと、足したものだけを保存し、
+    読むときに既定へかぶせる（`src/steps/recipes.ts` の `recipesOf`）。既定の値を送り返すと写しが消えて既定に戻る。
+    既定の手順は**段階の数を変えられない**（できあがったサブページがその段階の id に結んでいる）。
+    手順は次に始めた run から効く（受付は `src/server/steps-api.ts`、worker は `claim.owner` で読む。`src/steps/runner.ts`）。
+- **読むだけのもの**（サーバー側が決める。`src/settings/facts.ts`）:
+  - **文字起こしのエンジン**（`EDITOR_TRANSCRIBE_ENGINE`）と 1 回の時間切れ。Web からは選べない。Gemini は長い音声の区切りがサーバー側に無いのでまだ出さない。
+  - **音声の上限**（1 ファイルの容量と長さ・受け付ける形式）と、**クラウドの音声が消えるまでの日数**（`src/recording/audio-limits.ts`。設計 §12 の「設定に明記」）。
+  - **保存先**（公開と同じ読み手で NIHO から毎回読み、editor に保存しない。設計 §2.1）。Web では選べない。
+- **AI の使用量**: 画面が `GET /api/ai/usage` を開いたときに 1 回読み、上限の 80% を超えていたら一言出す。
+- **API**: `GET /api/settings`・`PATCH /api/settings`（`src/server/settings-api.ts`）。未認証 401、別の origin からの更新 403、DB なし 503、
+  通らない値は 400（何も書かない）。渡した項目だけを入れ替え、入れ替えた後の設定を返す。owner は認証の層の本人だけで、要求の値からは決めない。
+
 ## まだやらないこと
 
-見た目（#48）、版・履歴・オフライン・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、プレビューを開く画面（token の発行は API だけ。#40 の後）、鍵の画面（#41）、公開の知らせ（録音は公開版に含まれない、など）の表示と、本人のサイトが 2 つ以上のときの選び方（#39 の後）、録音の開始（#36）、検索の絞り込み（#35）、発信先・役割とつながり・設定の中身（#41・#42 とその後）、AI の画面・固有名詞の設定（#38 の後段）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。
+見た目（#48）、版・履歴・オフライン・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、プレビューを開く画面（token の発行は API だけ。#40 の後）、公開の知らせ（録音は公開版に含まれない、など）の表示と、公開のシートで本人のサイトが 2 つ以上のときの選び方（#39 の後）、録音の開始（#36）、検索の絞り込み（#35）、役割とつながりの中身（#42）、WordPress・Ghost への送信（#41 は入口だけ）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。

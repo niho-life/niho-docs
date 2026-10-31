@@ -316,6 +316,33 @@ export async function listPublicationsByHandle(db: Queryable, handle: string, op
   return result.rows.map(toPublication);
 }
 
+/**
+ * **本人の**公開中（公開をやめていない）ページの数を handle ごとに数える（Issue #41 の発信先の一覧）。
+ *
+ * `publications` の行は handle だけでは本人のものに絞れない（NIHO の面の handle は全員で共有する）ので、
+ * ページの owner で必ず絞る。渡した handle のうち 1 件も無いものは 0 として返す。
+ * 他の人の公開は数にも入らない（行も読まない）。
+ */
+export async function countLivePublishedByHandle(db: Queryable, owner: OwnerId, handles: readonly string[]): Promise<Map<string, number>> {
+  // 認証の層の誤りで空の owner が来たときに、誰のものでもない行を数えないための守り（store.ts と同じ）
+  if (typeof owner !== "string" || owner.length === 0 || owner.length > 256) {
+    throw new TypeError("editor-store: owner must be a non-empty stable user id");
+  }
+  const wanted = [...new Set(handles.filter((handle) => typeof handle === "string" && handle.length > 0))];
+  const counts = new Map<string, number>(wanted.map((handle) => [handle, 0]));
+  if (wanted.length === 0) return counts;
+  const result = await db.query<{ handle: string; n: string }>(
+    `SELECT pub.handle, count(*)::text AS n
+       FROM publications pub
+       JOIN pages p ON p.id = pub.page_id
+      WHERE p.owner = $1 AND p.deleted_at IS NULL AND pub.handle = ANY($2::text[]) AND pub.stopped_at IS NULL
+      GROUP BY pub.handle`,
+    [owner, wanted],
+  );
+  for (const row of result.rows) counts.set(row.handle, Number(row.n));
+  return counts;
+}
+
 /** ページの公開を足すか置き換える。別のページの公開が同じ handle と slug を持っていれば失敗する（一意の制約）。 */
 export async function putPublication(db: Queryable, row: PublicationRow): Promise<void> {
   await db.query(

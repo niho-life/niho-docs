@@ -2,19 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import { StepError, createFakeExecutor, fakeExecutor, type StepExecutor } from "./executor";
 import { MemoryStepRunStore } from "./memory-store";
 import { MemoryTaskQueue, taskName } from "./queue";
-import { findRecipe } from "./recipes";
+import { DEFAULT_RECIPES, findRecipeIn, recipesOf } from "./recipes";
 import { runAttempt, type AttemptOutcome, type RunnerDeps } from "./runner";
 
 // 合成の値だけを使う
 const OWNER = "synthetic-owner-a";
 const transcript = [{ type: "paragraph", content: [{ type: "text", text: "合成の座談会の文字起こし" }] }];
-const tpl1 = findRecipe("tpl-1")!;
+const tpl1 = findRecipeIn(DEFAULT_RECIPES, "tpl-1")!;
 
 async function setup(executor: StepExecutor = fakeExecutor, extra: Partial<RunnerDeps> = {}) {
   const store = new MemoryStepRunStore();
   const queue = new MemoryTaskQueue();
   const parent = store.addPage(OWNER, { kind: "rec", blocks: transcript });
-  const deps: RunnerDeps = { store, executor, queue, ...extra };
+  const deps: RunnerDeps = { store, recipes: async () => DEFAULT_RECIPES, executor, queue, ...extra };
   const start = async (fromStep = 0) => {
     const result = await store.createRun(OWNER, parent, { recipe: tpl1, fromStep });
     if (result.status !== "created") throw new Error(result.status);
@@ -56,6 +56,31 @@ describe("runAttempt", () => {
     }
     // 次の段階は前の段階の結果を読む
     expect(JSON.stringify(store.pages.get(run!.steps[1]!.pageId)?.blocks)).toContain("[fake] 文字起こし修正");
+  });
+
+  it("runs the 手順 of the person who owns the run, as the settings changed it (#108)", async () => {
+    const edited = recipesOf([{ id: "tpl-1", name: "記事制作", guide: "お手本を替えた", steps: tpl1.steps.map((step) => ({ ...step, name: `${step.name}（短め）` })) }]);
+    const seen: string[] = [];
+    const { store, start, drainAll, view } = await setup(fakeExecutor, {
+      recipes: async (owner) => {
+        seen.push(owner);
+        return edited;
+      },
+    });
+    await start();
+    await drainAll();
+    const run = await view();
+    expect(run?.state).toBe("succeeded");
+    // 実行器は owner の手順を受け取る（偽物の結果に段階の名前が入る）
+    expect(JSON.stringify(store.pages.get(run!.steps[0]!.pageId)?.blocks)).toContain("[fake] 文字起こし修正（短め）");
+    expect(new Set(seen)).toEqual(new Set([OWNER]));
+  });
+
+  it("fails the step without retrying when the person no longer has that 手順", async () => {
+    const { start, queue, deps, view } = await setup(fakeExecutor, { recipes: async () => [] });
+    await start();
+    expect(await runAttempt(deps, queue.drain()[0]!)).toEqual({ status: "failed" });
+    expect((await view())?.steps[0]?.errorCode).toBe("unknown_recipe");
   });
 
   it("fails a middle step after three failures and keeps the upstream result", async () => {

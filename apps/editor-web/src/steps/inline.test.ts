@@ -3,7 +3,7 @@ import { createFakeExecutor } from "./executor";
 import { createInlineQueue, resolveStepsMode } from "./inline";
 import { MemoryStepRunStore } from "./memory-store";
 import { taskName } from "./queue";
-import { findRecipe } from "./recipes";
+import { DEFAULT_RECIPES, findRecipeIn } from "./recipes";
 
 const OWNER = "synthetic-owner-a";
 
@@ -38,9 +38,9 @@ describe("createInlineQueue", () => {
   it("runs a whole recipe in the same process without the caller awaiting it", async () => {
     const store = new MemoryStepRunStore();
     const executor = createFakeExecutor();
-    const queue = createInlineQueue({ store, executor });
+    const queue = createInlineQueue({ store, recipes: async () => DEFAULT_RECIPES, executor });
     const parent = store.addPage(OWNER, { kind: "rec", blocks: [{ type: "paragraph", content: [{ type: "text", text: "合成の会議の文字起こし" }] }] });
-    const created = await store.createRun(OWNER, parent, { recipe: findRecipe("tpl-2")! });
+    const created = await store.createRun(OWNER, parent, { recipe: findRecipeIn(DEFAULT_RECIPES, "tpl-2")! });
     if (created.status !== "created") throw new Error(created.status);
     const task = { name: taskName(created.run.id, 0, 0), runId: created.run.id, stepIndex: 0 };
 
@@ -61,9 +61,9 @@ describe("createInlineQueue", () => {
       const store = new MemoryStepRunStore();
       const executor = createFakeExecutor({ failures: 1 });
       const onError = vi.fn();
-      const queue = createInlineQueue({ store, executor, onError, retryDelaySeconds: () => 5 });
+      const queue = createInlineQueue({ store, recipes: async () => DEFAULT_RECIPES, executor, onError, retryDelaySeconds: () => 5 });
       const parent = store.addPage(OWNER, { kind: "rec" });
-      const created = await store.createRun(OWNER, parent, { recipe: findRecipe("tpl-3")! });
+      const created = await store.createRun(OWNER, parent, { recipe: findRecipeIn(DEFAULT_RECIPES, "tpl-3")! });
       if (created.status !== "created") throw new Error(created.status);
       await queue.enqueue({ name: taskName(created.run.id, 0, 0), runId: created.run.id, stepIndex: 0 });
       await vi.waitFor(() => expect(store.runs.get(created.run.id)?.attempts[0]?.tries).toBe(1));
@@ -78,7 +78,7 @@ describe("createInlineQueue", () => {
         throw new Error("synthetic connection failure");
       };
       const other = store.addPage(OWNER, { kind: "rec" });
-      const again = await store.createRun(OWNER, other, { recipe: findRecipe("tpl-3")! });
+      const again = await store.createRun(OWNER, other, { recipe: findRecipeIn(DEFAULT_RECIPES, "tpl-3")! });
       if (again.status !== "created") throw new Error(again.status);
       await queue.enqueue({ name: taskName(again.run.id, 0, 0), runId: again.run.id, stepIndex: 0 });
       await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));

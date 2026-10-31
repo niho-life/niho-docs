@@ -8,7 +8,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { validateBlocks } from "@/ast/blocks";
 import { addButtonVisible, BLOCK_CHOICES, type BlockChoiceId } from "@/editor/block-types";
 import { buildPageExtensions } from "@/editor/page-extensions";
-import { PageChrome } from "./PageChrome";
+import { PageChrome } from "niho-docs-ui/page/PageChrome";
 import { PageEditor } from "./PageEditor";
 
 beforeAll(() => {

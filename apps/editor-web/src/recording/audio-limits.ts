@@ -17,7 +17,10 @@ export const AUDIO_RETENTION_DAYS = 30;
 /** ファイル名の上限（page_recordings.source_name の CHECK と同じ）。 */
 export const AUDIO_NAME_MAX_CHARS = 200;
 
-/** 受け付ける拡張子と、それぞれに対応する content type（小文字）。`.vtt` は音声ではない（VTT の取り込みを使う）。 */
+/**
+ * 受け付ける拡張子と、それぞれに対応する content type（小文字・パラメータなし）。`.vtt` は音声ではない（VTT の取り込みを使う）。
+ * `webm` はブラウザのマイク録音（MediaRecorder。Chrome・Firefox は `audio/webm;codecs=opus`）の形。
+ */
 export const AUDIO_FORMATS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   m4a: ["audio/mp4", "audio/x-m4a", "audio/m4a"],
   mp3: ["audio/mpeg", "audio/mp3"],
@@ -25,6 +28,7 @@ export const AUDIO_FORMATS: Readonly<Record<string, readonly string[]>> = Object
   aac: ["audio/aac"],
   ogg: ["audio/ogg"],
   flac: ["audio/flac", "audio/x-flac"],
+  webm: ["audio/webm"],
 });
 
 export const AUDIO_EXTENSIONS: readonly string[] = Object.freeze(Object.keys(AUDIO_FORMATS));
@@ -47,7 +51,7 @@ export type AudioStart = {
   /** ページの題名（ファイル名から拡張子を除いたもの）。 */
   title: string;
   extension: string;
-  /** 小文字にした content type。 */
+  /** 小文字にし、パラメータ（`;` から後）を除いた content type。 */
   contentType: string;
   sizeBytes: number;
   /** クライアントの申告の SHA-256（サーバーは検証しない）。 */
@@ -92,7 +96,8 @@ export function validateAudioStart(input: AudioStartInput): AudioStartResult {
   const parts = extensionOf(name);
   if (!parts || !Object.hasOwn(AUDIO_FORMATS, parts.extension)) return { ok: false, reason: "extension" };
   if (typeof input.contentType !== "string") return { ok: false, reason: "content_type" };
-  const contentType = input.contentType.trim().toLowerCase();
+  // パラメータ（`;codecs=opus` など）は除いて比べ、除いた形で持つ
+  const contentType = input.contentType.split(";", 1)[0]!.trim().toLowerCase();
   if (!AUDIO_CONTENT_TYPES.includes(contentType)) return { ok: false, reason: "content_type" };
   if (!AUDIO_FORMATS[parts.extension]!.includes(contentType)) return { ok: false, reason: "extension" };
 

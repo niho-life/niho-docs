@@ -206,6 +206,115 @@ describe("ShellRecording: 表示", () => {
   });
 });
 
+describe("ShellRecording: 再生（#36 段 3b-2）", () => {
+  it("playing で再生ボタンが「一時停止」になり、押すと onPlay。seek を渡すと波形の代わりに出す（渡さなければ今までどおり）", () => {
+    const onPlay = vi.fn();
+    const host = mount(
+      <ShellRecording
+        segments={SEGMENTS}
+        speakers={SPEAKERS}
+        onPlay={onPlay}
+        playing
+        seek={
+          <span className="es-seek">
+            <input type="range" aria-label="再生位置" defaultValue={0} />
+          </span>
+        }
+      />,
+    );
+    const button = host.querySelector<HTMLButtonElement>(".es-play")!;
+    expect(button.getAttribute("aria-label")).toBe("一時停止");
+    expect(host.querySelector(".es-wave")).toBeNull();
+    expect(host.querySelector('.es-rec-hd input[aria-label="再生位置"]')).not.toBeNull();
+    act(() => button.click());
+    expect(onPlay).toHaveBeenCalledTimes(1);
+
+    const paused = renderToStaticMarkup(<ShellRecording segments={SEGMENTS} speakers={SPEAKERS} onPlay={() => undefined} playing={false} />);
+    expect(paused).toContain('aria-label="再生"');
+    expect(paused).toContain("es-wave");
+    // onPlay が無ければ、playing・seek を渡しても再生の部品は出さない
+    const none = renderToStaticMarkup(<ShellRecording segments={SEGMENTS} speakers={SPEAKERS} playing seek={<input aria-label="再生位置" />} />);
+    expect(none).not.toContain("es-play");
+    expect(none).not.toContain("再生位置");
+  });
+
+  it("onPlayFrom を渡すと時刻がボタンになり、押すとその段落の id を返す。時刻の無い段落・時刻を隠したときはボタンを出さない", () => {
+    const onPlayFrom = vi.fn();
+    const segments: ShellSegment[] = [...SEGMENTS, { id: "s3", who: "Mika", tone: "b", time: "", text: "時刻の無い段落。" }];
+    const host = mount(<ShellRecording segments={segments} speakers={SPEAKERS} onPlayFrom={onPlayFrom} />);
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>("button.es-at")];
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual(["00:12 から再生", "00:41 から再生"]);
+    // 時刻は <time> のまま（読み上げの名前と段落の名前は今までどおり）
+    expect(buttons.map((button) => button.querySelector("time")?.textContent)).toEqual(["00:12", "00:41"]);
+    expect(paragraph(host, 1).getAttribute("aria-label")).toBe("Mika 00:41 の文字起こし");
+    act(() => buttons[1]!.click());
+    expect(onPlayFrom).toHaveBeenCalledWith("s2");
+
+    const hidden = renderToStaticMarkup(<ShellRecording segments={segments} speakers={SPEAKERS} onPlayFrom={onPlayFrom} showTimestamps={false} />);
+    expect(hidden).not.toContain("es-at");
+    const legacy = renderToStaticMarkup(<ShellRecording segments={SEGMENTS} speakers={SPEAKERS} />);
+    expect(legacy).not.toContain("es-at");
+    expect(legacy).toContain("<time>00:12</time>");
+  });
+
+  it("再生中の段落（current）を強調し、直している最中は強調しない。強調が移っても、書いている最中の段落の文章は替えない", () => {
+    function Harness({ current, editing }: { current: string | null; editing?: boolean }) {
+      return (
+        <ShellRecording
+          segments={SEGMENTS.map((segment) => ({ ...segment, current: segment.id === current }))}
+          speakers={SPEAKERS.slice(0, 2)}
+          editing={editing}
+          onSegmentChange={() => undefined}
+          onPlayFrom={() => undefined}
+        />
+      );
+    }
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    roots.push(root);
+    const highlighted = () => [...host.querySelectorAll(".es-seg")].map((row) => row.classList.contains("es-seg--cur"));
+    act(() => root.render(<Harness current="s1" />));
+    expect(highlighted()).toEqual([true, false]);
+    focusOn(paragraph(host, 1));
+    type(paragraph(host, 1), "書いている途中の文章");
+    const element = paragraph(host, 1);
+    act(() => root.render(<Harness current="s2" />));
+    expect(highlighted()).toEqual([false, true]);
+    // 同じ要素のまま、書いた文章もフォーカスも残る
+    expect(paragraph(host, 1)).toBe(element);
+    expect(element.textContent).toBe("書いている途中の文章");
+    expect(document.activeElement).toBe(element);
+    act(() => root.render(<Harness current="s2" editing />));
+    expect(highlighted()).toEqual([false, false]);
+  });
+
+  it("呼ぶ側が描くたびに関数を作り直しても、段落の確定と時刻の押下は最新の関数に届く（行は memo）", () => {
+    const calls: string[] = [];
+    function Harness({ version }: { version: number }) {
+      return (
+        <ShellRecording
+          segments={SEGMENTS.map((segment) => ({ ...segment }))}
+          speakers={SPEAKERS.slice(0, 2)}
+          onSegmentChange={(id, text) => calls.push(`change@${version}:${id}:${text}`)}
+          onPlayFrom={(id) => calls.push(`play@${version}:${id}`)}
+        />
+      );
+    }
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    roots.push(root);
+    act(() => root.render(<Harness version={1} />));
+    act(() => root.render(<Harness version={2} />));
+    focusOn(paragraph(host, 0));
+    type(paragraph(host, 0), "直した文章");
+    blur(paragraph(host, 0));
+    act(() => host.querySelectorAll<HTMLButtonElement>("button.es-at")[1]!.click());
+    expect(calls).toEqual(["change@2:s1:直した文章", "play@2:s2"]);
+  });
+});
+
 describe("ShellRecording: 話者の名前とまとめる", () => {
   function Harness(props: Partial<ShellRecordingProps>) {
     return <ShellRecording segments={SEGMENTS} speakers={SPEAKERS} onRenameSpeaker={() => undefined} onMergeSpeakers={() => undefined} {...props} />;
