@@ -69,13 +69,42 @@ describe("arrangeSidebarItems", () => {
     ]);
   });
 
-  it("shows the second line only for recordings and steps in progress", () => {
+  it("shows the second line only for recordings and steps that are not done", () => {
     const items = arrangeSidebarItems(
       [page("rec", { kind: "rec" }), page("run", { stepStatus: "run" }), page("done", { stepStatus: "done" }), page("plain", { title: "" })],
       { now: NOW },
     );
     expect(items.map((item) => item.sub)).toEqual([{ text: "録音" }, { text: "作成中…" }, undefined, undefined]);
     expect(items[3]).toEqual({ id: "plain", title: "", when: "1時間前" });
+  });
+
+  it("手順の段階の状態を 2 行目に出し、作成中の行には回るマークを付ける（#37）", () => {
+    const items = arrangeSidebarItems(
+      [
+        page("run", { kind: "step", stepStatus: "run" }),
+        page("wait", { kind: "step", stepStatus: "wait" }),
+        page("failed", { kind: "step", stepStatus: "failed" }),
+        page("stale", { kind: "step", stepStatus: "stale" }),
+        page("done", { kind: "step", stepStatus: "done" }),
+      ],
+      { now: NOW },
+    );
+    // 状態は文字でも出す（印だけで表さない）
+    expect(items.map((item) => [item.id, item.sub?.text, item.busy ?? false])).toEqual([
+      ["run", "作成中…", true],
+      ["wait", "待機", false],
+      ["failed", "失敗", false],
+      ["stale", "前提変更", false],
+      ["done", undefined, false],
+    ]);
+  });
+
+  it("公開中のサブページでも、作っている間は回るマークを出す（#37）", () => {
+    const items = arrangeSidebarItems(
+      [page("article", { kind: "step", stepStatus: "run", publication: { dest: "niho", handle: "takuya", range: "live", stopped: false } })],
+      { now: NOW },
+    );
+    expect(items[0]).toMatchObject({ busy: true, sub: { text: "NIHO", dest: "niho" } });
   });
 
   it("never drops rows whose parents form a cycle", () => {

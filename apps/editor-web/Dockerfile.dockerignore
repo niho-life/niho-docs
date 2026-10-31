@@ -6,6 +6,8 @@
 !packages/docs-ui
 !packages/ui
 !packages/editor-store
+!packages/editor-publish-contract
+!packages/editor-publish
 **/node_modules
 **/.next
 **/dist

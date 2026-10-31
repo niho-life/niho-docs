@@ -151,7 +151,15 @@ describe("/api/pages/{id}/steps", () => {
     const d = deps("user-a", store, { queue });
     const empty = await read(recording, d);
     expect(empty.status).toBe(200);
-    expect(await empty.json()).toEqual({ run: null });
+    // 手順が無くても、その人の手順の一覧は答える（録音ページの入口に出すもの。#37 の画面）
+    expect(await empty.json()).toEqual({
+      run: null,
+      recipes: [
+        { id: "tpl-1", name: "記事制作", defaultName: "記事制作" },
+        { id: "tpl-2", name: "議事録", defaultName: "議事録" },
+        { id: "tpl-3", name: "インサイト整理", defaultName: "インサイト整理" },
+      ],
+    });
 
     const created = await runOf(await start(recording, { recipe: "tpl-1" }, d));
     for (let tasks = queue.drain(); tasks.length > 0; tasks = queue.drain()) {

@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import type { PageSummary } from "@niho/editor-store";
 import { ShellSettingsPage } from "niho-docs-ui/shell";
 import { rememberLastPage } from "@/lib/last-page";
+import { readPageRequest, type ConflictPage } from "@/lib/pages-client";
 import { isNarrowNow, useEditorFrame } from "./EditorFrame";
 import { PageEditor } from "./PageEditor";
+import { PageSteps } from "./PageSteps";
 import { RecordingTranscript } from "./RecordingTranscript";
 
 export { RecordingStartScreen } from "./RecordingStartScreen";
@@ -27,6 +29,10 @@ export function HomeRedirect({ lastPageId }: { lastPageId: string | null }) {
  * 更新時刻は開いたときに端末の下書きと競合したら帯に出す値。shared はリンクで共有しているか（サーバーが読んだ値。読めなければ null。
  * 「…」の「共有中」の印だけに使い、リンクそのものは渡さない）。recordingSec は録音ページの録音の長さ（秒。情報パネルに出す。
  * 録音ページでない・読めなければ null）。情報パネルで言語を変えて保存したら、一覧の言語も替える。
+ *
+ * 手順（#37）の段階のページを開いている間にその段階が終わると、worker が本文を入れ替えて revision を進める。
+ * そのときはページを読み直し、エディタを**開き直す**（key を替えて作り直す。保存・下書き・Undo の部品も新しくなるので、
+ * 入れ替わった本文が Undo に混ざらず、自動保存も起きない。端末の下書きがあれば、開いたときと同じく比べて帯を出す）。
  */
 export function OpenPage({
   summary,
@@ -42,15 +48,40 @@ export function OpenPage({
   recordingSec?: number | null;
 }) {
   const frame = useEditorFrame();
-  const { pageOpened } = frame;
+  const { pageOpened, pageSaved } = frame;
   const { id } = summary;
+  // 手順の段階が終わって読み直した本文（count が増えるとエディタを作り直す）。どのページの分かも持ち、
+  // 別のページへ移ったら使わない（この部品は画面の移動で作り直されないことがある）
+  const [replaced, setReplaced] = useState<{ count: number; id: string; page: ConflictPage } | null>(null);
   useEffect(() => {
     rememberLastPage(summary.id);
     pageOpened(summary, { recordingSec });
   }, [summary, recordingSec, pageOpened]);
+
+  const onBodyReplaced = useCallback(() => {
+    readPageRequest(id).then(
+      (page) => setReplaced((current) => ({ count: (current?.count ?? 0) + 1, id, page })),
+      // 読めなければエディタはそのまま（帯の「済み」だけが先に出る。次に開いたときに入れ替わった本文が出る）
+      () => undefined,
+    );
+    // サーバーの更新時刻が進んだので、一覧の行も動かす
+    pageSaved(id);
+  }, [id, pageSaved]);
+
+  const fresh = replaced?.id === id ? replaced : null;
+  const current = fresh?.page;
   const editor = (
     <PageEditor
-      page={{ id, title: summary.title, blocks, revision, updatedAt: summary.updatedAt, kind: summary.kind, lang: summary.lang }}
+      key={fresh?.count ?? 0}
+      page={{
+        id,
+        title: current?.title ?? summary.title,
+        blocks: current?.blocks ?? blocks,
+        revision: current?.revision ?? revision,
+        updatedAt: current?.updatedAt ?? summary.updatedAt,
+        kind: summary.kind,
+        lang: current?.lang ?? summary.lang,
+      }}
       shared={shared}
       onTitleChange={(value) => frame.pageTitleChanged(id, value)}
       onSaved={() => frame.pageSaved(id)}
@@ -58,13 +89,18 @@ export function OpenPage({
       onLangChange={(lang) => frame.pageLangChanged(id, lang)}
     />
   );
-  // 録音ページは、文字起こしの録音ブロックが本文の上に入る（設計 §7.1）
-  if (summary.kind !== "rec") return editor;
+  // 手順の帯（#37）はページのいちばん上、録音ページの文字起こし（設計 §7.1。本文の上）はその下。
+  // 手順に関わらないページでは、PageSteps は帯も入口も描かず本文だけを並べる
   return (
-    <>
-      <RecordingTranscript pageId={id} />
+    <PageSteps
+      pageId={id}
+      kind={summary.kind}
+      parentId={summary.parent}
+      media={summary.kind === "rec" ? <RecordingTranscript pageId={id} /> : null}
+      onBodyReplaced={onBodyReplaced}
+    >
       {editor}
-    </>
+    </PageSteps>
   );
 }
 
