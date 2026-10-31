@@ -41,8 +41,11 @@ describe("shell の境界（既存の画面・Mac アプリを止めない）", 
     }
   });
 
+  // page/ は shell の上に載る新しい本文のエディタ（Mac・Web 共通。#45）なので、shell の部品・クラスを使ってよい
+  const pageDir = path.join(srcRoot, "page");
+
   it("既存の画面は es- のクラスや editor-tokens を読まない", () => {
-    for (const file of walk(srcRoot).filter((name) => /\.(tsx?|css)$/.test(name) && !/\.test\.tsx?$/.test(name) && !name.startsWith(shellDir) && !name.endsWith("shell.css"))) {
+    for (const file of walk(srcRoot).filter((name) => /\.(tsx?|css)$/.test(name) && !/\.test\.tsx?$/.test(name) && !name.startsWith(shellDir) && !name.startsWith(pageDir) && !name.endsWith("shell.css"))) {
       expect(code(file), path.relative(srcRoot, file)).not.toMatch(/\bes-root\b|editor-tokens/);
     }
   });

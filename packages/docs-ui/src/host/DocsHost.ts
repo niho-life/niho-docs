@@ -474,6 +474,11 @@ export type DocsCapabilities = {
   cloudClosing?: boolean;
   /** LOCAL 本文を端末から一時配送して NIHO API で工程を実行できる場合だけ有効にする。 */
   personalDeviceDelivery?: boolean;
+  /**
+   * 新しい editor の画面（モック v6 の shell ＋ 限定 AST の本文。#45 第 1 段）を出す。
+   * 旧い画面はそのまま残り、どちらを出すかはアプリの入口が選ぶ（Mac は環境変数 `VITE_NIHO_DOCS_EDITOR_SHELL`）。
+   */
+  editorShell?: boolean;
 };
 
 export const MAC_DOCS_CAPABILITIES: Readonly<DocsCapabilities> = Object.freeze({

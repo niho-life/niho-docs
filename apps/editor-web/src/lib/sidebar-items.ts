@@ -1,41 +1,16 @@
 import type { PagePublicationSummary, PageSummary } from "@niho/editor-store";
 import type { ShellDest, ShellListItem } from "niho-docs-ui/shell";
+import { formatWhen } from "niho-docs-ui/page/when";
 import type { SearchHit } from "./search-client";
+
+/** 一覧の時刻は共通（packages/docs-ui の page/when.ts。Mac・Web で同じ言葉）。 */
+export { formatWhen };
 
 /** 2 行目の公開先に要るもの（#39）。一覧の行（listPageChunk の PageSummary.publication）と同じ形。 */
 export type SidebarPublication = PagePublicationSummary;
 
 /** 2 行目の発信先の名前（モック v6 の DEST と同じ）。本人のサイトは「自分のサイト」。 */
 const DEST_NAMES: Readonly<Record<ShellDest, string>> = { exp: "NIHO Experience", niho: "NIHO", site: "自分のサイト" };
-
-/** 東京の日付で数える（日本は夏時間が無いので、UTC に 9 時間を足した日付）。 */
-const TOKYO_OFFSET_MS = 9 * 60 * 60 * 1000;
-const MINUTE_MS = 60 * 1000;
-const HOUR_MS = 60 * MINUTE_MS;
-const DAY_MS = 24 * HOUR_MS;
-
-function tokyoDay(ms: number): number {
-  return Math.floor((ms + TOKYO_OFFSET_MS) / DAY_MS);
-}
-
-/**
- * 一覧の時刻。1 分未満「たった今」、1 時間未満「N分前」、同じ日「N時間前」、前の日「昨日」、7 日未満「N日前」、
- * 同じ年「M月D日」、それより前「YYYY年M月D日」。now は呼ぶ側が渡す（サーバーの描画とブラウザの最初の描画で同じ値にする）。
- */
-export function formatWhen(iso: string, now: number): string {
-  const at = Date.parse(iso);
-  if (Number.isNaN(at)) return "";
-  const elapsed = now - at;
-  if (elapsed < MINUTE_MS) return "たった今";
-  if (elapsed < HOUR_MS) return `${Math.floor(elapsed / MINUTE_MS)}分前`;
-  const days = tokyoDay(now) - tokyoDay(at);
-  if (days === 0) return `${Math.floor(elapsed / HOUR_MS)}時間前`;
-  if (days === 1) return "昨日";
-  if (days < 7) return `${days}日前`;
-  const date = new Date(at + TOKYO_OFFSET_MS);
-  const monthDay = `${date.getUTCMonth() + 1}月${date.getUTCDate()}日`;
-  return date.getUTCFullYear() === new Date(now + TOKYO_OFFSET_MS).getUTCFullYear() ? monthDay : `${date.getUTCFullYear()}年${monthDay}`;
-}
 
 /** 検索の結果の行。サーバーが並べた順（更新順）のまま、当たった所の一文を 2 行目に添える。入れ子にしない。 */
 export function searchRows(hits: readonly SearchHit[], now: number): ShellListItem[] {

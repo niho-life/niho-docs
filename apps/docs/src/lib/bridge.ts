@@ -34,6 +34,8 @@ export const tauriBridge: Bridge = {
     localFolderExport: import.meta.env.VITE_NIHO_DOCS_LOCAL_FOLDER_EXPORT === "true",
     cloudClosing: import.meta.env.VITE_NIHO_DOCS_CLOUD_CLOSING === "true",
     personalDeviceDelivery: import.meta.env.VITE_NIHO_DOCS_DEVICE_DELIVERY === "true",
+    // 新しい editor の画面（#45 第 1 段）。既定は旧い画面（利用者のデータと権限を失わせない）
+    editorShell: import.meta.env.VITE_NIHO_DOCS_EDITOR_SHELL === "true",
   }),
   audioSourceUrl: (path) => convertFileSrc(path),
   explicitMediaLoad: true,
