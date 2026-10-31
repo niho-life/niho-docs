@@ -34,7 +34,7 @@ describe.skipIf(databaseUrl === undefined)("ownerRecipes with PostgreSQL", () =>
     await pool.end();
   });
 
-  it("writes the three defaults into the table on the first read, and answers exactly the old constant", async () => {
+  it("writes every default into the table on the first read, and answers exactly the old constant", async () => {
     const owner = "synthetic-owner-fresh";
     expect(await listRecipes(pool, owner)).toEqual([]);
     expect(await ownerRecipes(pool, owner)).toEqual(DEFAULT_RECIPES);
@@ -43,6 +43,7 @@ describe.skipIf(databaseUrl === undefined)("ownerRecipes with PostgreSQL", () =>
       ["tpl-1", "builtin", 0],
       ["tpl-2", "builtin", 1],
       ["tpl-3", "builtin", 2],
+      ["tpl-4", "builtin", 3],
     ]);
     expect(await ownerRecipes(pool, owner)).toEqual(DEFAULT_RECIPES);
   });
@@ -60,14 +61,15 @@ describe.skipIf(databaseUrl === undefined)("ownerRecipes with PostgreSQL", () =>
       ["tpl-1", "記事制作"],
       ["tpl-2", "議事録（短め）"],
       ["tpl-3", DEFAULT_RECIPES[2]!.name],
+      ["tpl-4", DEFAULT_RECIPES[3]!.name],
       ["r-talk", "対談"],
     ]);
     // 設定の形が持たない工程のプロファイルは、既定の同じ工程のものを引き継ぐ
     expect(recipes[1]?.steps.map((step) => step.profile)).toEqual([DEFAULT_RECIPES[1]!.steps[0]!.profile]);
-    expect((await listRecipes(pool, owner)).map((recipe) => recipe.origin)).toEqual(["builtin", "builtin", "builtin", "own"]);
+    expect((await listRecipes(pool, owner)).map((recipe) => recipe.origin)).toEqual(["builtin", "builtin", "builtin", "builtin", "own"]);
     // 2 回目は列を読んでも書き足さない
     await saveEditorSettings(pool, owner, { recipes: [] });
-    expect((await ownerRecipes(pool, owner)).map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3", "r-talk"]);
+    expect((await ownerRecipes(pool, owner)).map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3", "tpl-4", "r-talk"]);
   });
 
   it("adds a 既定の手順 that is missing from the table, so that a fourth default would reach someone who already has rows", async () => {
@@ -75,12 +77,12 @@ describe.skipIf(databaseUrl === undefined)("ownerRecipes with PostgreSQL", () =>
     await ownerRecipes(pool, owner);
     // 既定の手順が 1 つ増えた状態を作る（表から 1 つ消して、読み直す）
     await pool.query("DELETE FROM recipes WHERE owner = $1 AND id = $2", [owner, "tpl-2"]);
-    expect((await listRecipes(pool, owner)).map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-3"]);
+    expect((await listRecipes(pool, owner)).map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-3", "tpl-4"]);
     const recipes = await ownerRecipes(pool, owner);
     // 足りない既定だけが、今の並びの後ろに付く（ほかの行は動かない）
-    expect(recipes.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-3", "tpl-2"]);
+    expect(recipes.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-3", "tpl-4", "tpl-2"]);
     expect(recipes.find((recipe) => recipe.id === "tpl-2")).toEqual(DEFAULT_RECIPES[1]);
-    expect((await listRecipes(pool, owner)).map((recipe) => recipe.origin)).toEqual(["builtin", "builtin", "builtin"]);
+    expect((await listRecipes(pool, owner)).map((recipe) => recipe.origin)).toEqual(["builtin", "builtin", "builtin", "builtin"]);
   });
 
   it("starts a run from a table-read recipe with the same 段階 and the same サブページ as the constant did", async () => {
@@ -109,8 +111,8 @@ describe.skipIf(databaseUrl === undefined)("ownerRecipes with PostgreSQL", () =>
     const owner = "synthetic-owner-saved";
     const recipes = await ownerRecipes(pool, owner);
     const edited = recipes.map((recipe) => (recipe.id === "tpl-3" ? { ...recipe, name: "インサイト整理（短め）" } : recipe));
-    const saved = await saveOwnerRecipes(pool, owner, [edited[2]!, edited[0]!, edited[1]!]);
-    expect(saved.map((recipe) => recipe.name)).toEqual(["インサイト整理（短め）", "記事制作", "議事録"]);
+    const saved = await saveOwnerRecipes(pool, owner, [edited[2]!, edited[0]!, edited[1]!, edited[3]!]);
+    expect(saved.map((recipe) => recipe.name)).toEqual(["インサイト整理（短め）", "記事制作", "議事録", "コーチング"]);
     expect(await ownerRecipes(pool, owner)).toEqual(saved);
   });
 });

@@ -104,7 +104,7 @@ describe("/api/pages/{id}/steps", () => {
   it("answers 400 for a 手順 the person does not have, and 503 when the 手順 cannot be read", async () => {
     const { store, recording } = setup();
     const only = deps("user-a", store, { recipes: DEFAULT_RECIPES });
-    for (const recipe of ["r-talk", "tpl-4", "TPL-1", "", "tpl 1"]) {
+    for (const recipe of ["r-talk", "tpl-9", "TPL-1", "", "tpl 1"]) {
       const response = await start(recording, { recipe }, only);
       expect(response.status, recipe).toBe(400);
       expect(await response.text()).toBe('{"error":"bad_request"}');
@@ -158,6 +158,7 @@ describe("/api/pages/{id}/steps", () => {
         { id: "tpl-1", name: "記事制作", defaultName: "記事制作" },
         { id: "tpl-2", name: "議事録", defaultName: "議事録" },
         { id: "tpl-3", name: "インサイト整理", defaultName: "インサイト整理" },
+      { id: "tpl-4", name: "コーチング", defaultName: "コーチング" },
       ],
     });
 
@@ -261,7 +262,7 @@ describe("/api/pages/{id}/steps", () => {
       [{ recipe: "tpl-1" }, { "content-type": "text/plain" }],
       [{}, undefined],
       [[], undefined],
-      [{ recipe: "tpl-4" }, undefined],
+      [{ recipe: "tpl-9" }, undefined],
       [{ recipe: "TPL-1" }, undefined],
       [{ recipe: "tpl-1", fromStep: 3 }, undefined],
       [{ recipe: "tpl-1", fromStep: -1 }, undefined],
