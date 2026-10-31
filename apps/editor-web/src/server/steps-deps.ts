@@ -42,7 +42,12 @@ const aiStepExecutor: StepExecutor = createAiStepExecutor({
   },
 });
 
-function stepExecutor(): StepExecutor {
+/**
+ * 段階の実行器を返す、ただ 1 か所。**偽物（`fakeExecutor`）に戻さないこと。**
+ * 戻すと本番で `[fake]` の印の付いた文書がページに書かれる（偽物の結果を利用者に見せない、が設計の約束）。
+ * この約束は `steps-deps.test.ts` が守っている（偽物に差し替えると CI が落ちる）。
+ */
+export function stepExecutor(): StepExecutor {
   return aiStepExecutor;
 }
 
