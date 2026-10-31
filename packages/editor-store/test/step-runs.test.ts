@@ -147,8 +147,8 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
   }
 
   async function attemptRow(runId: string, stepIndex: number) {
-    const result = await pool.query<{ state: string; generation: number; tries: number; error_code: string | null; input_basis: string | null; lease_until: Date | null }>(
-      "SELECT state, generation, tries, error_code, input_basis, lease_until FROM step_attempts WHERE run_id = $1 AND step_index = $2",
+    const result = await pool.query<{ state: string; generation: number; tries: number; error_code: string | null; input_basis: string | null; lease_until: Date | null; partial_blocks: unknown }>(
+      "SELECT state, generation, tries, error_code, input_basis, lease_until, partial_blocks FROM step_attempts WHERE run_id = $1 AND step_index = $2",
       [runId, stepIndex],
     );
     return result.rows[0];
@@ -385,6 +385,45 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
     ]);
     assert.ok((await runRow(run.id))?.finished_at);
     assert.deepEqual((await pageRow(run.steps[0]!.pageId))?.blocks, paragraph("合成の結果 0"), "the upstream result is kept");
+  });
+
+  it("書き切れなかったときは、書けたところまでを残す（サブページの本文には書かない。#37）", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const claim = await claimed(run.id, 0);
+    const partial = paragraph("書けたところまで");
+    assert.deepEqual(
+      await failAttempt(pool, { ...refOf(claim), code: "output_too_long", retryable: false, partial }),
+      { ok: true, outcome: "failed" },
+    );
+    const attempt = await attemptRow(run.id, 0);
+    assert.equal(attempt?.state, "failed");
+    assert.equal(attempt?.error_code, "output_too_long");
+    assert.deepEqual(attempt?.partial_blocks, partial);
+    // 失敗した段階のページを半分の本文で埋めない
+    assert.deepEqual((await pageRow(claim.pageId))?.blocks, []);
+  });
+
+  it("積み直すときは書きかけを残さず、次の claim でも消えている", async () => {
+    const parent = await recording();
+    const run = await created(parent);
+    const first = await claimed(run.id, 0);
+    const partial = paragraph("途中");
+    // 積み直す失敗では残さない
+    assert.deepEqual(await failAttempt(pool, { ...refOf(first), code: "ai_timeout", retryable: true, partial }), {
+      ok: true,
+      outcome: "retry",
+      generation: 1,
+      tries: 1,
+    });
+    assert.equal((await attemptRow(run.id, 0))?.partial_blocks, null);
+    // 最後の失敗で残したものは、同じ段階を claim し直すと消える（古い書きかけを残さない）
+    const second = await claimed(run.id, 0);
+    assert.deepEqual(await failAttempt(pool, { ...refOf(second), code: "output_too_long", retryable: false, partial }), {
+      ok: true,
+      outcome: "failed",
+    });
+    assert.deepEqual((await attemptRow(run.id, 0))?.partial_blocks, partial);
   });
 
   it("fails at once on a non-retryable error", async () => {

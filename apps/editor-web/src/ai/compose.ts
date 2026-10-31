@@ -240,12 +240,13 @@ function blockOf(block: ComposeBlock): Block {
 }
 
 /**
- * 出力の上限で切れた答えから、**書けていた分の文**を読む（JSON として閉じている要素だけを拾う）。
- * 人に見せて写してもらうためのもので、**ページには書かない**（steps/ai-executor.ts）。読めなければ空。
+ * 出力の上限で切れた答えから、**書けていた分のブロック**を読む（JSON として閉じている要素だけを拾う）。
+ * 失敗の記録（`step_attempts.partial_blocks`）に残して人に見せるためのもので、**サブページの本文には書かない**
+ * （steps/ai-executor.ts）。読めなければ空の配列。
  */
-export function partialComposeText(text: string): string {
+export function partialComposeBlocks(text: string): Block[] {
   const start = text.indexOf("[");
-  if (start < 0) return "";
+  if (start < 0) return [];
   const chars = Array.from(text.slice(start + 1));
   const blocks: unknown[] = [];
   let depth = 0;
@@ -276,10 +277,9 @@ export function partialComposeText(text: string): string {
     }
   }
   const parsed = parseComposeOutput({ blocks });
-  if (!parsed.ok) return "";
-  return parsed.blocks
-    .map((block) => (block.kind === "bullets" ? block.items.map((item) => `- ${item}`).join("\n") : block.text))
-    .join("\n\n");
+  if (!parsed.ok) return [];
+  const built = composeBlocks(parsed.blocks);
+  return built.ok ? built.blocks : [];
 }
 
 /** 検証を通った出力を本文のブロックにする。結果は必ず validateBlocks を通す。 */

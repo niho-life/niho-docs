@@ -416,7 +416,8 @@ export async function claimAttempt(
               heartbeat_at = clock_timestamp(),
               started_at = clock_timestamp(),
               finished_at = NULL,
-              error_code = NULL
+              error_code = NULL,
+              partial_blocks = NULL
         WHERE a.run_id = $1 AND a.step_index = $2 AND a.state = 'queued'
           AND (a.step_index = 0 OR EXISTS (
                 SELECT 1 FROM step_attempts prev
@@ -514,7 +515,8 @@ export async function commitAttempt(db: StepRunsDb, input: CommitInput): Promise
     if (!runRow || runRow.state !== "running") return { ok: false, reason: "stale_generation" } satisfies CommitResult;
     const done = await client.query<{ page_id: string }>(
       `UPDATE step_attempts
-          SET state = 'succeeded', input_basis = $4, finished_at = clock_timestamp(), lease_until = NULL, error_code = NULL
+          SET state = 'succeeded', input_basis = $4, finished_at = clock_timestamp(), lease_until = NULL, error_code = NULL,
+              partial_blocks = NULL
         WHERE run_id = $1 AND step_index = $2 AND generation = $3 AND state = 'running'
         RETURNING page_id`,
       [input.runId, input.stepIndex, input.generation, input.inputBasis],
@@ -578,7 +580,15 @@ async function failRunFrom(client: PoolClient, owner: OwnerId, runId: string, st
   );
 }
 
-export type FailInput = AttemptRef & { code: string; retryable: boolean };
+export type FailInput = AttemptRef & {
+  code: string;
+  retryable: boolean;
+  /**
+   * 書けたところまでの本文（`output_too_long` のように、やり直しても同じところで終わる失敗のときだけ）。
+   * **最後の失敗のときにだけ残す**（積み直すときは書かない。次の試行が書き直す）。サブページの本文には入れない。
+   */
+  partial?: readonly Block[];
+};
 
 export type FailResult =
   /** もう一度積む（`generation` はこの attempt の今の世代。task の名前に入れる）。 */
@@ -589,6 +599,7 @@ export type FailResult =
 /**
  * 段階の失敗。世代が一致して実行中のときだけ通る。`retryable` で `tries < MAX_TRIES` なら queued に戻し（lease を外す。
  * サブページは wait）、そうでなければ attempt を failed・後続を canceled・run を failed にする。
+ * `partial` を渡すと、**最後の失敗のときだけ**書けたところまでの本文を残す（積み直すときは残さない）。
  */
 export async function failAttempt(db: StepRunsDb, input: FailInput): Promise<FailResult> {
   if (!isStepErrorCode(input.code)) throw new TypeError("editor-store: error code must match ^[a-z0-9_]{1,64}$");
@@ -612,10 +623,11 @@ export async function failAttempt(db: StepRunsDb, input: FailInput): Promise<Fai
     }
     const failed = await client.query<{ page_id: string }>(
       `UPDATE step_attempts
-          SET state = 'failed', lease_until = NULL, error_code = $4, finished_at = clock_timestamp()
+          SET state = 'failed', lease_until = NULL, error_code = $4, finished_at = clock_timestamp(),
+              partial_blocks = $5::jsonb
         WHERE run_id = $1 AND step_index = $2 AND generation = $3 AND state = 'running'
         RETURNING page_id`,
-      [input.runId, input.stepIndex, input.generation, input.code],
+      [input.runId, input.stepIndex, input.generation, input.code, input.partial === undefined ? null : JSON.stringify(input.partial)],
     );
     const pageId = failed.rows[0]?.page_id;
     if (!pageId) return { ok: false, reason: "stale_generation" } satisfies FailResult;

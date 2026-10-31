@@ -84,7 +84,20 @@ fi
 
 if [[ $build -eq 1 ]]; then
   log "build $IMAGE:$TAG (Cloud Build)"
-  gcp builds submit --config scripts/editor-deploy/cloudbuild.yaml --substitutions="_IMAGE=$IMAGE,_TAG=$TAG" .
+  if [[ $allow_dirty -eq 1 ]]; then
+    # 手元の変更ごと送る。何を送るかは .gcloudignore が決める。
+    gcp builds submit --config scripts/editor-deploy/cloudbuild.yaml --substitutions="_IMAGE=$IMAGE,_TAG=$TAG" .
+  else
+    # commit 済みの木だけを tar にして送る。ディレクトリを送ると、この checkout の中の
+    # .claude/worktrees/（別セッションの worktree）や手元の build 出力まで一緒に送られ、
+    # 送っている最中に別セッションがファイルを消すと gcloud が落ちる（2026-11-01 の配備がこれで止まった）。
+    src_dir="$(mktemp -d)"
+    trap 'rm -rf "$src_dir"' EXIT
+    git archive --format=tar.gz -o "$src_dir/source.tgz" HEAD
+    gcp builds submit --config scripts/editor-deploy/cloudbuild.yaml --substitutions="_IMAGE=$IMAGE,_TAG=$TAG" "$src_dir/source.tgz"
+    rm -rf "$src_dir"
+    trap - EXIT
+  fi
 else
   log "no build: redeploying the serving image $IMAGE:$TAG"
 fi

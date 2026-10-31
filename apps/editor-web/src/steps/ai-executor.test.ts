@@ -315,8 +315,11 @@ describe("the real step executor", () => {
       .catch((reason: unknown) => reason);
     expect(error).toBeInstanceOf(StepError);
     expect((error as StepError).code).toBe("output_too_long");
-    // 書けた分だけ（切れた段落は入らない）。ページに書く道はここには無い
-    expect((error as StepError).partial).toBe("書けた見出し\n\n書けた段落。");
+    // 書けた分だけ（切れた段落は入らない）。サブページの本文に書く道はここには無い
+    expect((error as StepError).partial).toEqual([
+      { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "書けた見出し" }] },
+      { type: "paragraph", content: [{ type: "text", text: "書けた段落。" }] },
+    ]);
     // 失敗の文そのものには本文を入れない（ログに流れるのは message と code）
     expect((error as Error).message).toBe("step failed: output_too_long");
     expect((error as Error).message).not.toContain("書けた");

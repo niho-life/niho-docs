@@ -117,6 +117,27 @@ describe("runAttempt", () => {
     expect(store.pages.get(run.steps[0]!.pageId)?.blocks).toEqual(upstream);
   });
 
+  it("書き切れなかったときは、書けたところまでを残す（サブページの本文には書かない。#37）", async () => {
+    const partial = [{ type: "paragraph", content: [{ type: "text", text: "書けたところまで" }] }];
+    const executor: StepExecutor = { run: () => Promise.reject(new StepError("output_too_long", false, partial)) };
+    const { store, queue, start, deps, view } = await setup(executor);
+    const run = await start();
+    expect((await runAttempt(deps, queue.drain()[0]!)).status).toBe("failed");
+    expect(store.partialOf(run.id, 0)).toEqual(partial);
+    // 失敗した段階のページを半分の本文で埋めない
+    expect(store.pages.get(run.steps[0]!.pageId)?.blocks).toEqual([]);
+    expect((await view())?.steps[0]?.errorCode).toBe("output_too_long");
+  });
+
+  it("もう一度積み直すときは、書きかけを残さない（次の試行が書き直す）", async () => {
+    const partial = [{ type: "paragraph", content: [{ type: "text", text: "途中" }] }];
+    const executor: StepExecutor = { run: () => Promise.reject(new StepError("ai_timeout", true, partial)) };
+    const { store, queue, start, deps } = await setup(executor);
+    const run = await start();
+    expect((await runAttempt(deps, queue.drain()[0]!)).status).toBe("retry");
+    expect(store.partialOf(run.id, 0)).toBeNull();
+  });
+
   it("rebuilds from fromStep and reuses the upstream sub-pages", async () => {
     const executor = createFakeExecutor();
     const { store, start, drainAll, view } = await setup(executor);
@@ -224,20 +245,23 @@ describe("runAttempt", () => {
     expect(JSON.stringify([...store.runs.values()])).not.toContain("secret");
   });
 
-  it("keeps the text an executor wrote before giving up out of the record (only the code is stored)", async () => {
-    // 続きが終わらなかった段階は、書けた分を `partial` で運ぶ。記録に載るのは code だけで、本文は入らない
+  it("keeps what it wrote in the record, but never in the subpage, the code or the log", async () => {
+    // #138 は書けた分を `step_attempts.partial_blocks` に残す。**サブページの本文には書かない**
+    const partial = [{ type: "paragraph", content: [{ type: "text", text: "合成の書けた本文" }] }];
     const executor: StepExecutor = {
       run: async () => {
-        throw new StepError("output_too_long", false, "合成の書けた本文");
+        throw new StepError("output_too_long", false, partial);
       },
     };
     const { store, queue, start, deps, view } = await setup(executor);
-    await start();
+    const run = await start();
     expect(await runAttempt(deps, queue.drain()[0]!)).toEqual({ status: "failed" });
+    expect(store.partialOf(run.id, 0)).toEqual(partial);
     expect((await view())?.steps[0]).toMatchObject({ state: "failed", errorCode: "output_too_long" });
-    expect(JSON.stringify([...store.runs.values()])).not.toContain("合成の書けた本文");
-    // ページにも書かない
-    expect([...store.pages.values()].every((page) => JSON.stringify(page.blocks).indexOf("合成の書けた本文") < 0)).toBe(true);
+    // サブページの本文は空のまま（中途半端な文書を黙って入れない）
+    expect(store.pages.get(run.steps[0]!.pageId)?.blocks).toEqual([]);
+    // 失敗の code と文には本文が入らない
+    expect(new StepError("output_too_long", false, partial).message).toBe("step failed: output_too_long");
   });
 
   it("fails at once on output that is not blocks, and skips a duplicated task", async () => {

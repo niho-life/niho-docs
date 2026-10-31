@@ -161,7 +161,7 @@ docs-core の規則（`inputs.ts` の `inputsFor`、spec §5.1）:
 - `input_basis` を**項目ごとのハッシュを持つ jsonb** にする（docs-core の `Basis` と同じ形: `source`・`artifacts`・`info`・`guide`・`step`、`refs` は持たない）。
 - 比較は docs-core の `staleReasons` を**そのまま使う**（純粋な関数で、editor の `Block[]` を hash した文字列を入れるだけ）。文言も `staleNoticeText` をそのまま使う。
 - `refreshStale` は `boolean` ではなく**理由**を返し、`GET /api/pages/{id}/steps` の答えに段階ごとの理由を載せる。帯は**色だけで状態を表さない**（文字で理由を出す）ので、むしろ要件に素直。
-- 列の型が変わるので **migration が要る**。§2.7 の写しの列 2 つと**同じ migration にまとめる**（`step_attempts.input_basis` の型 ＋ `step_runs.recipe_snapshot`・`recipe_revision`）。番号は **0023**（オーナー 2026-11-01）。
+- 列の型が変わるので **migration が要る**。§2.7 の写しの列 2 つと**同じ migration にまとめる**（`step_attempts.input_basis` の型 ＋ `step_runs.recipe_snapshot`・`recipe_revision`）。名前は生成器で付ける（§6。`0023` は使わない）。
 
 **互換**: 既存の 64 文字の文字列が入っている行は「記録が無い」として扱い、前提変更にしない（docs-core の `staleReasons` が `recorded` 無しで `[]` を返すのと同じ）。既に出荷している帯を、移行の瞬間に全部「前提変更」にしない。
 
@@ -249,7 +249,7 @@ T5 が旧 NIHO docs の続きを実装した（#125）。出力が上限で切�
   「手順を見る」→ 直す → やり直す、が実際に効く道になる。
 - 対応表への追加は**この設計のレーン（T4）で入れた**（#114 のセッションは終わっているため）。
 
-#### ただし、途中までの本文が捨てられている（**口の変更が 1 つ要る**）
+#### 書けたところまでを残す（**決定・受け取る側は実装済み**）
 
 T5 の続きは「8 回で終わらなければ `output_too_long` で失敗し、**途中まで書けた文書はページに書かない**」。
 一方でオーナーは「旧版の機能は全部必要」として**途中までの出力を残すこと**を認めている（§6 の決まったもの。
@@ -265,12 +265,28 @@ T5 の続きは「8 回で終わらなければ `output_too_long` で失敗し�
 | `StepExecutor.run` は `{ blocks, usage }` を返すか `StepError` を投げる。`StepError` は `code` と `retryable` だけ | `StepError` に**任意の `partial?: Block[]`** を足す。`output_too_long` のときだけ入れる |
 | `runner` の `recordFailure` は code と retryable を store に渡す | 最後の失敗（`outcome === "failed"`）のときだけ `partial` を `step_attempts.partial_blocks` に書く |
 
-`partial_blocks` は **0023 に入れる列**（§6）なので、表の追加は増えない。**サブページの本文には書かない**
+`partial_blocks` は**もう入っている列**（§6。`20261101015926_steps_partial_blocks.sql`）なので、表の追加は増えない。**サブページの本文には書かない**
 （失敗した段階のページを半分の本文で埋めない）。帯から「書けたところまでを見る」で読めるようにする。
 
-これは **T5 の実行器の口への追加**なので、勝手に広げずここに書いて相談にする。入れないなら、オーナーの
-「途中までの出力を残す」は `output_too_long` では満たせないことになる（他の失敗では元から本文が無いので、
-**実質この 1 か所だけが効く**）。
+**オーナーが「それで進めて」と決めた**（2026-11-01）。**受け取る側は実装した。**
+
+| 済み | どこ |
+| --- | --- |
+| 列 `step_attempts.partial_blocks jsonb`（配列だけを受ける CHECK つき） | `migrations/20261101015926_steps_partial_blocks.sql` |
+| `FailInput.partial` を受け、**最後の失敗のときだけ**書く | `packages/editor-store/src/step-runs.ts` の `failAttempt` |
+| **積み直すときは書かない**（次の試行が書き直す）。claim と確定で消す | 同上（`claimAttempt`・`commitAttempt` で `partial_blocks = NULL`） |
+| `StepError` の任意の 3 つ目 `partial` | `apps/editor-web/src/steps/executor.ts` |
+| runner が失敗のときに渡す | `apps/editor-web/src/steps/runner.ts` の `recordFailure` |
+
+**残っているのは 2 つ。**
+
+1. **出す側**（T5）: 続きを使い切ったときに `new StepError("output_too_long", false, 書けたところまで)` を投げる。
+   **受け取る側はもう待っている**ので、T5 は 3 つ目の引数を渡すだけ。
+2. **読む道**: 帯の「書けたところまでを見る」。**本文は帯の polling の応答に入れない**（長いので。§1.2 と同じ理由）。
+   `StepRunStepView` には**有無の印だけ**を足し、本文は押したときに別の要求で取る。これは帯の作業と一緒に入れる。
+
+**サブページの本文には書かない**（失敗した段階のページを半分の本文で埋めない）。他の失敗では元から本文が無いので、
+**実質この 1 か所だけが効く**。
 
 #### 増やすときに守ること
 
@@ -631,7 +647,7 @@ docs-core の `guide-extraction.ts` をサーバーで呼ぶだけ。中身は�
 
 ## 5. 進め方（T1 #122 と T5 #125 が入ってから）
 
-1. **migration 0023**（§2.4・§2.7・E）。列は下の表。
+1. **残りの列の migration**（§2.4・§2.7）。名前は生成器で付ける（§6）。`partial_blocks` は済み。
 2. **入力の規則と前提**（§2.3・§2.4）。本物の AI の前に、偽物のままで「上流の全部を読む」「理由の出る前提変更」を通す。
 3. **手順の写しの固定と差分**（§2.7）。
 4. **`recipes` の表へ寄せる**（§1.2。読み手を 1 つにしてから）＋ **コーチング**（§1.5）＋ **プロファイル**（§2.8）。
@@ -652,12 +668,12 @@ docs-core の `guide-extraction.ts` をサーバーで呼ぶだけ。中身は�
 | --- | --- | --- |
 | 最後の段階の題名 | 公開のシートで人に入れさせる | §2.6 |
 | 手順を直したときの既存の録音 | 旧アプリ通り **run に写しを固定** | §2.7 |
-| migration の番号 | **0023** | §2.4・§2.7 |
+| migration の名前 | **生成器で付ける**（`0023` は使わない）。`partial_blocks` は済み | §6・§2.5 |
 | **プロファイル**（標準・高性能・軽量） | **入れる。**editor では「思考量と出力の上限」に訳す | §2.8 |
 | **コーチングの手順**（`tpl-4`） | **入れる**（既定は 4 つになる） | §1.5 |
 | **お手本の抽出**（文書と URL） | **入れる。**純粋な部分は docs-core にある | §3.5 |
 | **続き**（出力が切れたとき） | **入れる。**無いと記事制作が段階 1 で壊れる | §2.8・F |
-| **途中までの出力** | **入れる**（`RunCheckpoint` の丸写しではなく、使い切ったときの本文だけ）。ただし**実行器の口に `StepError.partial` を足す必要がある**（§2.5。T5 の続きは今これを捨てている） | E・§2.5 |
+| **途中までの出力** | **入れる**（使い切ったときの本文だけ）。**受け取る側は実装済み**（列・`failAttempt`・`StepError.partial`・runner）。残りは出す側（T5）と読む道 | §2.5 |
 | 前提変更の精度 | 項目ごとに持ち、理由を出す。移行では持ってこない | §2.4 |
 | コーチングの入口の言い方 | 既定の `{名前}にする`（「コーチングにする」）。**画面の変更は要らない** | §1.5 |
 | 既定の手順の段階の並べ替え | **許す**（踏襲の方針から。旧版は `moveStep` で並べ替えられる）。守りは「今の設計に更新」側 | §3.3 |
@@ -670,7 +686,7 @@ docs-core の `guide-extraction.ts` をサーバーで呼ぶだけ。中身は�
 | **B** 手順ごとの固有名詞 | `recipes` の表に `terms`。混ぜる順はフォルダ → 手順 → アカウント共通 |
 | **C** 参考ページ | 「同じフォルダの独立文書を実行時に自動で固定」 |
 
-0023 に `info`・`refs` の欄だけ先に置くので、**この 3 つで migration をやり直さない。**
+前提の列に `info`・`refs` の欄だけ先に置くので、**この 3 つで migration をやり直さない。**
 
 ### 残っている相談
 
@@ -681,24 +697,27 @@ docs-core の `guide-extraction.ts` をサーバーで呼ぶだけ。中身は�
 
 実装の着手に残っているのは **T1（#122）と T5（#125）のマージ**だけ。
 
-### migration の番号（0023 で確定）
+### migration の名前（日時に変わった）
 
-`0023` は **T4 のもの**（オーナー 2026-11-01）。経緯を残す。
+**`0023` は使わない。**#127 が main に入り、AGENTS.md が「**名前を自分で決めない。**
+`npm -C packages/editor-store run new-migration -- <名前>` が `YYYYMMDDHHMMSS_<名前>.sql` を作る」と決めた。
+§2.5 の `partial_blocks` は**この生成器で作って入れた**（`20261101015926_steps_partial_blocks.sql`）。残りの列も同じやり方で作る。
+
+経緯を残す（番号の取り合いがあった頃の話）。
 
 - T1 の `recipes` の表は `20261101001500_recipes`（#122。日時の名前。#127 の new-migration）、`0022` は T5（#125）。
 - T5 が一度 `0023_ai_chat_turns.sql` を取っていたが、**`0025` に改名**して空けてもらった（#125 は未マージ・未適用なので安全）。
 - **番号の取り合いそのものを無くす PR が別に出ている**（#127。`npm -C packages/editor-store run new-migration -- <名前>` が
-  日時の名前を付ける。niho-app と同じ流儀）。**進行中のこの作業は `0023` のまま**で、#127 が入ったあとに作るものから日時になる。
-  つまり **T4 の `0023` が手で番号を付ける最後の migration**になる見込み。
+  日時の名前を付ける。niho-app と同じ流儀）。**#127 は main に入った**ので、T4 は `0023` を使わず生成器で付ける。
 
-### 0023 に入れる列
+### 残っている列（§2.4・§2.7。名前は生成器で付ける）
 
 | 列 | 何のため |
 | --- | --- |
 | `step_attempts.input_basis` を jsonb へ | 前提の項目ごとの比較と理由。欄は `source`・`artifacts`・`info`・`guide`・`step`・`refs`（§2.4） |
 | `step_runs.recipe_snapshot jsonb NOT NULL` | 手順の写しの固定。**段階ごとの profile も入れる**（§2.7・§2.8） |
 | `step_runs.recipe_revision integer` | 「手順が新しくなっています」の判定（§2.7） |
-| `step_attempts.partial_blocks jsonb` | 続きを使い切ったときの途中までの出力（E） |
+| ~~`step_attempts.partial_blocks jsonb`~~ | **済み**。`20261101015926_steps_partial_blocks.sql` として入れた（§2.5） |
 
 ## 7. 旧版にあるが、入れないもの（根拠つき）
 
