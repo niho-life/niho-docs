@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The execution infrastructure of the steps (#37, docs/ops/editor-deploy.md §10). Idempotent: what exists is updated.
+# The execution infrastructure of the steps (#37, docs/ops/editor-deploy.md §11). Idempotent: what exists is updated.
 # Run by `gcp-bootstrap.sh resources`; can also be run alone:
 #
 #   scripts/editor-deploy/steps-infra.sh
@@ -12,7 +12,7 @@
 #   - Cloud Scheduler job $STEPS_SWEEP_JOB: every 5 minutes, POST <service URL>/api/internal/steps/sweep with the OIDC token
 #     of the tasks account (audience: the service URL), no retry
 #
-# Queues, service accounts and Scheduler jobs take no labels; their cost stays in the free tier (§10).
+# Queues, service accounts and Scheduler jobs take no labels; their cost stays in the free tier (§11).
 # GCLOUD=<binary> replaces gcloud (steps-infra.test.sh checks the arguments with a fake one; it never reaches GCP).
 # shellcheck source=scripts/editor-deploy/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -52,7 +52,7 @@ steps_infra() {
     --attempt-deadline 300s --max-retry-attempts 0
     --description "NIHO editor steps (#37): requeue lost tasks and expired leases"
   )
-  # update keeps the job's state (a paused job stays paused: docs/ops/editor-deploy.md §10)
+  # update keeps the job's state (a paused job stays paused: docs/ops/editor-deploy.md §11)
   if gcp scheduler jobs describe "$STEPS_SWEEP_JOB" --location "$GCP_REGION" > /dev/null 2>&1; then
     gcp scheduler jobs update http "$STEPS_SWEEP_JOB" "${job_flags[@]}" > /dev/null
   else

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { AiUsageDelta, AiUsageTotals, Block, CreatePageInput, Page, PagePatch, PageVersionSummary, SaveOptions, SaveResult, VersionReason } from "@niho/editor-store";
+import { AnthropicError, createAnthropicModel } from "../ai/anthropic";
 import { resolveAiBackend, type AiBackend } from "../ai/config";
 import type { Proposal } from "../ai/engine";
 import type { AiModel, AiRequest, AiUsageReport } from "../ai/model";
@@ -351,7 +352,7 @@ describe("POST /api/pages/{id}/ai/proposals", () => {
     expect(store.writes).toEqual([]);
   });
 
-  it("answers 413 above 1 MiB and too_large above 200,000 characters of text", async () => {
+  it("answers 413 above 1 MiB and too_large above 30,000 characters of text", async () => {
     const store = memoryStore();
     const page = await store.createPage("user-a", { blocks: [p("一")] });
     const big = JSON.stringify({ baseRevision: 1, intent: { text: "a".repeat(MAX_BODY_BYTES) } });
@@ -359,13 +360,13 @@ describe("POST /api/pages/{id}/ai/proposals", () => {
     expect(tooBig.status).toBe(413);
     expect(await tooBig.text()).toBe('{"error":"payload_too_large"}');
 
-    const huge = await store.createPage("user-a", { blocks: Array.from({ length: 21 }, () => p("あ".repeat(10_000))) });
+    const huge = await store.createPage("user-a", { blocks: Array.from({ length: 4 }, () => p("あ".repeat(10_000))) });
     const { backend, calls } = stubBackend(() => ({}));
     const tooLarge = await propose(huge.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { ai: () => backend }));
     expect(tooLarge.status).toBe(413);
     expect(await tooLarge.text()).toBe('{"error":"too_large"}');
     // 範囲を選べば送れる
-    expect((await propose(huge.id, { baseRevision: 1, intent: { preset: "tidy" }, scope: { fromIndex: 0, toIndex: 19 } }, deps("user-a", store, { ai: () => backend }))).status).toBe(200);
+    expect((await propose(huge.id, { baseRevision: 1, intent: { preset: "tidy" }, scope: { fromIndex: 0, toIndex: 2 } }, deps("user-a", store, { ai: () => backend }))).status).toBe(200);
     expect(calls.length).toBeGreaterThan(0);
   });
 
@@ -648,5 +649,124 @@ describe("AI routes: shared rules", () => {
       expect(response.headers.get("cache-control")).toBe("private, no-store");
       expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
     }
+  });
+});
+
+describe("AI routes with the Anthropic adapter (fake fetch)", () => {
+  it("proposes from the model's answer and records the cost from the claude-sonnet-5-5 price table", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の  一段落目"), heading("合成の見出し")] });
+    const usage = memoryUsage();
+    // 合成の鍵。本物の API は呼ばない（fetch は差し替える）
+    const key = "synthetic-anthropic-key-0123456789";
+    const sent: { url: string; body: { model: string; messages: { content: string }[] }; key: string | null }[] = [];
+    let answer = (): Response =>
+      Response.json({
+        model: "claude-sonnet-5-5",
+        content: [{ type: "text", text: '```json\n{"edits":[{"index":0,"text":"合成の一段落目。"}],"inserts":[]}\n```' }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 30_000, output_tokens: 4_000 },
+      });
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push({ url: String(input), body: JSON.parse(String(init?.body)), key: new Headers(init?.headers).get("x-api-key") });
+      return answer();
+    }) as typeof globalThis.fetch;
+    const backend: AiBackend = { model: createAnthropicModel({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: key }, fetch }), provider: "claude" };
+    const d = deps("user-a", store, { usage, ai: () => backend, limitUsd: 0.15 });
+
+    const response = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as ProposalBody;
+    expect(body.proposal.changes).toEqual([{ index: 0, before: "合成の  一段落目", after: "合成の一段落目。", parts: ["合成の", { del: "  " }, "一段落目", { ins: "。" }] }]);
+    // claude-sonnet-5-5: 入力 $2・出力 $10 / 100 万トークン → 30,000 × 2 + 4,000 × 10 = $0.10
+    expect(body.usage).toEqual({ month: MONTH, inputTokens: 30_000, outputTokens: 4_000, costUsd: 0.1, limitUsd: 0.15, nearLimit: false });
+    expect(usage.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 1, costMicroUsd: 100_000 });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.url).toBe("https://api.anthropic.com/v1/messages");
+    expect(sent[0]!.key).toBe(key);
+    expect(sent[0]!.body.model).toBe("claude-sonnet-5-5");
+    expect(sent[0]!.body.messages[0]!.content).toContain("<untrusted_data>");
+    expect(store.writes).toEqual([]);
+
+    // 上流の失敗・読めない出力は 502（鍵・本文はログに出さない）
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    answer = () => new Response("synthetic upstream failure", { status: 529 });
+    const overloaded = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d);
+    expect([overloaded.status, await overloaded.text()]).toEqual([502, '{"error":"ai_failed"}']);
+    // トークン数が返らない失敗（HTTP の失敗）は数えない
+    expect(usage.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 1, costMicroUsd: 100_000 });
+    // JSON でない応答も課金されているので数える（10 × 2 + 10 × 10 = 120 micro-USD）
+    answer = () => Response.json({ model: "claude-sonnet-5-5", content: [{ type: "text", text: "合成の一段落目 は JSON ではない" }], usage: { input_tokens: 10, output_tokens: 10 } });
+    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(502);
+    expect(usage.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 2, inputTokens: 30_010, outputTokens: 4_010, costMicroUsd: 100_120 });
+    // 出力の上限で途中で切れた応答も 502 で、数える
+    answer = () => Response.json({ model: "claude-sonnet-5-5", content: [{ type: "text", text: '{"edits":[{"index":0,"text":"合成' }], stop_reason: "max_tokens", usage: { input_tokens: 10, output_tokens: 12_000 } });
+    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(502);
+    expect(usage.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 3, costMicroUsd: 100_120 + 120_020 });
+    const logged = JSON.stringify(log.mock.calls);
+    log.mockRestore();
+    expect(logged).not.toContain(key);
+    expect(logged).not.toContain("一段落目");
+    expect(logged).toContain("AnthropicError");
+    expect(logged).toContain('"kind":"overloaded","status":529');
+    expect(logged).toContain('"kind":"invalid_output","reason":"max_tokens"');
+
+    // 上限（$0.15）に届いたらモデルを呼ばずに 429（いまは $0.22014）
+    const calls = sent.length;
+    const refused = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d);
+    expect([refused.status, await refused.text()]).toEqual([429, '{"error":"quota_exceeded"}']);
+    expect(sent).toHaveLength(calls);
+  });
+});
+
+describe("AI routes: usage of a failed model call", () => {
+  it("counts the usage a model error carries (an answer that came back unusable) and nothing for an error without it", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成"), p("合成の二")] });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const failing = (error: unknown): AiBackend => ({
+      model: {
+        async run() {
+          throw error;
+        },
+      },
+      provider: "claude",
+    });
+    const ask = (backend: AiBackend, usage: MemoryUsage) => propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { usage, ai: () => backend }));
+
+    // JSON でない応答（AnthropicError に使用量）: 502 で、使用量が増える
+    const counted = memoryUsage();
+    const notJson = new AnthropicError("invalid_output", { reason: "not_json", usage: { model: "claude-sonnet-5-5", inputTokens: 1_000, outputTokens: 500 } });
+    const response = await ask(failing(notJson), counted);
+    expect([response.status, await response.text()]).toEqual([502, '{"error":"ai_failed"}']);
+    // 1,000 × 2 + 500 × 10 = 7,000 micro-USD
+    expect(counted.rows.get(`user-a/${MONTH}`)).toEqual({ owner: "user-a", month: MONTH, requests: 1, inputTokens: 1_000, outputTokens: 500, costMicroUsd: 7_000 });
+
+    // 使用量の無い例外（HTTP の失敗・時間切れ・AnthropicError でないもの）では増えない
+    for (const error of [new AnthropicError("overloaded", { status: 529 }), new AnthropicError("timeout"), Object.assign(new Error("synthetic"), { usage: { model: "claude-sonnet-5-5", inputTokens: 1_000, outputTokens: 500 } })]) {
+      const untouched = memoryUsage();
+      expect((await ask(failing(error), untouched)).status).toBe(502);
+      expect(untouched.rows.size).toBe(0);
+    }
+
+    // 先に通った要求の分と、失敗した要求の分を両方数える（長いページを分けたとき）
+    const long = await store.createPage("user-a", { blocks: [p("あ".repeat(3_000)), p("い".repeat(3_000))] });
+    const both = memoryUsage();
+    let call = 0;
+    const second: AiBackend = {
+      model: {
+        async run() {
+          call += 1;
+          if (call === 1) return { output: { edits: [], inserts: [] }, usage: { model: "claude-sonnet-5-5", inputTokens: 100, outputTokens: 10 } };
+          throw new AnthropicError("invalid_output", { reason: "max_tokens", usage: { model: "claude-sonnet-5-5", inputTokens: 200, outputTokens: 20 } });
+        },
+      },
+      provider: "claude",
+    };
+    expect((await propose(long.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { usage: both, ai: () => second }))).status).toBe(502);
+    expect(call).toBe(2);
+    expect(both.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 2, inputTokens: 300, outputTokens: 30, costMicroUsd: 900 });
+    log.mockRestore();
+    expect(store.writes).toEqual([]);
   });
 });

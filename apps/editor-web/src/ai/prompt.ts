@@ -3,7 +3,7 @@ import type { AiRequest } from "./model";
 import { PRESETS, intentMode, type PresetId } from "./presets";
 
 /**
- * 本物のモデルへの要求の文（純粋関数）。この段では呼ばれない（偽物のモデルは使わない）が、形はテストで固定する。
+ * 本物のモデル（anthropic.ts）への要求の文（純粋関数。偽物のモデルは使わない）。形はテストで固定する。
  *
  * ページの本文は信頼しないデータとして `<untrusted_data>` で包む（本文の中の閉じ書きは `<\/untrusted_data>` に置き換えて外に出さない）。
  * 段落は 1 行に 1 つの JSON（index・kind・text）で並べ、改行や引用符で境目がずれないようにする。

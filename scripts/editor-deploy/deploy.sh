@@ -6,7 +6,7 @@
 #   4. smoke checks: every response is noindex, and the API refuses a caller with no session
 #      (with STEPS_MODE=cloud-tasks, also the worker routes refuse a caller with no OIDC token)
 # Usage: scripts/editor-deploy/deploy.sh [--no-build] [--allow-dirty]
-#   --no-build  redeploys the image that is serving now (picks up new secret versions; no build)
+#   --no-build  redeploys the image that is serving now (picks up new secret versions and turns AI on or off; no build)
 # Needs scripts/editor-deploy/deploy.env (see deploy.env.example) and a gcloud login with access to the project.
 # Public CI never runs this: the production origin is this script, run by the owner (docs/ops/editor-deploy.md §7).
 # shellcheck source=scripts/editor-deploy/lib.sh
@@ -39,6 +39,16 @@ fi
 CONNECTION="$(cloudsql_connection_name)"
 SERVICE_URL="$(service_url "$SERVICE")"
 
+# AI (#38): on only when the newest version of the key secret is enabled (set-ai-key.sh). Otherwise nothing is added for AI and
+# the app answers 503 ai_unavailable. Read every deploy, so disabling the versions and redeploying turns AI off.
+ai=0
+if ai_key_ready; then
+  ai=1
+  log "AI: on ($AI_MODEL, monthly limit $AI_MONTHLY_LIMIT_USD USD per person)"
+else
+  log "AI: off (the newest version of $SECRET_ANTHROPIC_KEY is missing or not enabled)"
+fi
+
 if [[ $build -eq 1 ]]; then
   log "build $IMAGE:$TAG (Cloud Build)"
   gcp builds submit --config scripts/editor-deploy/cloudbuild.yaml --substitutions="_IMAGE=$IMAGE,_TAG=$TAG" .
@@ -65,11 +75,11 @@ gcp run deploy "$SERVICE" \
   --service-account "$RUNNER_SA_EMAIL" \
   --no-invoker-iam-check --ingress all \
   --port 8080 --min-instances 0 --max-instances 2 \
-  --cpu 1 --memory 512Mi --cpu-boost --concurrency 40 --timeout 60 \
+  --cpu 1 --memory 512Mi --cpu-boost --concurrency 40 --timeout 300 \
   --add-cloudsql-instances "$CONNECTION" \
   --network "$VPC_NETWORK" --subnet "$VPC_SUBNET" --vpc-egress private-ranges-only \
-  --set-secrets "DATABASE_URL=$SECRET_DATABASE_URL:latest" \
-  --set-env-vars "$(service_env_vars)$(steps_env_vars)" \
+  --set-secrets "$(service_secrets "$ai")" \
+  --set-env-vars "$(service_env_vars "$ai")$(steps_env_vars)" \
   --labels "$COST_LABEL,commit=${TAG:0:12}"
 
 # 一度でも特定の revision へ traffic を割り当てる（docs/ops/editor-deploy.md §9 の戻し方）と、Cloud Run は以降のデプロイもその割り当てを
