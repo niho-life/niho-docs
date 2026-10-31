@@ -63,6 +63,25 @@ function topAncestor(page: PageSummary, byId: ReadonlyMap<string, PageSummary>):
   return top;
 }
 
+/**
+ * 削除したページと、その子孫（読み込んである分。親を辿って届くもの）を除いた一覧。順は変えない。
+ * サーバーは子孫ごとゴミ箱へ入れる（`DELETE /api/pages/{id}`）ので、一覧からも一緒に外す。
+ */
+export function withoutPageTree(pages: readonly PageSummary[], id: string): PageSummary[] {
+  const removed = new Set([id]);
+  // 親が先に外れていれば子も外す（並びは更新順で親子の順ではないので、外すものが増えなくなるまで繰り返す）
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const page of pages) {
+      if (page.parent !== null && removed.has(page.parent) && !removed.has(page.id)) {
+        removed.add(page.id);
+        grew = true;
+      }
+    }
+  }
+  return pages.filter((page) => !removed.has(page.id));
+}
+
 /** 作った順（手順の順）。ISO 8601 の UTC の文字列は文字の順が時刻の順。 */
 function byCreated(a: PageSummary, b: PageSummary): number {
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;

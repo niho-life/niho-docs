@@ -3,10 +3,11 @@
 import "niho-ui/styles/tokens.css";
 import "niho-docs-ui/styles/tokens.css";
 import "niho-docs-ui/styles/editor.css";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { PageTitle } from "niho-docs-ui/components/BlockEditor";
 import { ConflictBand } from "@/components/ConflictBand";
+import { useEditorFrame } from "@/components/EditorFrame";
 import { PageChrome } from "@/components/PageChrome";
 import { docFromBlocks } from "@/editor/doc";
 import { buildPageExtensions } from "@/editor/page-extensions";
@@ -25,8 +26,11 @@ import {
 import { MAX_TITLE_CHARS } from "@/lib/page-limits";
 import { UNCREATED_REVISION, classifySaveFailure, createPageSaver, type PageSaver } from "@/lib/page-save";
 import { PageConflictError, type ConflictPage, type PageBody } from "@/lib/pages-client";
+import { SAVE_STATUS_TEXT, type SaveStatus } from "@/lib/save-status";
 
 export { docFromBlocks };
+/** 右上の保存状態（`conflict` は競合の帯が出ていて、自動保存を止めている）。 */
+export type { SaveStatus };
 
 export type EditablePage = {
   title: string;
@@ -53,18 +57,6 @@ export type PageEditorEvents = {
   onTitleChange?: (title: string) => void;
   /** 保存が終わった（作った・PATCH のどちらも）。 */
   onSaved?: () => void;
-};
-
-/** 右上の保存状態（`conflict` は競合の帯が出ていて、自動保存を止めている）。 */
-export type SaveStatus = "saved" | "saving" | "offline" | "error" | "conflict" | "signedOut";
-
-const STATUS_TEXT: Record<SaveStatus, string> = {
-  saved: "保存済み",
-  saving: "保存中",
-  offline: "オフライン・この端末に保持",
-  error: "保存に失敗しました。もう一度試します",
-  conflict: "保存を止めています",
-  signedOut: "ログインが切れました。本文はこの端末に残しています",
 };
 
 const noSubscription = () => () => undefined;
@@ -119,8 +111,11 @@ function loadDraft(editor: Editor, draft: PageDraft): boolean {
  */
 export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | null } & PageEditorEvents) {
   const { page } = props;
+  const { attachPage } = useEditorFrame();
   const [title, setTitle] = useState(page.title);
   const [state, setState] = useState<SaveState>("saved");
+  // 保存先のページの id（新しいページは最初の保存で作ったときに決まる）
+  const [pageId, setPageId] = useState<string | null>(page.id);
   const [unreadable, setUnreadable] = useState(false);
   const [titleClamped, setTitleClamped] = useState(false);
   const [conflict, setConflict] = useState<ConflictPage | null>(null);
@@ -155,7 +150,10 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
       pageId: initial.id,
       revision: initial.revision ?? UNCREATED_REVISION,
       content: { title: initial.title, blocks: initial.blocks },
-      onCreated: (created) => eventsRef.current.onCreated?.(created.id),
+      onCreated: (created) => {
+        setPageId(created.id);
+        eventsRef.current.onCreated?.(created.id);
+      },
     });
     let keeper: DraftKeeper | null = null;
     const autosave = createAutosave<PageBody>({
@@ -317,6 +315,13 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
     if (editor) editor.setEditable(ready && !unreadable, false);
   }, [editor, ready, unreadable]);
 
+  // 枠のヘッダー（状態の丸と「…」）へ、このページを登録する。「…」の操作（複製・書き出し・削除）は、この flush で
+  // まだ届いていない変更を先に保存し、届かなければ止める。下書きを読み終えるまでと、まだ作っていないページは id を渡さない
+  // （「…」を出さない。読み終える前に操作すると、あとから載せる下書きが操作に入らないため）。画面を離れたら外す
+  const flush = useCallback(() => autosaveRef.current?.settle() ?? Promise.resolve(false), []);
+  const status = statusOf(state);
+  useEffect(() => attachPage({ id: ready ? pageId : null, status, flush }), [attachPage, ready, pageId, status, flush]);
+
   const overwrite = () => {
     const saver = saverRef.current;
     const autosave = autosaveRef.current;
@@ -342,7 +347,6 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
     }
   };
 
-  const status = statusOf(state);
   return (
     <div
       ref={setRoot}
@@ -356,8 +360,9 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
         keeperRef.current?.compositionEnded();
       }}
     >
-      <p role="status" aria-live="polite" data-save-state={status} data-drafts={hasStorage && draftsKept ? "kept" : "none"}>
-        {STATUS_TEXT[status]}
+      {/* 見える文字だけ。読み上げはヘッダーの状態の丸（aria-live）が持つので、ここは live region にしない（二重に読み上げない） */}
+      <p data-save-state={status} data-drafts={hasStorage && draftsKept ? "kept" : "none"}>
+        {SAVE_STATUS_TEXT[status]}
       </p>
       {conflict && <ConflictBand page={conflict} overwriting={state === "saving"} container={root} onCopy={copyBody} onOverwrite={overwrite} />}
       <PageTitle

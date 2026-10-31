@@ -291,6 +291,120 @@ describe("createAutosave", () => {
     expect(contexts.at(-1)).toEqual({ keepalive: false });
   });
 
+  describe("settle (before duplicate, export and delete)", () => {
+    /** 結果がまだ出ていなければ "pending"。 */
+    function track(promise: Promise<boolean>) {
+      const box: { value: boolean | "pending" } = { value: "pending" };
+      void promise.then((value) => (box.value = value));
+      return box;
+    }
+
+    it("is true at once with nothing to send, and otherwise sends at once and is true once the server has it", async () => {
+      const { autosave, saves } = setup();
+      expect(await autosave.settle()).toBe(true);
+      expect(saves).toEqual([]);
+      autosave.change({ title: "a" });
+      const settled = track(autosave.settle());
+      // 1 秒を待たずに送る
+      await vi.advanceTimersByTimeAsync(0);
+      expect(saves).toEqual([{ title: "a" }]);
+      expect(settled.value).toBe(true);
+      expect(autosave.hasPending()).toBe(false);
+    });
+
+    it("waits for the save in flight, sends what came after it right away, and is true only when all has arrived", async () => {
+      let release: () => void = () => undefined;
+      const saves: Patch[] = [];
+      const autosave = createAutosave<Patch>({
+        save: (patch) => {
+          saves.push(patch);
+          return new Promise<void>((resolve) => (release = resolve));
+        },
+        isComposing: () => false,
+        onState: () => undefined,
+      });
+      autosave.change({ title: "a" });
+      await vi.advanceTimersByTimeAsync(1000);
+      autosave.change({ title: "ab" });
+      const settled = track(autosave.settle());
+      await vi.advanceTimersByTimeAsync(0);
+      // 送るのは 1 つずつ
+      expect(saves).toEqual([{ title: "a" }]);
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(saves).toEqual([{ title: "a" }, { title: "ab" }]);
+      expect(settled.value).toBe("pending");
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled.value).toBe(true);
+    });
+
+    it("is false when the save fails (offline, signed out, server), keeps the change, and keeps retrying as before", async () => {
+      for (const failure of [new Offline("Failed to fetch"), new SignedOut("401"), new Error("500")]) {
+        const { autosave, saves, setFail } = setup();
+        setFail(failure);
+        autosave.change({ title: "a" });
+        expect(await autosave.settle()).toBe(false);
+        expect(autosave.hasPending()).toBe(true);
+        setFail(false);
+        if (!(failure instanceof SignedOut)) {
+          await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0]!);
+          expect(saves).toEqual([{ title: "a" }, { title: "a" }]);
+          expect(autosave.hasPending()).toBe(false);
+        }
+        autosave.dispose();
+      }
+    });
+
+    it("is false while stopped (a conflict waits for the user), without sending", async () => {
+      const { autosave, saves } = setup();
+      autosave.stop();
+      autosave.change({ title: "a" });
+      expect(await autosave.settle()).toBe(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(saves).toEqual([]);
+      expect(autosave.hasPending()).toBe(true);
+    });
+
+    it("is false for a conflict met while settling, and for a waiting call when the screen closes or is disposed", async () => {
+      const conflict = setup();
+      conflict.setFail(new Conflict());
+      conflict.autosave.change({ title: "a" });
+      expect(await conflict.autosave.settle()).toBe(false);
+
+      let release: () => void = () => undefined;
+      const slow = createAutosave<Patch>({ save: () => new Promise<void>((resolve) => (release = resolve)), isComposing: () => false, onState: () => undefined });
+      slow.change({ title: "a" });
+      const closed = track(slow.settle());
+      slow.close();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(closed.value).toBe(false);
+      release();
+      expect(await slow.settle()).toBe(false);
+
+      const disposed = createAutosave<Patch>({ save: () => new Promise<void>(() => undefined), isComposing: () => false, onState: () => undefined });
+      disposed.change({ title: "a" });
+      const gone = track(disposed.settle());
+      disposed.dispose();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(gone.value).toBe(false);
+    });
+
+    it("waits for the input method to finish composing before it sends", async () => {
+      let composing = true;
+      const { autosave, saves } = setup({ composing: () => composing });
+      autosave.change({ title: "かん" });
+      const settled = track(autosave.settle());
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(saves).toEqual([]);
+      expect(settled.value).toBe("pending");
+      composing = false;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(saves).toEqual([{ title: "かん" }]);
+      expect(settled.value).toBe(true);
+    });
+  });
+
   it("tells whether a save left the page idle (nothing typed during it)", async () => {
     let release: () => void = () => undefined;
     const saved: boolean[] = [];

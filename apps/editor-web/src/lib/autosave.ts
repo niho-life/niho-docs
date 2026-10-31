@@ -48,6 +48,12 @@ export type Autosave<Patch extends object> = {
   change: (patch: LazyPatch<Patch>) => void;
   /** 時計を待たずに今たまっている変更を保存する（変換中・前の保存の最中は、その後へ送る）。 */
   flush: (options?: FlushOptions) => Promise<void>;
+  /**
+   * たまっている変更を待たずに送り、全てサーバーに届くまで待つ（複製・書き出し・削除の前）。届いた（何も無かった）なら true。
+   * 止まっている（競合）・送れなかった（オフライン・ログイン切れ・サーバーの失敗）・閉じた・捨てたなら false。
+   * どちらでも変更は捨てない（失敗のあとの送り直しは今までどおり）。前の保存の最中なら、その直後に送る。変換中は確定を待つ。
+   */
+  settle: () => Promise<boolean>;
   /** 自動保存を止める（開いたときに競合していた下書きなど）。変更はため続ける。 */
   stop: () => void;
   /** 止まった自動保存を再開し、たまった変更をすぐ送る（「この内容で上書き」）。 */
@@ -90,11 +96,18 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
   let stopped = false;
   let failures = 0;
   let state: SaveState = "saved";
+  // settle を待っている呼び出し（全て届いた・届かなかったで一度に返す）
+  let waiters: Array<(settled: boolean) => void> = [];
 
   const setState = (next: SaveState, error?: unknown) => {
     if (next === state && error === undefined) return;
     state = next;
     options.onState(next, error);
+  };
+  const settleWaiters = (settled: boolean) => {
+    const list = waiters;
+    waiters = [];
+    for (const resolve of list) resolve(settled);
   };
   const inFailure = () => state === "offline" || state === "error" || state === "signedOut";
 
@@ -138,6 +151,7 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
     } catch (error) {
       pending = { ...lazy, ...(pending ?? {}) };
       setState("error", error);
+      settleWaiters(false);
       return;
     }
     if (!inFailure()) setState("saving");
@@ -154,9 +168,11 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
         stopped = true;
         clear();
         setState("stopped", error);
+        settleWaiters(false);
         return;
       }
       setState(failure, error);
+      settleWaiters(false);
       if (closing || failure === "signedOut") return;
       failures += 1;
       // 保存の最中に入力があれば、その入力の時計（1 秒）を優先する
@@ -174,9 +190,12 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
     }
     if (idle) {
       setState("saved");
+      settleWaiters(true);
     } else {
       setState("saving");
-      if (timer === null) later(delay);
+      // settle を待っていれば 1 秒を待たずに続きを送る
+      if (waiters.length > 0) void flush();
+      else if (timer === null) later(delay);
     }
   }
 
@@ -190,11 +209,20 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
       later(delay);
     },
     flush,
+    settle() {
+      if (disposed || closing || stopped) return Promise.resolve(false);
+      if (pending === null && !inFlight) return Promise.resolve(true);
+      const settled = new Promise<boolean>((resolve) => waiters.push(resolve));
+      // 保存の最中なら、その終わりに続きを送る（上の flush の成功の分岐）
+      if (!inFlight) void flush();
+      return settled;
+    },
     stop() {
       if (disposed || closing) return;
       stopped = true;
       clear();
       setState("stopped");
+      settleWaiters(false);
     },
     resume() {
       if (disposed || closing) return;
@@ -219,12 +247,15 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
         }
       }
       closing = true;
+      // 画面を離れた。待っていた操作はもう行わない（保存はこのあとも 1 回送る）
+      settleWaiters(false);
       clear();
       unsubscribeOnline();
       void flush();
     },
     dispose() {
       disposed = true;
+      settleWaiters(false);
       clear();
       unsubscribeOnline();
     },

@@ -666,8 +666,9 @@ describe("PageEditor with the chrome", () => {
     });
     await flush();
     expect(container.querySelector(".be > [data-page-chrome].es-root")).not.toBeNull();
-    // 保存状態の読み上げは今まで通り、ページの先頭の role="status"
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("保存済み");
+    // 保存状態の表示は今まで通りページの先頭（読み上げはヘッダーの状態の丸が持つので、ここは live region ではない）
+    expect(container.querySelector("[data-save-state]")?.textContent).toBe("保存済み");
+    expect(container.querySelector("[data-save-state]")?.getAttribute("role")).toBeNull();
 
     const editor = bodyEditor();
     await cursorAt(editor, 1);

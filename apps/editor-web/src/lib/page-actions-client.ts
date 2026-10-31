@@ -1,16 +1,24 @@
 /**
- * ブラウザから「…」の操作（リンクで共有・複製・書き出し）の API を呼ぶ（同じ origin。cookie・token は扱わない）。
- * 画面への組み込みは #32（docs-ui の PageSharingPanel に DocsPageShareState をそのまま渡せる）。
+ * ブラウザから「…」の操作（リンクで共有・複製・書き出し・削除）の API を呼ぶ（同じ origin。cookie・token は扱わない）。
+ * 複製・書き出し・削除はヘッダーの「…」（src/lib/use-page-menu.ts）から。共有は次の段（docs-ui の PageSharingPanel に
+ * DocsPageShareState をそのまま渡せる）。
  */
 import type { DocsPageShareState } from "@niho/docs-core";
+import type { PageKind } from "@niho/editor-store";
 
 export type { DocsPageShareState };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** editor-store の PAGE_KINDS の写し（画面に pg を持ち込まないよう、値は import しない）。 */
+const PAGE_KINDS = ["note", "journal", "rec", "article", "step"] as const satisfies readonly PageKind[];
 
 export class PageActionError extends Error {
   override readonly name = "PageActionError";
-  constructor(readonly status: number) {
+  /** `code` はエラーの本文の短い code（`published` など。読めなければ null）。 */
+  constructor(
+    readonly status: number,
+    readonly code: string | null = null,
+  ) {
     super(`page action failed with ${status}`);
   }
 }
@@ -62,15 +70,43 @@ export function stopPageShare(id: string): Promise<DocsPageShareState> {
   return shareRequest(id, "DELETE");
 }
 
-/** ページを複製し、新しいページの id を返す。 */
-export async function duplicatePageRequest(id: string): Promise<string> {
-  const data = (await send(pagePath(id, "/duplicate"), "POST")) as { page?: { id?: unknown } };
+/** 複製してできたページ（一覧の上に足すのに要る分）。 */
+export type DuplicatedPage = { id: string; title: string; kind: PageKind };
+
+function isPageKind(value: unknown): value is PageKind {
+  return typeof value === "string" && (PAGE_KINDS as readonly string[]).includes(value);
+}
+
+/** ページを複製し、新しいページの id・題名（「〜のコピー」）・種類を返す。種類が読めなければ note として扱う。 */
+export async function duplicatePageRequest(id: string): Promise<DuplicatedPage> {
+  const data = (await send(pagePath(id, "/duplicate"), "POST")) as { page?: { id?: unknown; title?: unknown; kind?: unknown } };
   const newId = data.page?.id;
-  if (typeof newId !== "string" || !UUID_PATTERN.test(newId)) throw new PageActionError(500);
-  return newId;
+  const title = data.page?.title;
+  if (typeof newId !== "string" || !UUID_PATTERN.test(newId) || typeof title !== "string") throw new PageActionError(500);
+  const kind = data.page?.kind;
+  return { id: newId, title, kind: isPageKind(kind) ? kind : "note" };
 }
 
 /** Markdown の書き出しの URL（`<a href download>` か location に渡す。応答は attachment）。 */
 export function pageExportUrl(id: string): string {
   return pagePath(id, "/export.md");
+}
+
+/** 削除の応答を待つ上限（届かないまま待ち続けて、確認のダイアログが閉じられなくならないように）。 */
+export const DELETE_TIMEOUT_MS = 30_000;
+
+function timeoutSignal(ms: number): AbortSignal | undefined {
+  return typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(ms) : undefined;
+}
+
+/**
+ * ページをゴミ箱へ入れる（`DELETE /api/pages/{id}`。204。子孫のページもサーバーが一緒に入れる）。
+ * 失敗は PageActionError（公開中は 409 と code `published`）。届かない・時間切れは fetch の例外のまま。
+ */
+export async function deletePageRequest(id: string): Promise<void> {
+  const signal = timeoutSignal(DELETE_TIMEOUT_MS);
+  const response = await fetch(pagePath(id, ""), { method: "DELETE", credentials: "same-origin", cache: "no-store", ...(signal ? { signal } : {}) });
+  if (response.ok) return;
+  const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+  throw new PageActionError(response.status, typeof body?.error === "string" ? body.error : null);
 }
