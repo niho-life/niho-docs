@@ -1,14 +1,14 @@
 import "server-only";
-import { getEditorSettings } from "@niho/editor-store";
 import { getAuthProvider } from "../auth";
 import { CloudTasksQueue, resolveCloudTasksConfig, type CloudTasksConfig } from "../steps/cloud-tasks";
 import { fakeExecutor, type StepExecutor } from "../steps/executor";
 import { createInlineQueue, resolveStepsMode } from "../steps/inline";
 import type { TaskQueue } from "../steps/queue";
-import { recipesOf, type RecipeReader } from "../steps/recipes";
+import type { RecipeReader } from "../steps/recipes";
 import { pgStepRunStore, pgStepSweepStore } from "../steps/store";
 import { getPool } from "./db";
 import { verifyGoogleOidc } from "./google-oidc";
+import { ownerRecipes as readOwnerRecipes } from "./recipe-source";
 import type { StepsApiDeps } from "./steps-api";
 import type { StepsWorkerDeps } from "./steps-worker-api";
 
@@ -17,11 +17,11 @@ function stepExecutor(): StepExecutor {
   return fakeExecutor;
 }
 
-/** その人の手順（設定で変えたもの・足したものを既定にかぶせたもの。#108）。DB が無ければ null。 */
+/** その人の手順（表 `recipes`。無ければ既定を写して入れる。#37・#108）。DB が無ければ null。 */
 function ownerRecipes(): RecipeReader | null {
   const pool = getPool();
   if (!pool) return null;
-  return async (owner) => recipesOf((await getEditorSettings(pool, owner)).recipes);
+  return (owner) => readOwnerRecipes(pool, owner);
 }
 
 // inline のキューは Pool ごとに 1 つ（積んだ名前の重複の除去を要求の間で共有する）
@@ -53,7 +53,7 @@ export const stepsDeps: StepsApiDeps = {
     const pool = getPool();
     if (!pool) return null;
     if (inline?.pool !== pool) {
-      inline = { pool, queue: createInlineQueue({ store: pgStepRunStore(pool), recipes: async (owner) => recipesOf((await getEditorSettings(pool, owner)).recipes), executor: stepExecutor() }) };
+      inline = { pool, queue: createInlineQueue({ store: pgStepRunStore(pool), recipes: (owner) => readOwnerRecipes(pool, owner), executor: stepExecutor() }) };
     }
     return inline.queue;
   },
