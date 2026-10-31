@@ -31,6 +31,10 @@ const VARIANTS: { id: string; widths: readonly number[] }[] = [
   { id: "page:rec2?rail=1", widths: [390, 375, 320] },
   { id: "page:j1030?rail=1", widths: [390, 375, 320] },
   { id: "page:rec?rail=0", widths: [1440, 390, 375, 320] },
+  // 録音の文字起こし（話者 3 人・直している最中／6 人で色が出そろう・長い名前／時刻なしで再生なし）
+  { id: "page:rec?speakers=3&edit=1&rail=0", widths: [1440, 390, 375, 320] },
+  { id: "page:rec?speakers=6&rail=0", widths: [1440, 390, 375, 320] },
+  { id: "page:rec?time=0&play=0&rail=0", widths: [1440, 390, 375, 320] },
   // editor-web の情報パネル（#34 第 3 段。自分だけ・肩書なし・Markdown だけ・ページを削除・言語の一言）
   { id: "page:memo?rail=1&web=1", widths: [1440, 390, 375, 320] },
   { id: "page:rec?rail=1&web=1&note=1", widths: [1440, 390, 375, 320] },

@@ -13,7 +13,7 @@ export type ScreenDef = {
 
 export const SCREENS: ScreenDef[] = [
   { id: "login", label: "ログイン", url: "/" },
-  { id: "page:j1030", label: "今日の日記", url: "/p/…" },
+  { id: "page:j1030", label: "日付の題名のメモ", url: "/p/…" },
   { id: "new", label: "新しいページ", url: "/p/new" },
   { id: "newrec", label: "録音から（はじめる）", url: "/p/new?from=recording" },
   { id: "page:memo", label: "思考メモ（AIで整える）", url: "/p/…", rail: true, proposal: true },

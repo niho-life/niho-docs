@@ -13,7 +13,6 @@ import {
   ShellProposal,
   ShellRail,
   ShellRailSection,
-  ShellRecording,
   ShellSidebar,
   ShellSteps,
   ShellTools,
@@ -30,10 +29,11 @@ import {
   type ShellStep,
   type ShellToolAction,
 } from "../src/shell";
-import { DEST, EXPERIENCES, ME, TRANSCRIPT, byId, isPublished, missingFor, publicationOf, urlOf, PAGES, type GalleryPage } from "./data";
+import { DEST, EXPERIENCES, ME, byId, isPublished, missingFor, publicationOf, urlOf, PAGES, type GalleryPage } from "./data";
 import { PublishFlow, type SheetKind } from "./publish-flow";
 import { findScreen } from "./screens";
 import { isNarrow, listItems, navigate } from "./shared";
+import { TranscriptDemo, type TranscriptForced } from "./transcript-demo";
 
 /** 文字を選んだとき: 3つ目の段落の頭 22 文字を選択に置き換える（モックの withSelection と同じ）。 */
 function withSelection(blocks: ShellBodyBlock[]): ShellBodyBlock[] {
@@ -96,10 +96,10 @@ function stepsFor(page: GalleryPage): { root: GalleryPage; steps: ShellStep[] } 
 }
 
 /**
- * web: editor-web が今つないでいる形の情報パネル（#34 第 3 段。公開は「自分だけ」だけ・肩書なし・書き出しは Markdown だけ・
- * ページを削除。手順と AI の節は出さない）。note: 言語を保存できなかったときの一言を出す。
+ * web: editor-web が今つないでいる形の情報パネル（#34 第 3 段。肩書なし・書き出しは Markdown だけ・ページを削除。
+ * 手順と AI の節は出さない）。note: 言語を保存できなかったときの一言を出す。
  */
-export type ScreenForced = { sidebar?: boolean; rail?: boolean; pick?: ShellDest; conn?: boolean; page?: string; web?: boolean; note?: boolean };
+export type ScreenForced = { sidebar?: boolean; rail?: boolean; pick?: ShellDest; conn?: boolean; page?: string; web?: boolean; note?: boolean } & TranscriptForced;
 
 const noop = () => undefined;
 
@@ -132,7 +132,6 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
   const [draft, setDraft] = useState("");
   const [proposalOpen, setProposalOpen] = useState(Boolean(def?.proposal));
   const [proposalDone, setProposalDone] = useState<string[]>([]);
-  const [editing, setEditing] = useState(false);
   const [how, setHow] = useState<RecordingHow>("mic");
   const [next, setNext] = useState<RecordingNext>("article");
   const [background, setBackground] = useState("NIHO kamakura のコミュニティディナーのはじまりについて、ホストの Takuya さんに聞いた。旅行者向けの英語記事にする。");
@@ -246,7 +245,7 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
       onLang={setLang}
       author={{ name: ME.name, title: lang === "ja" ? ME.titleJa : ME.titleEn, initial: ME.initial }}
       info={[
-        { label: "作成", value: page.kind === "journal" ? "2026-10-30" : "2026-10-28" },
+        { label: "作成", value: page.id === "j1030" ? "2026-10-30" : "2026-10-28" },
         { label: "更新", value: page.saved },
         ...(page.kind === "rec" ? [{ label: "録音", value: "14:38 · 2026-10-29" }] : []),
         { label: "文字数", value: lang === "ja" ? "412" : "1,180 words" },
@@ -256,13 +255,13 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
     />
   );
   const rail = !hasRail ? undefined : forced.web ? (
-    <ShellRail label="このページの設定">
+    <ShellRail label="このページの設定" onClose={() => setRailOpen(false)}>
       <ShellRailSection title="ページ設定" summary="自分だけ" open={cards.page} onToggle={() => setCards((c) => ({ ...c, page: !c.page }))}>
         {settings}
       </ShellRailSection>
     </ShellRail>
   ) : (
-    <ShellRail>
+    <ShellRail onClose={() => setRailOpen(false)}>
       {steps && (
         <ShellRailSection title={steps.root.recipe ?? "手順"} icon="spark" summary={steps.steps.find((s) => s.id === page.id)?.label ?? ""} open={cards.steps} onToggle={() => setCards((c) => ({ ...c, steps: !c.steps }))}>
           <ShellSteps steps={steps.steps} currentId={page.id} onSelect={(stepId) => navigate(`page:${stepId}`)} onRedo={page.parent ? () => undefined : undefined} />
@@ -314,7 +313,7 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
     const blocks = def?.sel ? withSelection(page.body) : page.body;
     const started = Boolean(page.children?.length);
     const meta =
-      page.kind === "journal"
+      page.id === "j1030"
         ? [{ text: "木曜日" }, { text: "晴れ" }]
         : page.kind === "rec"
           ? [{ text: "14:38", icon: "mic" as const }, { text: "2026-10-29" }]
@@ -334,16 +333,7 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
         media={
           page.kind === "rec" ? (
             <>
-              <ShellRecording
-                segments={TRANSCRIPT}
-                speakers={[
-                  { name: "Takuya", tone: "a" },
-                  { name: "Mika", tone: "b" },
-                ]}
-                position="05:12 / 14:38"
-                editing={editing}
-                onToggleEdit={() => setEditing((v) => !v)}
-              />
+              <TranscriptDemo forced={forced} />
               {!started && <ShellMakeFrom />}
             </>
           ) : undefined

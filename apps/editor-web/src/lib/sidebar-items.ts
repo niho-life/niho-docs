@@ -1,6 +1,12 @@
-import type { PageSummary } from "@niho/editor-store";
-import type { ShellListItem } from "niho-docs-ui/shell";
+import type { PagePublicationSummary, PageSummary } from "@niho/editor-store";
+import type { ShellDest, ShellListItem } from "niho-docs-ui/shell";
 import type { SearchHit } from "./search-client";
+
+/** 2 行目の公開先に要るもの（#39）。一覧の行（listPageChunk の PageSummary.publication）と同じ形。 */
+export type SidebarPublication = PagePublicationSummary;
+
+/** 2 行目の発信先の名前（モック v6 の DEST と同じ）。本人のサイトは「自分のサイト」。 */
+const DEST_NAMES: Readonly<Record<ShellDest, string>> = { exp: "NIHO Experience", niho: "NIHO", site: "自分のサイト" };
 
 /** 東京の日付で数える（日本は夏時間が無いので、UTC に 9 時間を足した日付）。 */
 const TOKYO_OFFSET_MS = 9 * 60 * 60 * 1000;
@@ -40,12 +46,24 @@ export function searchRows(hits: readonly SearchHit[], now: number): ShellListIt
   });
 }
 
+/**
+ * 2 行目（モック v6 の sidebar の sub と同じ順）: 公開中（限定公開を含む）は発信先の名前と印、公開をやめたページは「公開をやめた」、
+ * 録音は「録音」、手順が動いているページは「作成中…」。それ以外は出さない。
+ */
+function subOf(page: PageSummary): ShellListItem["sub"] {
+  const publication = page.publication;
+  if (publication && !publication.stopped) return { text: DEST_NAMES[publication.dest], dest: publication.dest };
+  if (publication?.stopped) return { text: "公開をやめた" };
+  if (page.kind === "rec") return { text: "録音" };
+  if (page.stepStatus === "run") return { text: "作成中…" };
+  return undefined;
+}
+
 function rowOf(page: PageSummary, now: number, child: boolean): ShellListItem {
   const item: ShellListItem = { id: page.id, title: page.title, when: formatWhen(page.updatedAt, now) };
   if (child) item.child = true;
-  // 2 行目の公開先は #39
-  if (page.kind === "rec") item.sub = { text: "録音" };
-  else if (page.stepStatus === "run") item.sub = { text: "作成中…" };
+  const sub = subOf(page);
+  if (sub) item.sub = sub;
   return item;
 }
 

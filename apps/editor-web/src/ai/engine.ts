@@ -16,10 +16,13 @@ import { intentLabel, intentMode, type AiIntent } from "./presets";
 
 export type { DiffPart };
 
-/** 1 回の要求に入れる本文の目安（文字）。超えたら段落の切れ目で次の要求に分ける。 */
-export const MAX_REQUEST_CHARS = 12_000;
-/** 1 回の提案で送る本文の上限（文字）。超えたら 413 `too_large`。 */
-export const MAX_PAGE_CHARS = 200_000;
+/**
+ * 1 回の要求に入れる本文の目安（文字）。超えたら段落の切れ目で次の要求に分ける。日本語は 1 字 1〜1.5 トークンなので、
+ * 1 回の出力が数千トークンに収まり、1 回の呼び出しの時間切れ（既定 120 秒）の中で終わる大きさにしている。
+ */
+export const MAX_REQUEST_CHARS = 4_000;
+/** 1 回の提案で送る本文の上限（文字）。超えたら 413 `too_large`（範囲を選んで頼む）。分けた要求は約 8 回まで（Cloud Run の 300 秒の中）。 */
+export const MAX_PAGE_CHARS = 30_000;
 /** モデルが返す 1 つの文の上限（文字）。 */
 export const MAX_OUTPUT_TEXT_CHARS = 20_000;
 /** モデルの 1 回の出力の件数（edits と inserts の合計）の上限。 */

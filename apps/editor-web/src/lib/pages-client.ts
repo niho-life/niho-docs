@@ -63,7 +63,8 @@ function isRevision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-function conflictPageOf(data: unknown): ConflictPage | null {
+/** 競合の応答（`{ error: "conflict", page }`）・AI の採用の応答（`{ page }`）のページ。形が違えば null。 */
+export function conflictPageOf(data: unknown): ConflictPage | null {
   const page = (data as { page?: Record<string, unknown> } | null)?.page;
   if (typeof page !== "object" || page === null) return null;
   const { title, blocks, revision, updatedAt, lang } = page;

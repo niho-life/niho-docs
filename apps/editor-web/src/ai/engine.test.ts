@@ -56,7 +56,6 @@ function applied(blocks: Block[], adoptions: Adoptions): Block[] {
 describe("presets", () => {
   it("offers the candidates of each kind of page", () => {
     const labels = (kind: Parameters<typeof presetsFor>[0], lang: "ja" | "en") => presetsFor(kind, lang).map((preset) => preset.label);
-    expect(labels("journal", "ja")).toEqual(["整える", "要約", "記事にできそうな部分"]);
     expect(labels("note", "ja")).toEqual(["整える", "要約", "見出しをつける", "英語にする"]);
     expect(labels("article", "en")).toEqual(["Tighten", "Add headings", "日本語にする", "Check facts to confirm"]);
     expect(labels("rec", "ja")).toEqual(["要約"]);
@@ -113,32 +112,35 @@ describe("buildRequest", () => {
     expect(buildRequest({ blocks: [], lang: "en" }, tidy)).toEqual({ ok: true, requests: [] });
   });
 
-  it("splits a long page at paragraph boundaries into requests of at most about 12,000 characters", () => {
-    // 5,000 文字 × 5 → [0, 1]（10,000）・[2, 3]（10,000）・[4]
-    const blocks = Array.from({ length: 5 }, (_, i) => p(String(i).repeat(5000)));
+  it("splits a long page at paragraph boundaries into requests of at most about 4,000 characters", () => {
+    expect(MAX_REQUEST_CHARS).toBe(4_000);
+    // 1,500 文字 × 5 → [0, 1]（3,000）・[2, 3]（3,000）・[4]
+    const blocks = Array.from({ length: 5 }, (_, i) => p(String(i).repeat(1500)));
     const plan = buildRequest({ blocks, lang: "ja" }, tidy);
     if (!plan.ok) throw new Error("expected a plan");
     expect(plan.requests.map((request) => request.paragraphs.map((paragraph) => paragraph.index))).toEqual([[0, 1], [2, 3], [4]]);
     for (const request of plan.requests) {
       expect(request.paragraphs.reduce((sum, paragraph) => sum + paragraph.text.length, 0)).toBeLessThanOrEqual(MAX_REQUEST_CHARS);
     }
-    // ちょうど 12,000 は 1 回に入る。1 つの段落が上限より長いときは、その段落だけで 1 回
-    const exact = buildRequest({ blocks: [p("a".repeat(6000)), p("b".repeat(6000)), p("c")], lang: "ja" }, tidy);
+    // ちょうど 4,000 は 1 回に入る。1 つの段落が上限より長いときは、その段落だけで 1 回
+    const exact = buildRequest({ blocks: [p("a".repeat(2000)), p("b".repeat(2000)), p("c")], lang: "ja" }, tidy);
     expect(exact.ok && exact.requests.map((request) => request.paragraphs.length)).toEqual([2, 1]);
     const long = buildRequest({ blocks: [p("a"), p("b".repeat(MAX_REQUEST_CHARS + 1)), p("c")], lang: "ja" }, tidy);
     expect(long.ok && long.requests.map((request) => request.paragraphs.map((paragraph) => paragraph.index))).toEqual([[0], [1], [2]]);
     // 文字は code point で数える（サロゲートペアの絵文字も 1 文字）
-    const emoji = buildRequest({ blocks: [p("😀".repeat(6000)), p("😀".repeat(6000))], lang: "ja" }, tidy);
+    const emoji = buildRequest({ blocks: [p("😀".repeat(2000)), p("😀".repeat(2000))], lang: "ja" }, tidy);
     expect(emoji.ok && emoji.requests.length).toBe(1);
   });
 
-  it("refuses more than 200,000 characters in one proposal as too_large", () => {
-    const blocks = Array.from({ length: 20 }, () => p("あ".repeat(10_000)));
-    expect(buildRequest({ blocks, lang: "ja" }, tidy).ok).toBe(true);
+  it("refuses more than 30,000 characters in one proposal as too_large", () => {
+    const blocks = Array.from({ length: 3 }, () => p("あ".repeat(10_000)));
+    const plan = buildRequest({ blocks, lang: "ja" }, tidy);
+    // ちょうど 30,000 は送れる（10,000 の段落 3 つは 1 つずつ 3 回）
+    expect(plan.ok && plan.requests.length).toBe(3);
     expect(buildRequest({ blocks: [...blocks, p("あ")], lang: "ja" }, tidy)).toEqual({ ok: false, error: "too_large" });
     // 範囲を絞れば送れる
-    expect(buildRequest({ blocks: [...blocks, p("あ")], lang: "ja" }, tidy, { fromIndex: 1, toIndex: 20 }).ok).toBe(true);
-    expect(MAX_PAGE_CHARS).toBe(200_000);
+    expect(buildRequest({ blocks: [...blocks, p("あ")], lang: "ja" }, tidy, { fromIndex: 1, toIndex: 3 }).ok).toBe(true);
+    expect(MAX_PAGE_CHARS).toBe(30_000);
   });
 });
 

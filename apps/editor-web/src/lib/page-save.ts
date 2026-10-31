@@ -103,8 +103,11 @@ export type PageSaver = {
   save: (patch: PageBody, context: SaveContext) => Promise<void>;
   /** 「この内容で上書き」: 次の保存を、競合の応答のページの revision の上に `overwrite: true` で送る。 */
   overwriteOnto: (page: ConflictPage) => void;
-  /** 今の本文がもとにしている revision を戻す（開いたときに、古い revision の下書きを載せた）。 */
-  rebase: (revision: number) => void;
+  /**
+   * 今の本文がもとにしている revision を戻す（開いたときに、古い revision の下書きを載せた）。
+   * `content` を渡すと、サーバーがその revision でその題名・本文を持っているとして扱う（AI の採用・競合の応答のページを画面に載せた）。
+   */
+  rebase: (revision: number, content?: PageContent) => void;
 };
 
 export function createPageSaver(options: {
@@ -197,8 +200,9 @@ export function createPageSaver(options: {
       overwrite = true;
       uncertain = [];
     },
-    rebase(next) {
-      revision = next;
+    rebase(next, content) {
+      if (content) settle(next, content);
+      else revision = next;
     },
   };
 }

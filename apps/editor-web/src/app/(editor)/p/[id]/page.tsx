@@ -22,11 +22,12 @@ export default async function PageView(props: { params: Promise<{ id: string }> 
   const [page, shared] = await Promise.all([store.getPage(session.userId, id), readShareFlag(shareDeps.store(), session.userId, id)]);
   if (!page) notFound();
   const { kind, title, lang, parent, stepStatus, createdAt, updatedAt } = page;
+  // 開いたページの行は題名の表示に使うだけ（一覧の 2 行目の公開は listPageChunk の行が持つ）
   const recordingSec = kind === "rec" ? await readRecordingSeconds(recordingDeps.store(), session.userId, page.id) : null;
   return (
     <OpenPage
       key={page.id}
-      summary={{ id: page.id, kind, title, lang, parent, stepStatus, createdAt, updatedAt }}
+      summary={{ id: page.id, kind, title, lang, parent, stepStatus, createdAt, updatedAt, publication: null }}
       blocks={page.blocks}
       revision={page.revision}
       shared={shared}

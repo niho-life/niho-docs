@@ -28,6 +28,8 @@ export type ShellSheetProps = {
   /** ダイアログの名前（aria-label）。中身を替えるとき（公開 → 公開しました）はこれも替えると、フォーカスが中へ移り直す。 */
   label: string;
   onClose: () => void;
+  /** .es-sheet に足す class（レールのシートの es-sheet--rail など）。 */
+  className?: string;
   children: ReactNode;
 };
 
@@ -38,7 +40,7 @@ export type ShellSheetProps = {
  * 開いているあいだ、シートの外（.es-root の中の兄弟）は inert（閉じたら元に戻す）。
  * EditorShell の overlay に渡す（.es-root の中に出すため）。
  */
-export function ShellSheet({ label, onClose, children }: ShellSheetProps) {
+export function ShellSheet({ label, onClose, className, children }: ShellSheetProps) {
   const veil = useRef<HTMLDivElement | null>(null);
   const dialog = useRef<HTMLDivElement | null>(null);
   const closeRef = useRef(onClose);
@@ -99,7 +101,7 @@ export function ShellSheet({ label, onClose, children }: ShellSheetProps) {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div ref={dialog} className="es-sheet" role="dialog" aria-modal="true" aria-label={label} tabIndex={-1} onKeyDown={trap}>
+      <div ref={dialog} className={className ? `es-sheet ${className}` : "es-sheet"} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1} onKeyDown={trap}>
         {children}
       </div>
     </div>

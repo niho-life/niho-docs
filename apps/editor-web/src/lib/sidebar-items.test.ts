@@ -7,7 +7,7 @@ import { arrangeSidebarItems, formatWhen, searchRows, withoutPageTree } from "./
 const NOW = Date.parse("2026-10-31T03:00:00.000Z");
 
 function page(id: string, over: Partial<PageSummary> = {}): PageSummary {
-  return { id, kind: "note", title: id, lang: "ja", parent: null, stepStatus: null, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", ...over };
+  return { id, kind: "note", title: id, lang: "ja", parent: null, stepStatus: null, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", publication: null, ...over };
 }
 
 describe("formatWhen", () => {
@@ -95,6 +95,39 @@ describe("arrangeSidebarItems", () => {
       { id: "b", title: "鎌倉の朝", when: "30分前", sub: { text: "…江ノ電の音で目が覚めた…" } },
       { id: "a", title: "", when: "昨日" },
     ]);
+  });
+});
+
+describe("arrangeSidebarItems: 2 行目の公開先（#39）", () => {
+  const live = { dest: "exp", handle: "exp", range: "live", stopped: false } as const;
+
+  it("公開中は発信先の名前と印。限定公開も同じ。本人のサイトは「自分のサイト」", () => {
+    const rows = arrangeSidebarItems(
+      [
+        { ...page("a"), publication: live },
+        { ...page("b"), publication: { dest: "niho", handle: "niho", range: "unlisted", stopped: false } },
+        { ...page("c"), publication: { dest: "site", handle: "field-notes", range: "live", stopped: false } },
+      ],
+      { now: NOW },
+    );
+    expect(rows.map((row) => row.sub)).toEqual([
+      { text: "NIHO Experience", dest: "exp" },
+      { text: "NIHO", dest: "niho" },
+      { text: "自分のサイト", dest: "site" },
+    ]);
+  });
+
+  it("公開をやめたページは「公開をやめた」（印なし）。公開の無いページは今までどおり", () => {
+    const rows = arrangeSidebarItems(
+      [{ ...page("a"), publication: { ...live, stopped: true } }, { ...page("b", { kind: "rec" }), publication: null }, page("c")],
+      { now: NOW },
+    );
+    expect(rows.map((row) => row.sub)).toEqual([{ text: "公開をやめた" }, { text: "録音" }, undefined]);
+  });
+
+  it("公開中は録音・作成中より先に出す（モック v6 の順）", () => {
+    const rec = { ...page("rec", { kind: "rec", title: "鎌倉の録音" }), publication: live };
+    expect(arrangeSidebarItems([rec], { now: NOW })[0]!.sub).toEqual({ text: "NIHO Experience", dest: "exp" });
   });
 });
 

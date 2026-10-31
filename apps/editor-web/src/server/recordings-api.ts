@@ -91,12 +91,17 @@ function recordingBody(recording: Recording) {
     sourceSha256: recording.sourceSha256,
     segments: recording.segments.map(({ start, end, text, speaker }) => ({ start, end, text, speaker })),
     speakerNames: { ...recording.speakerNames },
+    // 音声（#36 段 2a）。音声の無い録音は null。bytes・contentType は申告の値、expiresAt は保存先から消える見込みの時刻
+    audio: recording.audio
+      ? { status: recording.audio.status, bytes: recording.audio.bytes, contentType: recording.audio.contentType, expiresAt: recording.audio.expiresAt }
+      : null,
     createdAt: recording.createdAt,
     updatedAt: recording.updatedAt,
   };
 }
 
-function withSpeakers(recording: Recording): { recording: ReturnType<typeof recordingBody>; speakers: SpeakerSummary[] } {
+/** 録音の応答（`{ recording, speakers }`。GET と同じ形。音声の API（audio-api.ts）も使う）。 */
+export function withSpeakers(recording: Recording): { recording: ReturnType<typeof recordingBody>; speakers: SpeakerSummary[] } {
   return { recording: recordingBody(recording), speakers: listSpeakers(recording) };
 }
 

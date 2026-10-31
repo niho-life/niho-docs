@@ -6,6 +6,8 @@ import type { Block, OwnerId, Page, PageKind, PageLang, Queryable, StepStatus } 
  * 写すのは kind・lang・blocks・lead と題名（「〜のコピー」）。parent・cover・recipe・step_status・共有・公開・版は写さない。
  * 録音ページ（#36。page_recordings の行がある）は、文字起こし（段落・話者名・原本の名前と SHA-256）も同じ文の中で写す。
  * 録音の revision は 1 から数え直す（別の録音になるので、元の録音の編集とは競合しない）。
+ * 音声（#36 段 2a。資産は 1 つのページに属する）は写さない: コピーは文字起こしだけで、audio_* は既定の none。
+ * 音声から作った録音（source = 'audio'）も録音の行を写す（音声のない音声由来の録音は 0008 が許す。文字起こしは残る）。
  */
 
 /** 複製の題名に足す言葉。 */

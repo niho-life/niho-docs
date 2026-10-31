@@ -206,6 +206,30 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
       child.kill("SIGTERM");
     }
   });
+
+  it("serves the public API /v1 with the contract's headers, not the catch-all ones (#40)", async () => {
+    // Next は同じ名前の header が config にあると route の値を捨てるので、本番の server で値が契約どおりかを確かめる（DB が無いので 503）
+    const port = await freePort();
+    const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env: childEnv(port, "niho"), stdio: "ignore" });
+    try {
+      await waitForHttp(port);
+      const list = await fetch(`http://127.0.0.1:${port}/v1/exp/published.json`, { headers: { authorization: `Bearer ek_${"A".repeat(42)}Q` } });
+      assert.equal(list.status, 503);
+      assert.equal(list.headers.get("x-robots-tag"), "noindex");
+      assert.equal(list.headers.get("cache-control"), "no-store");
+      assert.equal(list.headers.get("content-type"), "application/json; charset=utf-8");
+      // Next は App Router の全応答の Vary に自分の header（rsc など）を足す。契約の Authorization が含まれることだけを確かめる
+      assert.match(list.headers.get("vary") ?? "", /(^|, )Authorization(,|$)/);
+      const body = await list.json();
+      assert.equal(body.error.code, "temporarily_unavailable");
+      assert.match(body.error.requestId, /^req_/);
+      const options = await fetch(`http://127.0.0.1:${port}/v1/exp/published.json`, { method: "OPTIONS" });
+      assert.equal(options.status, 400);
+      assert.equal(options.headers.get("allow"), "GET, HEAD");
+    } finally {
+      child.kill("SIGTERM");
+    }
+  });
 });
 
 describe("production start without the entry (defence in depth)", () => {
@@ -224,4 +248,51 @@ describe("production start without the entry (defence in depth)", () => {
     assert.equal(result.signal, null);
     assert.match(result.output, /refusing to start/);
   });
+});
+
+describe("production start with the asset storage settings (#36)", () => {
+  function storageEnv(port, storage, bucket) {
+    const env = childEnv(port, "niho");
+    delete env.EDITOR_STORAGE;
+    delete env.EDITOR_ASSETS_BUCKET;
+    if (storage !== undefined) env.EDITOR_STORAGE = storage;
+    if (bucket !== undefined) env.EDITOR_ASSETS_BUCKET = bucket;
+    return env;
+  }
+
+  // 保存先の検査は src/startup-check.ts（instrumentation）で行う。入口（server-entry.mjs）は認証だけを見るので、port を開く前に止まるとは限らない
+  for (const [label, storage, bucket, message] of [
+    ["EDITOR_STORAGE=fake", "fake", undefined, /refusing to start: EDITOR_STORAGE=fake is not allowed when NODE_ENV=production/],
+    ["EDITOR_STORAGE=gcs without a bucket", "gcs", undefined, /refusing to start: EDITOR_ASSETS_BUCKET is required/],
+    ["EDITOR_STORAGE=gcs with an invalid bucket", "gcs", "Not_A_Bucket", /refusing to start: EDITOR_ASSETS_BUCKET is not a valid bucket name/],
+    ["an unknown EDITOR_STORAGE", "memory", undefined, /refusing to start: EDITOR_STORAGE must be one of/],
+  ]) {
+    it(`refuses to start with ${label}, without printing the value`, async () => {
+      const port = await freePort();
+      const result = await runUntilExit(["scripts/server-entry.mjs", standaloneServer], storageEnv(port, storage, bucket), port);
+      assert.notEqual(result.code, 0, result.output);
+      assert.equal(result.signal, null, "it must exit by itself, not by the test timeout");
+      assert.match(result.output, message);
+      assert.doesNotMatch(result.output, /Not_A_Bucket/);
+    });
+  }
+
+  for (const [label, storage] of [["EDITOR_STORAGE unset", undefined], ["EDITOR_STORAGE=off", "off"]]) {
+    it(`starts with ${label}, and the dev fake storage route is 404`, async () => {
+      const port = await freePort();
+      const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env: storageEnv(port, storage), stdio: "ignore" });
+      try {
+        const response = await waitForHttp(port);
+        assert.equal(response.status, 401);
+        const fake = await fetch(`http://127.0.0.1:${port}/api/dev/fake-storage/${"A".repeat(43)}`, { method: "PUT", body: "x" });
+        assert.equal(fake.status, 404);
+        assert.equal(await fake.text(), '{"error":"not_found"}');
+        const limits = await fetch(`http://127.0.0.1:${port}/api/recordings/audio/limits`);
+        assert.equal(limits.status, 401);
+        assert.equal(limits.headers.get("x-robots-tag"), "noindex, nofollow");
+      } finally {
+        child.kill("SIGTERM");
+      }
+    });
+  }
 });

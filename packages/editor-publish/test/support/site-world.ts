@@ -25,6 +25,7 @@ import {
   MemoryFacts,
   MemoryPublishStore,
   MemoryRoles,
+  MemoryStorageMode,
   memoryAssetUrls,
   memoryDraftFingerprints,
 } from "../../test-support/memory-store.js";
@@ -104,6 +105,7 @@ export function createSiteWorld(): SiteWorld {
   const publisher = new PublishService({
     store,
     roles,
+    storage: new MemoryStorageMode(),
     connections: connectionSource(store),
     declarations: siteDeclarationSource(store, faces),
     authors,

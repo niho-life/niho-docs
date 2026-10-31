@@ -20,6 +20,8 @@
   },
   "dependencies": {
     "@niho/docs-core": "file:../../packages/docs-core",
+    "@niho/editor-publish": "file:../../packages/editor-publish",
+    "@niho/editor-publish-contract": "file:../../packages/editor-publish-contract",
     "@niho/editor-store": "file:../../packages/editor-store",
     "@radix-ui/react-dialog": "1.3.1",
     "@radix-ui/react-popover": "1.3.1",

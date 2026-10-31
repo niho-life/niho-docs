@@ -22,8 +22,9 @@ export function proxy(request: NextRequest) {
 export const config = {
   matcher: [
     {
-      // API は JSON だけなので next.config.ts の固定の CSP を使う。静的ファイルと prefetch には要らない
-      source: "/((?!api|_next/static|_next/image|favicon.ico).*)",
+      // API（`/api`・公開 API の `/v1/`）は JSON だけなので next.config.ts の固定の CSP を使う。静的ファイルと prefetch には要らない。
+      // `/v1/` を通さないので、プレビューの `pv_` token を含む path を戻り先の header に写さない（認証もしない。ログインへ移すのは (editor) の layout だけ）
+      source: "/((?!api|v1/|_next/static|_next/image|favicon.ico).*)",
       missing: [
         { type: "header", key: "next-router-prefetch" },
         { type: "header", key: "purpose", value: "prefetch" },
