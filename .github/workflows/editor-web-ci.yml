@@ -134,7 +134,7 @@ jobs:
         run: scripts/editor-deploy/transcribe-infra.test.sh
       - name: The service's secrets and env with and without the AI key (gcloud is stubbed)
         run: bash scripts/editor-deploy/lib-test.sh
-      - name: Every file: dependency of apps/editor-web is copied into the image before npm ci
+      - name: "Every file: dependency of apps/editor-web is copied into the image before npm ci"
         run: scripts/editor-deploy/dockerfile-test.sh
       - name: Build the migrate image
         run: DOCKER_BUILDKIT=1 docker build -f scripts/editor-deploy/Dockerfile.migrate -t editor-migrate-ci .
