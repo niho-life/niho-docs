@@ -113,5 +113,18 @@ DEPLOY_ENV="$tmp/timeout.env" load_deploy_env
 check "env with the transcription timeout" "$(service_env_vars 0 1)" \
   "$base_env,EDITOR_TRANSCRIBE_ENGINE=deepgram,EDITOR_TRANSCRIBE_TIMEOUT_SEC=600"
 
+# The transcription key's shape (set-transcribe-key.sh). A repetition count above 255 makes bash's regexes invalid,
+# so the length is checked apart from the pattern; `{1,512}` used to reject every key on macOS.
+shape() { if is_transcribe_key "$1"; then printf 1; else printf 0; fi; }
+check "an ordinary key is accepted" "$(shape 'synthetic-not-a-real-key-0123456789')" 1
+check "punctuation is accepted" "$(shape 'abc.DEF_ghi-123:xyz/+==')" 1
+check "512 characters are accepted" "$(shape "$(printf 'a%.0s' $(seq 1 512))")" 1
+check "513 characters are refused" "$(shape "$(printf 'a%.0s' $(seq 1 513))")" 0
+check "a space is refused" "$(shape 'has space')" 0
+check "a tab is refused" "$(shape "$(printf 'a\tb')")" 0
+check "an empty key is refused" "$(shape '')" 0
+check "a control character is refused" "$(shape "$(printf 'a\001b')")" 0
+check "non-ASCII is refused" "$(shape 'かぎ')" 0
+
 [[ $failed -eq 0 ]] || { printf 'lib-test: failed\n' >&2; exit 1; }
 printf 'lib-test: all passed\n'

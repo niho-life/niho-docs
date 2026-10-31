@@ -28,9 +28,9 @@ fi
 key="${key#"${key%%[![:space:]]*}"}"
 key="${key%"${key##*[![:space:]]}"}"
 [[ -n "$key" ]] || die "no key was given: nothing was added"
-# The app accepts printable ASCII without spaces, up to 512 characters (apps/editor-web/src/transcription/config.ts).
-# Anything else is a wrong paste (the message never repeats what was given).
-if [[ ! "$key" =~ ^[[:graph:]]{1,512}$ ]]; then
+# The shape the app accepts (is_transcribe_key in lib.sh). Anything else is a wrong paste
+# (the message never repeats what was given).
+if ! is_transcribe_key "$key"; then
   unset key
   die "that does not look like an API key: nothing was added"
 fi
