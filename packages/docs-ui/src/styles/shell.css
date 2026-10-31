@@ -95,8 +95,12 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dest--exp{background:var(--ed-deep)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dest--niho{background:var(--ed-brown)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dest--site{background:var(--ed-ink-mute)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di--child{margin-left:16px;width:calc(100% - 16px)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-di--child::before{content:"";position:absolute;left:-8px;top:0;bottom:0;width:1px;background:var(--ed-line-2)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-list ul ul{margin-left:14px;padding-left:8px;border-left:1px solid var(--ed-line-2)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow{display:flex;align-items:flex-start;gap:2px}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ditw{flex:0 0 auto;width:18px;align-self:stretch;display:flex;align-items:center;justify-content:center;border-radius:6px;font-size:12px;color:var(--ed-ink-mute)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ditw:hover{background:var(--ed-sand-2)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-dirow .es-di{flex:1 1 0;min-width:0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-psfolder select{width:100%;border:1px solid var(--ed-line-2);border-radius:10px;padding:6px 8px;background:var(--ed-white);font:inherit;font-size:13px;color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-foot{position:relative;border-top:1px solid var(--ed-line);padding:8px 10px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 8px;border-radius:10px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sb-me--on{background:var(--ed-sand)}
@@ -116,11 +120,11 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-wrap{position:relative;display:flex;flex:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:var(--ed-ink-mute);flex:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st .es-ico{width:16px;height:16px}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st i{width:9px;height:9px;border-radius:50%;display:block}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st--published i{background:var(--ed-accent-ink)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st--updated i{background:var(--ed-amber)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st--limited i{background:var(--ed-blue)}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st:focus-visible{background:var(--ed-sand);color:var(--ed-ink-sub)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st:hover,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st:focus-visible{background:var(--ed-sand)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st--published{color:var(--ed-accent-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st--updated{color:var(--ed-amber-ink)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st--limited{color:var(--ed-blue)}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-wrap--quiet{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;clip-path:inset(50%);white-space:nowrap;pointer-events:none}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-tip{position:absolute;top:calc(100% + 7px);right:0;width:max-content;max-width:min(360px,calc(100vw - 24px));background:var(--ed-white);color:var(--ed-ink);font-size:12px;font-weight:600;line-height:1.5;padding:6px 11px;border-radius:9px;box-shadow:0 8px 24px rgba(28,28,26,.14),0 0 0 1px var(--ed-line-2);opacity:0;pointer-events:none;transition:opacity .12s;z-index:20;overflow-wrap:anywhere}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-wrap:hover .es-st-tip,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-wrap:focus-within .es-st-tip{opacity:1}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-wrap[data-dismissed="true"] .es-st-tip{opacity:0}

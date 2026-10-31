@@ -39,6 +39,7 @@ export {
 export {
   DEFAULT_AUTOSAVE_VERSION_INTERVAL_MS,
   EditorStore,
+  MAX_PAGE_DEPTH,
   InvalidPageCursorError,
   PAGE_LIST_LIMIT,
   TRASH_LIST_LIMIT,
@@ -85,6 +86,7 @@ export {
   isSettingsRecipe,
   isSettingsStep,
   isSettingsTerm,
+  isSettingsText,
   saveEditorSettings,
   settingsProblem,
   type EditorSettings,
@@ -95,6 +97,26 @@ export {
   type SettingsStep,
   type SettingsTerm,
 } from "./settings.ts";
+export {
+  RECIPE_LIMITS,
+  RECIPE_ORIGINS,
+  addRecipes,
+  cleanRecipe,
+  isRecipeOrigin,
+  isRecipeSample,
+  isRecipeStep,
+  listRecipes,
+  putRecipes,
+  recipeProblem,
+  recipesProblem,
+  seedRecipes,
+  type RecipeInput,
+  type RecipeOrigin,
+  type RecipeProblem,
+  type RecipeSample,
+  type RecipeStep,
+  type StoredRecipe,
+} from "./recipes.ts";
 export * from "./step-runs.ts";
 export {
   InvalidRecordingError,

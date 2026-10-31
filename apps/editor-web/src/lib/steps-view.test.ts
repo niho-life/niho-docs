@@ -123,6 +123,7 @@ describe("steps-view（手順の帯の見た目）", () => {
       ["ai_server", "AI の側で失敗しました。少し待ってもう一度お試しください。"],
       ["ai_timeout", "AI の答えを待てる時間を過ぎました。少し待ってもう一度お試しください。"],
       ["ai_network", "AI に届きませんでした。少し待ってもう一度お試しください。"],
+      ["output_too_long", "長すぎて書き切れませんでした。この段階の指示で扱う範囲を分けて頼むと通ることがあります。"],
       ["unknown_recipe", "この手順の定義が見つかりませんでした。設定の「手順」を確かめてください。"],
       ["unknown_step", "手順の段階が変わりました。はじめから作り直してください。"],
       ["input_missing", "もとになる本文が空でした。前の段階のページを書いてからやり直してください。"],
@@ -152,7 +153,7 @@ describe("steps-view（手順の帯の見た目）", () => {
 
   it("待てば直るものと、原因を直すものを分けている", () => {
     const retryable = ["usage_unavailable", "ai_rate_limit", "ai_overloaded", "ai_server", "ai_timeout", "ai_network", "lease_expired", "aborted", "internal"];
-    const notRetryable = ["ai_unavailable", "quota_exceeded", "invalid_output", "ai_auth", "ai_bad_request"];
+    const notRetryable = ["ai_unavailable", "quota_exceeded", "invalid_output", "ai_auth", "ai_bad_request", "output_too_long"];
     for (const code of retryable) expect(stepFailure(code).retryable, code).toBe(true);
     for (const code of notRetryable) expect(stepFailure(code).retryable, code).toBe(false);
     // 待てば直るものは「少し待って」と言う

@@ -75,6 +75,7 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "ai_conversations",
       "ai_messages",
       "ai_message_changes",
+      "recipes",
     ];
     assert.deepEqual(tables.rows.map((row) => row.table_name), [...documented, MIGRATIONS_TABLE].sort());
     for (const table of documented) {

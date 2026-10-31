@@ -17,7 +17,7 @@ import {
 import type { FloatingMenuPluginProps } from "@tiptap/extension-floating-menu";
 import { useEditorState, type Editor } from "@tiptap/react";
 import { FloatingMenu } from "@tiptap/react/menus";
-import { Icon, ShellBubbleMenu, ShellMenu, useMenuDismiss, type ShellMenuItem } from "../shell";
+import { Icon, ShellBubbleMenu, ShellMenu, useMenuDismiss, type ShellMenuItem, type ShellToolAction } from "../shell";
 import {
   BLOCK_CHOICES,
   LINE_TYPE_CHOICES,
@@ -53,6 +53,18 @@ function useBlockMenuShortcut(open: () => boolean | void): void {
     return () => window.removeEventListener("keydown", listener);
   }, []);
 }
+
+/**
+ * 常設の書式の帯（ヘッダーの ShellTools）が使う操作。ページを開いているあいだ `onTools` で呼ぶ側へ渡し、閉じたら null。
+ * 渡し直すのは `textType`・`blockMenuOpen` が変わったときだけ（選択が動くたびに枠を描き直さない）。
+ */
+export type PageChromeTools = {
+  /** いまの行の種類の名前（「テキスト」「見出し 2」…）。 */
+  textType: string;
+  /** ブロックの一覧（＋）が開いているか。 */
+  blockMenuOpen: boolean;
+  run: (action: ShellToolAction) => void;
+};
 
 /** ShellBubbleMenu の plugin key（../shell/bubble.tsx）。 */
 const FORMAT_BAR_KEY = "shellFormatBar";
@@ -353,7 +365,7 @@ function FormatBarRoute({ editor, root }: { editor: Editor; root: HTMLElement })
   return null;
 }
 
-function Chrome({ editor, onAi }: { editor: Editor; onAi?: () => void }) {
+function Chrome({ editor, onAi, onTools }: { editor: Editor; onAi?: () => void; onTools?: (tools: PageChromeTools | null) => void }) {
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const [panel, setPanel] = useState<Panel | null>(null);
   const escaped = useRef(false);
@@ -424,10 +436,8 @@ function Chrome({ editor, onAi }: { editor: Editor; onAi?: () => void }) {
     setPanel({ kind: "add", at: $anchor.before(), anchor: rect ? { left: rect.left, top: rect.top, bottom: rect.bottom } : selectionAnchor(editor) });
   };
 
-  // ⌘/（設計 §11）: 本文にフォーカスがあるとき、「＋」と同じブロックの一覧を開く。いまの行が空ならその行を、
-  // 文字があればその下に足す行を、選んだブロックにする。Esc で閉じると本文の元の位置へ戻る（何も足さない）
-  useBlockMenuShortcut(() => {
-    if (!editor.isEditable || !editor.view.hasFocus()) return false;
+  /** いまの行が空ならその行を、文字があればその下に足す行を、選んだブロックにする（⌘/ と、常設の帯の「＋」）。 */
+  const openBlockMenu = () => {
     const below = blankLineAfterCursor(editor.state);
     escaped.current = false;
     setPanel(
@@ -435,7 +445,49 @@ function Chrome({ editor, onAi }: { editor: Editor; onAi?: () => void }) {
         ? { kind: "add", at: editor.state.selection.$anchor.before(), anchor: selectionAnchor(editor) }
         : { kind: "add", at: below, anchor: selectionAnchor(editor), insert: true },
     );
+  };
+
+  // ⌘/（設計 §11）: 本文にフォーカスがあるとき、「＋」と同じブロックの一覧を開く。
+  // Esc で閉じると本文の元の位置へ戻る（何も足さない）
+  useBlockMenuShortcut(() => {
+    if (!editor.isEditable || !editor.view.hasFocus()) return false;
+    openBlockMenu();
   });
+
+  /** ブロックの一覧を通さずに、いまの行（か、その下の空の行）をそのブロックにする（常設の帯の「画像」）。 */
+  const putBlock = (id: BlockChoiceId) => {
+    const below = blankLineAfterCursor(editor.state);
+    if (below === null) fillBlankLine(editor, id, { at: editor.state.selection.$anchor.before() });
+    else if (insertBlankLine(editor, below)) fillBlankLine(editor, id, { at: below });
+  };
+
+  /**
+   * 常設の書式の帯（ヘッダーの ShellTools）の操作。選んだ文字の上の帯と同じ道を通る（行の種類・リンクはここのメニュー、
+   * 太字・斜体・見出し・箇条書きは editor のコマンド）。「録音」は本文の操作ではないので呼ぶ側（画面）が持つ。
+   */
+  const runTool = (action: ShellToolAction) => {
+    if (!editor.isEditable) return;
+    const line = lineTypeOf(editor.state);
+    if (action === "add-block") openBlockMenu();
+    else if (action === "text-type") openLineType();
+    else if (action === "bold") editor.chain().focus().toggleBold().run();
+    else if (action === "italic") editor.chain().focus().toggleItalic().run();
+    else if (action === "link") openLink();
+    else if (action === "heading") setLineType(editor, line === "h2" ? "paragraph" : "h2");
+    else if (action === "list") setLineType(editor, line === "bullet" ? "paragraph" : "bullet");
+    else if (action === "image") putBlock("image");
+  };
+  const textType = currentLineTypeName(editor);
+  const blockMenuOpen = panel?.kind === "add";
+  // 帯から呼ぶ操作はいつも今のもの（選択が動くたびに登録し直さないため、ref 越しに呼ぶ）
+  const latestRun = useRef(runTool);
+  latestRun.current = runTool;
+  useEffect(() => {
+    if (!onTools) return;
+    // 登録し直すのは、帯に出す値（行の種類・ブロックの一覧の開閉）が変わったときだけ
+    onTools({ textType, blockMenuOpen, run: (action) => latestRun.current(action) });
+    return () => onTools(null);
+  }, [onTools, textType, blockMenuOpen]);
 
   const linkRange = panel?.kind === "link" ? panel.range : null;
 
@@ -529,7 +581,7 @@ function Chrome({ editor, onAi }: { editor: Editor; onAi?: () => void }) {
  * 本文の見た目（リストの印・リンクの下線など）が shell の reset で変わるので、.es-root はこの部品の入れ物だけにし、
  * 浮かぶ部品（帯・＋・一覧・入力）はすべてこの中に付ける。`.be`（position: relative）の中に置く。
  */
-export function PageChrome({ editor, onAi }: { editor: Editor | null; onAi?: () => void }) {
+export function PageChrome({ editor, onAi, onTools }: { editor: Editor | null; onAi?: () => void; onTools?: (tools: PageChromeTools | null) => void }) {
   if (!editor) return null;
-  return <Chrome editor={editor} onAi={onAi} />;
+  return <Chrome editor={editor} onAi={onAi} onTools={onTools} />;
 }

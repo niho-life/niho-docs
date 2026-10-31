@@ -8,11 +8,11 @@
 
 | 資源 | 名前（既定） | 内容 |
 | --- | --- | --- |
-| Cloud Run サービス | `niho-editor` | 画面と `/api/pages`。誰でも呼べる（ログインはアプリの中）。min 0 / max 2、`EDITOR_AUTH_MODE=niho`。要求の時間切れは 300 秒（AI の提案は 1 回の呼び出し 120 秒まで × 分けた要求の数。§10） |
+| Cloud Run サービス | `niho-editor` | 画面と `/api/pages`。誰でも呼べる（ログインはアプリの中）。min 0 / max 2、`EDITOR_AUTH_MODE` は `deploy.env` の値（既定 `niho`。§13）。要求の時間切れは 300 秒（AI の提案は 1 回の呼び出し 120 秒まで × 分けた要求の数。§10） |
 | Cloud Run ジョブ | `niho-editor-migrate` | 配備のたびに 1 回。migration の適用と、アプリ用ロールの作成・権限付与 |
 | Cloud SQL | 既存の共有インスタンスに データベース `niho_editor` | ロール 2 つ: `niho_editor_migrate`（表の所有者。migrate ジョブだけが使う）と `niho_editor_app`（DML だけ。DDL と migration の記録の書き換えは不可） |
 | GCS | 資産バケット（private） | 均一なバケットレベルのアクセス、公開アクセス禁止。実行 ID は作成と閲覧だけ（削除・上書き不可） |
-| Secret Manager | `niho-editor-database-url`（アプリ）、`niho-editor-migrate-database-url`（migrate）、`niho-editor-anthropic-key`（AI の鍵）、`niho-editor-deepgram-key`（文字起こしの鍵） | アプリは自分の URL と AI の鍵だけ読める。migrate ジョブは DB の 2 つを読む（アプリ用ロールを作るため）。AI の鍵の版はオーナーが入れる（§10） |
+| Secret Manager | `niho-editor-database-url`（アプリ）、`niho-editor-migrate-database-url`（migrate）、`niho-editor-anthropic-key`（AI の鍵）、`niho-editor-deepgram-key`（文字起こしの鍵）、`niho-editor-google-oauth-secret`（Google のログインの client secret。§13） | アプリは自分の URL と AI の鍵だけ読める。migrate ジョブは DB の 2 つを読む（アプリ用ロールを作るため）。AI の鍵の版はオーナーが入れる（§10） |
 | サービスアカウント | `niho-editor-runner`（画面）、`niho-editor-migrate`（ジョブ） | 別々にして、画面からは表の所有者の資格情報に届かないようにする |
 | Artifact Registry | `niho-editor`（Docker） | 配備の image。直近 5 個だけ残す |
 | Cloud Build | — | `scripts/editor-deploy/cloudbuild.yaml` で web と migrate の 2 つの image を 1 回で作る |
@@ -27,8 +27,11 @@
 
 | 変数 | 値 | 内容 |
 | --- | --- | --- |
-| `EDITOR_AUTH_MODE` | `niho` | 本番は `niho` 以外だと起動しない（[apps/editor-web/README.md](../../apps/editor-web/README.md)） |
-| `EDITOR_ORIGIN` | `https://<APP_DOMAIN>` | 更新系の要求の `Origin` 検査。独自ドメインが無いうちは `run.app` の URL |
+| `EDITOR_AUTH_MODE` | `deploy.env` の `EDITOR_AUTH_MODE`（既定 `niho`） | ログインの方式。本番は `niho` か `google` 以外だと起動しない（[apps/editor-web/README.md](../../apps/editor-web/README.md)）。`google` は §13 の一時的な方式 |
+| `EDITOR_GOOGLE_CLIENT_ID` | `GOOGLE_OAUTH_CLIENT_ID` | `EDITOR_AUTH_MODE=google` のときだけ渡す。OAuth クライアント ID（§13） |
+| `EDITOR_GOOGLE_ALLOWED_EMAILS` | `GOOGLE_ALLOWED_EMAILS` | 同上。入れる人のアドレス（コンマ区切り）。空では起動しない |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | Secret | 同上。`niho-editor-google-oauth-secret` の最新の版が有効なときだけ渡す（§13） |
+| `EDITOR_ORIGIN` | `https://<APP_DOMAIN>` | 更新系の要求の `Origin` 検査。独自ドメインが無いうちは `run.app` の URL。`google` では `/auth/callback` の URL もこれから作る |
 | `EDITOR_STORAGE` | `gcs` | 資産の保存先。**毎回渡す**。未設定は本番で `off` の扱いになり、画像と音声の API が 503 `storage_unavailable` を返す（`apps/editor-web/src/storage/config.ts`） |
 | `EDITOR_ASSETS_BUCKET` | 資産バケット名 | 画像（#33）と音声（#36）の実体。実行 ID はこのバケットに作成と閲覧だけできる |
 | `EDITOR_TRANSCRIBE_ENGINE` | `deepgram` | 文字起こしのエンジン。`niho-editor-deepgram-key` に有効な版があるときだけ渡す（§12） |
@@ -43,6 +46,8 @@
 
 手順（#37）の `EDITOR_STEPS_*` は `STEPS_MODE=cloud-tasks` のときだけ足す（§11）。
 
+`EDITOR_AUTH_MODE=google` のときは、許可リスト自体がコンマを含むので、`--set-env-vars` 全体を gcloud の区切り指定の形（`^|^A=1|B=2`）で渡す（`scripts/editor-deploy/lib.sh` の `ENV_SEP`）。値に `|`・空白・`=` が入る設定は `load_deploy_env` が断る。
+
 migrate ジョブには `DATABASE_URL`（migrate ロール）と `EDITOR_APP_DATABASE_URL`（アプリ用ロールの URL。ここからロール名とパスワードを取って作る）が Secret で渡る。
 
 ## 3. 初回だけ
@@ -52,7 +57,7 @@ migrate ジョブには `DATABASE_URL`（migrate ロール）と `EDITOR_APP_DAT
 1. API の有効化
 2. サービスアカウント 2 つと `roles/cloudsql.client`
 3. Cloud SQL にデータベース `niho_editor` と migrate ロール（アプリ用ロールは migrate ジョブが作る）
-4. Secret 4 つと、読める人の限定（AI と文字起こしの鍵は版なしで作る。鍵はオーナーが §10・§12 の手順で入れる）
+4. Secret 5 つと、読める人の限定（AI の鍵・文字起こしの鍵・Google の client secret は版なしで作る。値はオーナーが §10・§12・§13 の手順で入れる）
 5. Artifact Registry（直近 5 個だけ残す）
 6. 資産バケット（private）
 7. 手順の実行基盤（`scripts/editor-deploy/steps-infra.sh`。§11）と文字起こしの実行基盤（`scripts/editor-deploy/transcribe-infra.sh`。§12）
@@ -81,7 +86,9 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 
 ## 5. ログイン（`niho` モード）が入るまでの状態
 
-`niho` モードは niho-app #19459 の契約が出るまで fail-closed（いつも未認証）。それまで本番の `niho-editor` は起動して noindex を返すが、API は常に 401、画面はログインの前の状態のまま。つまり **誰もページを作れない**。これが想定した状態で、`stub` へ落とす経路は無い（`NODE_ENV=production` で `EDITOR_AUTH_MODE` が `niho` 以外だと port を開く前に終了する）。
+`niho` モードは niho-app #19459 の契約が出るまで fail-closed（いつも未認証）。それまで本番の `niho-editor` は起動して noindex を返すが、API は常に 401、画面はログインの前の状態のまま。つまり **誰もページを作れない**。これが想定した状態で、`stub` へ落とす経路は無い（`NODE_ENV=production` で `EDITOR_AUTH_MODE` が `niho`・`google` 以外だと port を開く前に終了する）。
+
+契約が出るまでに本番で試したいときは、`EDITOR_AUTH_MODE=google`（Google のサインイン ＋ 許可リスト）に替える（§13）。`stub` を本番で開ける案は却下した（認証なしの固定ユーザーで、URL を知った誰でも全ページを書ける。noindex はアクセス制御ではない）。
 
 ## 6. 独自ドメインと TLS
 
@@ -375,3 +382,57 @@ Cloud Scheduler niho-editor-transcribe-sweep ── 5 分おき POST /api/intern
   - `editor-web: transcription sweep read only the oldest queued runs`: queued の run が 100 件を超えて残っている（1 ページで有効な run は 1 つなので、これが出るのは異常。キューが止まっていないかを見る）。
 - **文字起こしの失敗の理由**: 録音ページの状態（`GET /api/pages/{id}/recording/transcription` の `errorCode`）。
 - **Cloud Scheduler のジョブ**の最後の実行: 成功は 200 `{"failed": n, "requeued": m}`。
+
+## 13. Google のログイン（#47。**一時的**）
+
+`niho` モード（NIHO アカウントでのログイン）は niho-app #19459 の接続の契約が出るまで fail-closed で、本番では誰も入れない（§5）。それまで本番で試せるようにするための**一時的な**方式が `EDITOR_AUTH_MODE=google`：Google のサインインで本人を確かめ、**許可リストに挙げたアドレスだけ**を入れる。契約が出たら `niho` に戻す（下の「`niho` に戻す」）。
+
+- 入れるのは `GOOGLE_ALLOWED_EMAILS` のアドレスだけ（小文字に正規化して**完全一致**。部分一致・ドメイン一致では通らない）。許可リストが空なら、本番のサービスは port を開く前に終了する（誰でも入れる状態で動かさないため）。
+- 取る権限は `openid email` だけ（Drive などは足さない）。Google の token（code・access token・ID トークン）はサーバーの中だけで使い、cookie にもブラウザの JavaScript・storage にも渡さない。残すのは Google の `sub`（アドレスが変わっても変わらない id）とアドレスだけ。
+- セッションはサーバーが署名した HttpOnly cookie（`HttpOnly; Secure; SameSite=Lax; Path=/`、12 時間）。署名の鍵は client secret から導くので、別の秘密を増やさない。許可リストから外したアドレスは、cookie が残っていても次の要求で入れない。
+- 画面に出るのは「このアカウントでは入れません」だけ（アドレス・理由は画面にもログにも出さない）。ログに出るのは失敗の種類だけ。
+- 実装は `apps/editor-web/src/auth/google.ts` の 1 ファイル（route は方式に依存しない）。ID トークンの検証は worker の route と同じ `src/server/google-oidc.ts`（Google の JWKS で署名・`iss`・`aud`・`exp`・`email_verified` を確かめる）。
+
+### オーナーが Google Cloud のコンソールでやること
+
+editor を動かしているのと同じ GCP プロジェクトで行う（別プロジェクトでもよいが、同じにしておくと見る場所が増えない）。
+
+1. **OAuth 同意画面**（API とサービス → OAuth 同意画面）: User Type は **外部**、公開ステータスは **テスト**のまま。アプリ名・サポートメール・デベロッパーの連絡先を入れる。スコープは追加しない（`openid`・`email` は既定で足りる）。**テストユーザー**に、入れる人のアドレス（許可リストと同じもの）を追加する。テストのままなら、ここに無いアカウントは Google 側で断られる（許可リストと二重の歯止めになる）。審査は要らない。
+2. **OAuth クライアント ID**（API とサービス → 認証情報 → 認証情報を作成 → OAuth クライアント ID）: 種類は **ウェブ アプリケーション**。
+   - **承認済みのリダイレクト URI**: `https://<APP_DOMAIN>/auth/callback`（独自ドメインが無いうちは `https://<run.app の URL>/auth/callback`）。**`deploy.env` の `APP_DOMAIN` と文字列まで同じ**にする（`EDITOR_ORIGIN` から同じ URL を作って送るので、違うと Google が `redirect_uri_mismatch` を返す）。
+   - 承認済みの JavaScript 生成元は要らない（ブラウザから Google を呼ばない）。
+   - 作ると**クライアント ID**（公開されてよい値）と**クライアント シークレット**が出る。シークレットはこの場でだけ見られるので、そのままパスワード管理に入れる。
+3. もし別の GCP プロジェクトでクライアントを作ったら、そのプロジェクトで「Identity Toolkit」などの API を有効にする必要はない（OAuth の口は常に使える）。
+
+### どの値をどこに入れるか
+
+| 値 | 置き場所 | 備考 |
+| --- | --- | --- |
+| 方式 | `deploy.env` の `EDITOR_AUTH_MODE=google` | 既定は `niho`。アプリには同じ名前で渡る |
+| クライアント ID | `deploy.env` の `GOOGLE_OAUTH_CLIENT_ID` | 公開されてよい値。`deploy.env` は git 管理外。アプリには `EDITOR_GOOGLE_CLIENT_ID` で渡る |
+| 入れる人のアドレス | `deploy.env` の `GOOGLE_ALLOWED_EMAILS` | コンマ区切り（例 `you@example.com,you@gmail.com`）。空白を入れない。アプリには `EDITOR_GOOGLE_ALLOWED_EMAILS` で渡る。**この値をリポジトリ・Issue・PR に書かない** |
+| クライアント シークレット | Secret Manager の `niho-editor-google-oauth-secret` | `scripts/editor-deploy/set-google-oauth-secret.sh` でだけ入れる（標準入力から読み、画面・ファイル・コマンドラインに出さない）。アプリには `GOOGLE_OAUTH_CLIENT_SECRET` で `:latest` を渡す |
+| 戻り先 | `deploy.env` の `APP_DOMAIN` | `https://<APP_DOMAIN>/auth/callback` を Google へ送るので、コンソールに登録したリダイレクト URI と**同じ文字列**にする。空なら `google` では配備を止める |
+
+手順:
+
+1. （初回だけ）`scripts/editor-deploy/gcp-bootstrap.sh resources` — Secret `niho-editor-google-oauth-secret` が無ければ版なしで作り、画面の実行 ID に `roles/secretmanager.secretAccessor` を付ける。**既にある Secret とその版には触らない**（入れ直しは要らない）。
+2. `deploy.env` に `EDITOR_AUTH_MODE=google`・`GOOGLE_OAUTH_CLIENT_ID`・`GOOGLE_ALLOWED_EMAILS` を入れる。値の形が違う（空白・`|`・`=` が入る、アドレスでない、クライアント ID が空）ときは `deploy.sh` が配備の前に止まる。
+3. `scripts/editor-deploy/set-google-oauth-secret.sh` — シークレットの版をまだ入れていないとき（と、あとで鍵を回すとき）に使う。端末で実行すると、入力を画面に出さずにシークレットを求める（貼り付けて Enter）。パスワード管理の CLI から渡すときは `<シークレットを出すコマンド> | scripts/editor-deploy/set-google-oauth-secret.sh`。空の入力は何もしない。
+4. `scripts/editor-deploy/deploy.sh --no-build` — ログに `login: google (...)` が出て、`EDITOR_AUTH_MODE=google`・`EDITOR_GOOGLE_CLIENT_ID`・`EDITOR_GOOGLE_ALLOWED_EMAILS` と Secret `GOOGLE_OAUTH_CLIENT_SECRET` が付く。シークレットの版が無い・最新の版が無効なら、その旨をログに出して Secret を付けずに配備する（サービスは動くが、ログインは「ログインできませんでした」のまま）。
+5. `https://<APP_DOMAIN>/` を開く → ログインの画面 → Google のサインイン → 戻って編集できることを確かめる。許可リストに無いアカウントで試すと「このアカウントでは入れません」になる。
+
+### `niho` に戻す（接続の契約が出たとき）
+
+1. `deploy.env` の `EDITOR_AUTH_MODE` を `niho` に戻す（`GOOGLE_OAUTH_CLIENT_ID`・`GOOGLE_ALLOWED_EMAILS` は消してよい。`niho` では渡らない）。
+2. `scripts/editor-deploy/deploy.sh --no-build` — ログに `login: niho (...)`。`--set-env-vars`・`--set-secrets` は毎回の全量なので、Google の環境変数と Secret は前の revision の分も残らない。これで出ているセッションの cookie も読めなくなる（方式が変わると誰も入れない）。
+3. Secret の有効な版をすべて無効にする: `gcloud secrets versions list niho-editor-google-oauth-secret --filter='state:ENABLED'` で版を見て、それぞれ `gcloud secrets versions disable <版> --secret niho-editor-google-oauth-secret`。
+4. Google Cloud のコンソールで OAuth クライアントを削除する（または無効にする）。テストユーザーの登録も消す。
+5. `apps/editor-web/src/auth/google.ts` と `EDITOR_GOOGLE_*` を消す PR を出す（この節も消す）。`src/auth/config.ts` の `AUTH_MODES` から `google` を外せば、設定が残っていても起動しない。
+
+### 費用と限界
+
+- 追加費用は Secret の版 1 つだけ（無料の範囲）。Google のサインインに費用はかからない。
+- 同意画面を**テスト**のままにしているので、入れるのはテストユーザーに登録したアカウントだけ（最大 100）。公開（本番）にすると審査が要るので、公開しない。
+- セッションは 12 時間で切れる（続けるには入り直す）。複数の端末・ブラウザで同時に入れる。
+- ログインの画面のボタンは共有 UI（niho-docs-ui）の文のまま「NIHOでログイン」と出る。押すと Google のサインインへ行く。一時的な方式なので共有 UI の文は変えていない。サインインのとき毎回アカウントを選べる（`prompt=select_account`）。

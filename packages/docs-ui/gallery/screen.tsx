@@ -171,7 +171,6 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
       }}
       me={{
         name: ME.name,
-        caption: ME.email,
         initial: ME.initial,
         badge: 1,
         open: accountMenu,

@@ -2,6 +2,7 @@ import "server-only";
 import { getEditorSettings, saveEditorSettings } from "@niho/editor-store";
 import { getAuthProvider } from "../auth";
 import { getPool } from "./db";
+import { ownerRecipes, saveOwnerRecipes } from "./recipe-source";
 import type { SettingsApiDeps } from "./settings-api";
 
 /**
@@ -16,6 +17,8 @@ export const settingsDeps: SettingsApiDeps = {
     return {
       get: (owner) => getEditorSettings(pool, owner),
       save: (owner, patch) => saveEditorSettings(pool, owner, patch),
+      recipes: (owner) => ownerRecipes(pool, owner),
+      saveRecipes: (owner, recipes) => saveOwnerRecipes(pool, owner, recipes),
     };
   },
 };

@@ -80,7 +80,7 @@ function jwksStateFor(fetchFn: typeof fetch | undefined): JwksState {
   return state;
 }
 
-function fail(code: OidcFailureCode): OidcVerifyResult {
+function fail(code: OidcFailureCode): { ok: false; code: OidcFailureCode } {
   return { ok: false, code };
 }
 
@@ -191,26 +191,29 @@ function isNumericDate(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function checkClaims(payload: Record<string, unknown>, options: VerifyGoogleOidcOptions, nowMs: number): OidcVerifyResult {
+/**
+ * 署名が通ったあとのクレーム。`aud` は完全一致、`iss` は Google の 2 つの書き方だけ、`email` は検証済みで
+ * 空でない文字列、`sub` は空でない文字列。どのアドレスを許すかはここでは決めない（呼ぶ側の仕事）。
+ */
+function checkClaims(payload: Record<string, unknown>, audience: string, nowMs: number): ClaimsResult {
   if (typeof payload.iss !== "string" || !GOOGLE_ISSUERS.has(payload.iss)) return fail("bad_issuer");
   // aud は 1 つの文字列だけ（配列は受けない）
-  if (typeof payload.aud !== "string" || payload.aud !== options.audience) return fail("bad_audience");
+  if (typeof payload.aud !== "string" || payload.aud !== audience) return fail("bad_audience");
   const { exp, iat, nbf } = payload;
   if (!isNumericDate(exp) || !isNumericDate(iat) || (nbf !== undefined && !isNumericDate(nbf))) return fail("invalid_claims");
   const now = nowMs / 1000;
   if (now >= exp + CLOCK_SKEW_SECONDS) return fail("expired");
   if (nbf !== undefined && nbf > now + CLOCK_SKEW_SECONDS) return fail("not_yet_valid");
   if (iat > now + CLOCK_SKEW_SECONDS) return fail("issued_in_future");
-  if (typeof payload.email !== "string" || payload.email !== options.allowedEmail) return fail("bad_email");
+  if (typeof payload.email !== "string" || payload.email.length === 0) return fail("bad_email");
   if (payload.email_verified !== true) return fail("email_unverified");
   if (typeof payload.sub !== "string" || payload.sub.length === 0) return fail("missing_subject");
-  return { ok: true };
+  return { ok: true, claims: { subject: payload.sub, email: payload.email } };
 }
 
-async function verify(token: unknown, options: VerifyGoogleOidcOptions): Promise<OidcVerifyResult> {
+async function verify(token: unknown, options: { audience: string; fetch?: typeof fetch; now?: () => number }): Promise<ClaimsResult> {
   // 期待する値が空なら（設定の誤り）何も通さない
   if (!options.audience) return fail("bad_audience");
-  if (!options.allowedEmail) return fail("bad_email");
   if (typeof token !== "string" || token.length === 0) return fail("malformed");
   if (token.length > MAX_TOKEN_LENGTH) return fail("token_too_large");
   const parts = token.split(".");
@@ -236,11 +239,46 @@ async function verify(token: unknown, options: VerifyGoogleOidcOptions): Promise
   }
   // 署名が通ってからクレームを見る
   if (!valid) return fail("bad_signature");
-  return checkClaims(payload, options, nowMs);
+  return checkClaims(payload, options.audience, nowMs);
 }
 
-/** Google の ID トークンを検証する。例外は投げない（想定外の失敗も `malformed`）。 */
+/**
+ * Cloud Tasks・Cloud Scheduler が付けた ID トークンを検証する（worker の route。#37・#36）。
+ * 通るのは許した 1 つのサービスアカウントだけ。例外は投げない（想定外の失敗も `malformed`）。
+ */
 export async function verifyGoogleOidc(token: unknown, options: VerifyGoogleOidcOptions): Promise<OidcVerifyResult> {
+  try {
+    if (!options.allowedEmail) return fail("bad_email");
+    const result = await verify(token, options);
+    if (!result.ok) return result;
+    // サービスアカウントのメールは 1 つだけ（完全一致。正規化しない）
+    if (result.claims.email !== options.allowedEmail) return fail("bad_email");
+    return { ok: true };
+  } catch {
+    return fail("malformed");
+  }
+}
+
+/** 検証が通ったときに返すクレーム（ログイン（#47 google）が本人を決めるのに使う分だけ）。 */
+export type GoogleIdTokenClaims = {
+  /** Google の `sub`。アドレスが変わっても変わらない id。 */
+  readonly subject: string;
+  /** `email`（`email_verified === true` のときだけ返る。正規化はしていない）。 */
+  readonly email: string;
+};
+
+type ClaimsResult = { ok: true; claims: GoogleIdTokenClaims } | { ok: false; code: OidcFailureCode };
+
+export type GoogleIdTokenResult = ClaimsResult;
+
+/**
+ * Google のサインインで受け取った ID トークンを検証し、通ればクレームを返す（`EDITOR_AUTH_MODE=google`。src/auth/google.ts）。
+ * `audience` は OAuth クライアント ID。どのアドレスを許すかは呼ぶ側（許可リスト）が決める。例外は投げない。
+ */
+export async function verifyGoogleIdToken(
+  token: unknown,
+  options: { audience: string; fetch?: typeof fetch; now?: () => number },
+): Promise<GoogleIdTokenResult> {
   try {
     return await verify(token, options);
   } catch {

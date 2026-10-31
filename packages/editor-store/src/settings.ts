@@ -85,8 +85,8 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[])
   return Object.keys(value).every((key) => allowed.includes(key));
 }
 
-/** 制御文字（改行とタブを除く）を持たない文字列。長さは書記素ではなく code point で数える。 */
-function isText(value: unknown, maxChars: number, multiline = false): value is string {
+/** 制御文字（改行とタブを除く）を持たない文字列。長さは書記素ではなく code point で数える。手順の表（recipes.ts）も使う。 */
+export function isSettingsText(value: unknown, maxChars: number, multiline = false): value is string {
   if (typeof value !== "string") return false;
   if (Array.from(value).length > maxChars) return false;
   return multiline ? !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value) : !/[\u0000-\u001f\u007f]/.test(value);
@@ -100,26 +100,26 @@ export function isSettingsTerm(value: unknown): value is SettingsTerm {
   if (!isPlainObject(value) || !hasOnlyKeys(value, ["term", "reading", "variants", "note"])) return false;
   const { termChars, variants, noteChars } = SETTINGS_LIMITS;
   // 表記だけは空にできない（空の行は AI の表に出しても意味が無い）
-  if (!isText(value.term, termChars) || value.term.trim() === "") return false;
-  if (!isText(value.reading, termChars)) return false;
-  if (!isText(value.note, noteChars)) return false;
+  if (!isSettingsText(value.term, termChars) || value.term.trim() === "") return false;
+  if (!isSettingsText(value.reading, termChars)) return false;
+  if (!isSettingsText(value.note, noteChars)) return false;
   if (!Array.isArray(value.variants) || value.variants.length > variants) return false;
   // 空の誤りやすい表記は断らずに落とす（1 つの欄に「・」で並べて書くので、空が混ざる）
-  return value.variants.every((variant) => isText(variant, termChars));
+  return value.variants.every((variant) => isSettingsText(variant, termChars));
 }
 
 export function isSettingsStep(value: unknown): value is SettingsStep {
   if (!isPlainObject(value) || !hasOnlyKeys(value, ["id", "name", "instruction"])) return false;
   if (typeof value.id !== "string" || !SETTINGS_ID_PATTERN.test(value.id)) return false;
-  if (!isText(value.name, SETTINGS_LIMITS.stepNameChars) || value.name.trim() === "") return false;
-  return isText(value.instruction, SETTINGS_LIMITS.instructionChars, true);
+  if (!isSettingsText(value.name, SETTINGS_LIMITS.stepNameChars) || value.name.trim() === "") return false;
+  return isSettingsText(value.instruction, SETTINGS_LIMITS.instructionChars, true);
 }
 
 export function isSettingsRecipe(value: unknown): value is SettingsRecipe {
   if (!isPlainObject(value) || !hasOnlyKeys(value, ["id", "name", "guide", "steps"])) return false;
   if (typeof value.id !== "string" || !SETTINGS_ID_PATTERN.test(value.id)) return false;
-  if (!isText(value.name, SETTINGS_LIMITS.recipeNameChars) || value.name.trim() === "") return false;
-  if (!isText(value.guide, SETTINGS_LIMITS.guideChars, true)) return false;
+  if (!isSettingsText(value.name, SETTINGS_LIMITS.recipeNameChars) || value.name.trim() === "") return false;
+  if (!isSettingsText(value.guide, SETTINGS_LIMITS.guideChars, true)) return false;
   // 段階が 1 つも無い手順は実行できない
   if (!Array.isArray(value.steps) || value.steps.length === 0 || value.steps.length > SETTINGS_LIMITS.steps) return false;
   if (!value.steps.every(isSettingsStep)) return false;
@@ -143,7 +143,7 @@ export function settingsProblem(patch: unknown): SettingsProblem | null {
     const ids = recipes.map((recipe) => recipe.id);
     if (new Set(ids).size !== ids.length) return "recipes";
   }
-  if (patch.about !== undefined && !isText(patch.about, SETTINGS_LIMITS.aboutChars, true)) return "about";
+  if (patch.about !== undefined && !isSettingsText(patch.about, SETTINGS_LIMITS.aboutChars, true)) return "about";
   return null;
 }
 

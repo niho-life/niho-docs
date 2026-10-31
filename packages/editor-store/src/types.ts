@@ -92,6 +92,12 @@ export type SaveOptions = {
   overwrite?: boolean;
 };
 
+/**
+ * フォルダへ入れる・出すの結果（ページか入れ先が無いときは null＝同じ 404）。
+ * `too_deep` は段が深くなりすぎる移動、`cycle` は自分自身・自分の子孫の下へ入れる移動（どちらも何も書かない）。
+ */
+export type MovePageResult = "moved" | "too_deep" | "cycle";
+
 /** 保存の結果（該当するページが無いときは null）。競合のときは何も書かず、今のページを返す。 */
 export type SaveResult = { status: "saved"; page: Page } | { status: "conflict"; page: Page };
 
