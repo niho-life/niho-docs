@@ -48,12 +48,14 @@ const LIMITS: SettingsDto["limits"] = {
   steps: 12,
   stepNameChars: 80,
   instructionChars: 8_000,
+  aboutChars: 2_000,
 };
 
 function dto(patch: Partial<SettingsDto> = {}): SettingsDto {
   return {
     aiLang: "same",
     glossary: [],
+    about: "",
     recipes: (["tpl-1", "tpl-2", "tpl-3"] as const).map((id) => ({
       id,
       ...structuredClone(DEFAULTS[id]),
@@ -350,5 +352,29 @@ describe("SettingsView", () => {
       expect(input.id, input.outerHTML.slice(0, 80)).toBeTruthy();
       expect(labelFor(input)?.textContent, input.outerHTML.slice(0, 80)).toBeTruthy();
     }
+  });
+});
+
+describe("「あなたについて」（AI に毎回渡す本人の説明）", () => {
+  it("shows a summary, opens the editor, and saves it", async () => {
+    save.mockResolvedValue({ ok: true, settings: dto({ about: "直した自己紹介です。" }) });
+    const text = (await mount(dto({ about: "合成の自己紹介です。文章は短く書きます。" }))).textContent ?? "";
+    expect(text).toContain("合成の自己紹介です。文章は短く書きます。");
+    // 公開の著者情報とは別物だと分かる一言
+    await click("あなたについてを編集");
+    expect(container?.textContent).toContain("公開のときに出る著者の情報とは別のもの");
+    await type("あなたについて", "直した自己紹介です。");
+    await click("あなたについてを保存");
+    expect(save).toHaveBeenCalledWith({ about: "直した自己紹介です。" });
+  });
+
+  it("says when it is empty, and does not save a text over the limit", async () => {
+    await mount(dto({ about: "" }));
+    expect(container?.textContent).toContain(EDITOR_SETTINGS_TEXT.empty);
+    await click("あなたについてを編集");
+    await type("あなたについて", "あ".repeat(LIMITS.aboutChars + 1));
+    await click("あなたについてを保存");
+    expect(save).not.toHaveBeenCalled();
+    expect(container?.textContent).toContain("長すぎるので保存できません");
   });
 });

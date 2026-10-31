@@ -46,6 +46,50 @@ VITE_NIHO_DOCS_EDITOR_SHELL=true npm -C apps/docs run dev:fake
   限定 AST の外の要素があるページは、**黙って欠けさせず開かずに知らせる**（移行は #45 第 2 段）。
 - まだ無いもの: 公開のシート・発信先・情報パネル・手順の帯・AI・録音・本文の画像・版と履歴・⌘K の全文検索（一覧の題名の絞り込みだけ）。
 
+### Mac の殻（#45 の T7・第 1 段）
+
+設計（`docs/architecture/editor-niho-life-design.md` §13）のとおり、Mac アプリは **editor.niho.life を読む殻 ＋ 端末の力**になる。
+この段で入ったのは殻の骨格だけで、**既定は今までの画面のまま**（`NIHO_DOCS_SHELL` を立てたときだけ editor を読む）。
+
+```sh
+NIHO_DOCS_SHELL=remote npm -C apps/docs run dev:fake    # editor.niho.life を読む
+NIHO_DOCS_SHELL=dev    npm -C apps/docs run dev:fake    # 開発の editor（localhost:3000。開発・試験の起動だけ）
+```
+
+- URL は `src-tauri/src/shell.rs` の定数だけ。環境変数やページから URL を受け取らない。
+- **remote origin から呼べるコマンド**は `src-tauri/capabilities/remote-editor.json`（`remote.urls` は `https://editor.niho.life` だけ、
+  permission は `allow-editor-shell`＝`shell_capabilities` だけ）。保管庫・設定・鍵・CLI の起動の引数には届かない。
+  `acl_tests.rs` がこれを固定している（`allow-docs-*` が remote に混ざると落ちる）。
+- 開発の `localhost:3000` は `capabilities/remote-editor-dev.json` に分け、`tauri.dev.conf.json`（`npm run dev` / `dev:fake` が付ける）
+  のときだけ数える。配布物の `tauri.conf.json` は `app.security.capabilities` を `["default", "remote-editor"]` に固定しているので入らない。
+- `shell_capabilities` は殻の自己紹介（版・開発の起動か・端末の力の有無）。画面はこれが返ることで Mac の殻の中だと分かる。
+  鍵・パス・端末の名前は返さない。
+- **端末の力 ①**（第 2 段）：remote から呼べる command を足した。すべて **id だけ**でやり取りし、パスは画面に返さない。
+  - 録音：`shell_mic_status` / `shell_recording_start` / `shell_recording_stop`（名前・長さ・書き出せたか）/ `shell_recording_discard` /
+    `shell_recording_read`（書き出した `.m4a` のバイト列。画面がサーバーへ上げる。1 回 512 MB まで）
+  - 音声ファイル：`shell_audio_pick`（Mac の選択ダイアログ → 一時置き場 `staging/<id>/audio/<n>.<ext>` に写す）/ `shell_audio_read` /
+    `shell_staging_discard`
+  - 端末内の文字起こし：`shell_transcribe_local`（出どころは `{ kind: "recording", recordingId }` か `{ kind: "staged", stagingId }`。
+    同梱の `niho-speech` で、進みは channel で画面へ）/ `shell_transcribe_stop`
+  - 一時置き場（`src-tauri/src/staging.rs`）は app data の `staging/<操作の id>/`（0700・中は 0600）。起動時に 24 時間より古い残骸を掃く。
+    端末内の文字起こしと CLI の AI で同じ仕組みを使う（設計 §13）。
+  - 結果（文字起こし・音声）をサーバーへ書くのは画面の側（native はサーバーの API に触らない）。
+- **端末の力 ②**（第 3 段・`src-tauri/src/shell_ai.rs`）：CLI の AI。本人のサブスクのアカウントで Claude Code・Codex CLI・Antigravity CLI を
+  この Mac で動かし、旧アプリと同じく**文書ファイルを直接編集する**。
+  - `shell_ai_engines`：3 つの CLI の状態（入っているか・ログイン済みか・使えるモデルの一覧）。パス・版は返さない。
+  - `shell_ai_turn(turnId, request)`：依頼は固定の形 `{ engine: "cli:claude-code" | "cli:codex" | "cli:antigravity", model, effort?,
+    conversationId?, resumeSession?, instruction, page: { pageId, title, markdown }, context: [{ name, title, markdown }] }`（知らない項目は断る）。
+    一時置き場 `staging/<会話の id の hash>/` に `page/body.md`（書ける唯一の場所）・`context/<name>.md`・`instructions.md` を 0600 で置き、
+    `ToolPolicy::ProjectFolder { writable: ["page"] }` で CLI を起動する（cwd は一時置き場。同じ会話は同じ path＝CLI の続きが効く）。
+    進みは channel に `{ turnId, seq, event }`、結果は `{ finalEvent, page?: { pageId, markdown }, pageRemoved, extraFiles }`。
+    **サーバーへ書くのは画面**（T5 の `POST /api/pages/{id}/ai/chat/turns` の `writes`）。終わったら置き場は消す。
+  - `shell_ai_stop(turnId)`：止める。
+  - 安全性（設計 §13）：remote 由来の文字列で CLI の引数に載るのは**モデルの ID だけ**（`is_safe_model`：空白・制御文字なし・`-` で始まらない）。
+    システムプロンプトは native が組み、画面の文字列は題名（1 行に畳む）だけ入れる。指示は標準入力。`/bin/sh` は通らない。
+    Codex は唯一の writable root（`page/`）が cwd（crate の `TurnCtx::command`）なので、プロンプトの相対パスは provider ごとに組む。
+    同じ会話の依頼は重ねない（置き場の lease。重なったら `shell_ai_busy`）。
+- 次の段で足すもの：`packages/desktop-bridge`（TS の glue）、旧い画面の退役、配布の既定を remote に。
+
 ### NIHO アカウント（L5 #18557）
 
 - 設定 › 接続設定の「NIHO アカウント」の丸ボタンから接続する。ログインは任意で、未ログインでも文書作成・工程・AI 接続を使える。

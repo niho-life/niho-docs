@@ -91,7 +91,31 @@ export type CompleteInput = {
 
 export type Completion = { text: string; usage: AiUsageReport };
 
-export type AnthropicClient = { complete(input: CompleteInput): Promise<Completion> };
+/**
+ * 道具つきの 1 往復（AI チャットの会話。#38）。`messages` は Messages API の messages をそのまま渡す
+ * （本文は role: "user" の中のデータで、system の指示ではない）。`tools` は道具の定義。
+ */
+export type ConverseInput = {
+  system: string;
+  messages: unknown[];
+  tools?: unknown[];
+  maxTokens?: number;
+  signal?: AbortSignal;
+};
+
+/** モデルが呼んだ道具 1 回（`input` はモデルが作った値なので信用しない）。 */
+export type ToolCall = { id: string; name: string; input: unknown };
+
+/**
+ * 道具つきの 1 往復の答え。`text` はこの往復で書いた文（実況・返答）、`toolCalls` は呼ばれた道具、
+ * `stopReason` は `tool_use`（道具の結果を返すと続く）・`end_turn`（終わり）・`max_tokens`（出力の上限で切れた）など。
+ */
+export type Turn = { text: string; toolCalls: ToolCall[]; stopReason: string | null; usage: AiUsageReport };
+
+export type AnthropicClient = {
+  complete(input: CompleteInput): Promise<Completion>;
+  converse(input: ConverseInput): Promise<Turn>;
+};
 
 /** 数の設定（空・数でない値は既定、範囲の外は端に丸める）。 */
 function boundedInteger(raw: string | undefined, fallback: number, min: number, max: number): number {
@@ -162,8 +186,40 @@ function readMessage(message: unknown, requested: string): Completion {
   return { text, usage };
 }
 
-async function send(options: AnthropicOptions, input: CompleteInput, maxTokens: number): Promise<Completion> {
-  const signal = input.signal;
+/** Messages API の本文（model と max_tokens はここで足す）。 */
+type MessagesBody = {
+  system: string;
+  messages: unknown[];
+  tools?: unknown[];
+};
+
+/**
+ * 道具つきの往復の答えを読む。文（text）は連ねて 1 つにし、道具（tool_use）は呼ばれた順に並べる。
+ * 断られた（refusal）ときだけ invalid_output（使用量は持たせる）。出力の上限で切れたのは `stopReason` で返し、
+ * 会話の側が「途中で止まりました」として扱う（書いた分の道具の結果は残っている）。
+ */
+function readTurn(message: Record<string, unknown>, requested: string): Turn {
+  const usage = readUsage(message, requested);
+  if (message.stop_reason === "refusal") throw failure("invalid_output", { reason: "refusal", usage });
+  const content = Array.isArray(message.content) ? message.content : [];
+  const texts: string[] = [];
+  const toolCalls: ToolCall[] = [];
+  for (const item of content) {
+    if (!isPlainObject(item)) continue;
+    if (item.type === "text" && typeof item.text === "string") texts.push(item.text);
+    else if (item.type === "tool_use" && typeof item.id === "string" && typeof item.name === "string") {
+      toolCalls.push({ id: item.id, name: item.name, input: item.input });
+    }
+  }
+  return {
+    text: texts.join("\n").trim(),
+    toolCalls,
+    stopReason: typeof message.stop_reason === "string" ? message.stop_reason : null,
+    usage,
+  };
+}
+
+async function send(options: AnthropicOptions, body: MessagesBody, maxTokens: number, signal: AbortSignal | undefined): Promise<Record<string, unknown>> {
   signal?.throwIfAborted();
   // 鍵は呼ぶたびに読む。無ければ呼ばない
   const key = options.env.ANTHROPIC_API_KEY?.trim() ?? "";
@@ -189,7 +245,7 @@ async function send(options: AnthropicOptions, input: CompleteInput, maxTokens: 
       response = await doFetch(ANTHROPIC_MESSAGES_URL, {
         method: "POST",
         headers: { "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json" },
-        body: JSON.stringify({ model: options.model, max_tokens: maxTokens, system: input.system, messages: [{ role: "user", content: input.user }] }),
+        body: JSON.stringify({ model: options.model, max_tokens: maxTokens, ...body }),
         redirect: "error",
         signal: controller.signal,
       });
@@ -208,20 +264,32 @@ async function send(options: AnthropicOptions, input: CompleteInput, maxTokens: 
     } catch {
       throw interrupted("invalid_output", { reason: "bad_body" });
     }
-    return readMessage(message, options.model);
+    if (!isPlainObject(message)) throw failure("invalid_output", { reason: "bad_body" });
+    return message;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
   }
 }
 
+function boundedMaxTokens(options: AnthropicOptions, asked: number | undefined): number {
+  const limit = maxTokensLimit(options.env);
+  const value = asked === undefined || !Number.isFinite(asked) ? limit : Math.floor(asked);
+  return Math.min(limit, Math.max(1, value));
+}
+
 /** 汎用の 1 往復（system と user の 1 通）。#37 の手順の実行器が使う。 */
 export function createAnthropicClient(options: AnthropicOptions): AnthropicClient {
   return {
-    complete(input) {
-      const limit = maxTokensLimit(options.env);
-      const asked = input.maxTokens === undefined || !Number.isFinite(input.maxTokens) ? limit : Math.floor(input.maxTokens);
-      return send(options, input, Math.min(limit, Math.max(1, asked)));
+    async complete(input) {
+      const body = { system: input.system, messages: [{ role: "user", content: input.user }] };
+      const message = await send(options, body, boundedMaxTokens(options, input.maxTokens), input.signal);
+      return readMessage(message, options.model);
+    },
+    async converse(input) {
+      const body: MessagesBody = { system: input.system, messages: input.messages, ...(input.tools && input.tools.length > 0 ? { tools: input.tools } : {}) };
+      const message = await send(options, body, boundedMaxTokens(options, input.maxTokens), input.signal);
+      return readTurn(message, options.model);
     },
   };
 }

@@ -1,9 +1,16 @@
-import type { Block } from "@niho/editor-store";
+import type { Block, OwnerId } from "@niho/editor-store";
 import type { RecipeDef } from "./recipes";
 
 export type StepExecutorInput = {
   recipe: RecipeDef;
   stepIndex: number;
+  /**
+   * run を持っている人（runner が claim で分かった値を渡す。要求の値からは決めない）。
+   * 本物の実行器（ai-executor.ts）が月の上限と使用量の記録に使う。偽物の実行器は見ない。
+   */
+  owner?: OwnerId;
+  /** 手順を始めた録音ページの id（自動参考ページを、そのページと同じフォルダから選ぶのに使う）。 */
+  parentPageId?: string;
   /** 録音ページの本文。 */
   parentBlocks: Block[];
   /** 前の段階のサブページの本文（段階 0 は null）。 */
@@ -25,16 +32,22 @@ export type StepExecutor = {
 /**
  * 段階の失敗。`code` は短い英小文字の code だけ（本文・プロンプト・内部の情報を入れない）。
  * `retryable` は一時的な失敗（時間切れ・5xx 相当）。入力の誤り（4xx 相当）は false ですぐ失敗にする。
+ *
+ * `partial` は書けたところまでの本文。**続きを使い切って書き切れなかったとき（`output_too_long`）だけ**入れる。
+ * runner が最後の失敗のときだけ `step_attempts.partial_blocks` に残す（サブページの本文には書かない）。
+ * 長い文字起こし修正はここに当たる段階なので、捨てると十数分かけた本文が丸ごと消える。
  */
 export class StepError extends Error {
   readonly code: string;
   readonly retryable: boolean;
+  readonly partial?: readonly Block[];
 
-  constructor(code: string, retryable: boolean) {
+  constructor(code: string, retryable: boolean, partial?: readonly Block[]) {
     super(`step failed: ${code}`);
     this.name = "StepError";
     this.code = code;
     this.retryable = retryable;
+    if (partial !== undefined) this.partial = partial;
   }
 }
 

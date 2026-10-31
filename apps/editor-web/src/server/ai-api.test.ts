@@ -1,12 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_EDITOR_SETTINGS, type AiUsageDelta, type AiUsageTotals, type Block, type CreatePageInput, type EditorSettings, type Page, type PagePatch, type PageVersionSummary, type SaveOptions, type SaveResult, type VersionReason } from "@niho/editor-store";
+import { DEFAULT_EDITOR_SETTINGS, type AdoptionInput, type AiConversationSummary, type AiMessage, type AiTurnInput, type AiUsageDelta, type AiUsageTotals, type Block, type CreatePageInput, type EditorSettings, type Page, type PagePatch, type PageVersionSummary, type SaveOptions, type SaveResult, type VersionReason } from "@niho/editor-store";
 import { AnthropicError, createAnthropicModel } from "../ai/anthropic";
 import { resolveAiBackend, type AiBackend } from "../ai/config";
 import type { Proposal } from "../ai/engine";
 import type { AiModel, AiRequest, AiUsageReport } from "../ai/model";
 import type { AuthProvider } from "../auth/types";
-import { adoptAiProposal, createAiProposal, getAiUsageSummary, type AiApiDeps, type AiPagesStore, type AiUsageStore, type UsageSummary } from "./ai-api";
+import {
+  adoptAiProposal,
+  createAiProposal,
+  recordDeviceProposal,
+  getAiConversation,
+  getAiUsageSummary,
+  listAiConversations,
+  type AiApiDeps,
+  type AiConversationStore,
+  type AiPagesStore,
+  type AiUsageStore,
+  type UsageSummary,
+} from "./ai-api";
 import { MAX_BODY_BYTES } from "./http";
 
 const ORIGIN = "http://editor.test";
@@ -73,7 +85,7 @@ type MemoryStore = ReturnType<typeof memoryStore>;
 /** owner・月ごとの使用量（recordAiUsage と同じ約束: 足した後の合計を返す）。 */
 function memoryUsage() {
   const rows = new Map<string, AiUsageTotals>();
-  const zero = (owner: string, month: string): AiUsageTotals => ({ owner, month, requests: 0, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 });
+  const zero = (owner: string, month: string): AiUsageTotals => ({ owner, month, source: "server", requests: 0, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 });
   const usage = {
     rows,
     async get(owner: string, month: string): Promise<AiUsageTotals> {
@@ -84,6 +96,7 @@ function memoryUsage() {
       const next = {
         owner,
         month,
+        source: "server" as const,
         requests: current.requests + delta.requests,
         inputTokens: current.inputTokens + delta.inputTokens,
         outputTokens: current.outputTokens + delta.outputTokens,
@@ -101,6 +114,97 @@ function memoryUsage() {
 
 type MemoryUsage = ReturnType<typeof memoryUsage>;
 
+/**
+ * メモリの中だけの合成の会話の store（ai-conversations.ts と同じ約束: 他人のもの・無いものはどちらも null）。
+ * ページの持ち主は memoryStore が持っているので、`pages` で引ける形で渡す。
+ */
+function memoryConversations(pages: MemoryStore | null) {
+  type Row = { id: string; owner: string; pageId: string; createdAt: string; messages: AiMessage[] };
+  const rows = new Map<string, Row>();
+  const visiblePage = (owner: string, pageId: string) => {
+    const row = pages?.rows.get(pageId);
+    return row && row.owner === owner && !row.deleted ? row : null;
+  };
+  const summary = (row: Row): AiConversationSummary => ({
+    id: row.id,
+    pageId: row.pageId,
+    createdAt: row.createdAt,
+    updatedAt: row.messages.at(-1)?.createdAt ?? row.createdAt,
+    messages: row.messages.length,
+    lastText: row.messages.at(-1)?.text ?? null,
+  });
+  const message = (seq: number, role: AiMessage["role"], text: string, extra: Partial<AiMessage> = {}): AiMessage => ({
+    id: randomUUID(),
+    seq,
+    role,
+    text,
+    preset: null,
+    proposal: null,
+    adopted: null,
+    version: null,
+    adoptedAt: null,
+    items: null,
+    result: null,
+    resultCode: null,
+    route: null,
+    engine: null,
+    changes: [],
+    createdAt: new Date().toISOString(),
+    ...extra,
+  });
+  const own = (owner: string, pageId: string, id: string) => {
+    const row = rows.get(id);
+    return row && row.owner === owner && row.pageId === pageId ? row : null;
+  };
+  const conversations = {
+    rows,
+    async append(owner: string, input: AiTurnInput) {
+      if (!visiblePage(owner, input.pageId)) return null;
+      let row = input.conversationId == null ? null : own(owner, input.pageId, input.conversationId);
+      if (input.conversationId != null && !row) return null;
+      if (!row) {
+        row = { id: randomUUID(), owner, pageId: input.pageId, createdAt: new Date().toISOString(), messages: [] };
+        rows.set(row.id, row);
+      }
+      const seq = row.messages.length + 1;
+      const request = message(seq, "user", input.request.text, { preset: input.request.preset ?? null });
+      const result = message(seq + 1, "assistant", input.result.text, { proposal: input.result.proposal });
+      row.messages.push(request, result);
+      return { conversation: summary(row), request, result };
+    },
+    async list(owner: string, pageId: string) {
+      if (!visiblePage(owner, pageId)) return null;
+      return [...rows.values()]
+        .filter((row) => row.owner === owner && row.pageId === pageId)
+        .map(summary)
+        .reverse();
+    },
+    async get(owner: string, pageId: string, conversationId: string) {
+      const row = own(owner, pageId, conversationId);
+      return row ? { conversation: summary(row), messages: [...row.messages] } : null;
+    },
+    async message(owner: string, pageId: string, messageId: string) {
+      for (const candidate of rows.values()) {
+        if (candidate.owner !== owner || candidate.pageId !== pageId) continue;
+        const found = candidate.messages.find((item) => item.id === messageId && item.role === "assistant");
+        if (found) return found;
+      }
+      return null;
+    },
+    async adopt(owner: string, input: AdoptionInput) {
+      const found = await conversations.message(owner, input.pageId, input.messageId);
+      if (!found || found.adopted !== null || found.proposal === null) return false;
+      found.adopted = input.adopted;
+      found.version = input.version;
+      found.adoptedAt = new Date().toISOString();
+      return true;
+    },
+  };
+  return conversations satisfies AiConversationStore;
+}
+
+type MemoryConversations = ReturnType<typeof memoryConversations>;
+
 /** 決まった出力と使用量を返す合成のモデル（呼ばれた要求を残す）。 */
 function stubBackend(respond: (request: AiRequest) => unknown, report: Partial<AiUsageReport> = {}, provider: AiBackend["provider"] = null) {
   const calls: AiRequest[] = [];
@@ -110,7 +214,7 @@ function stubBackend(respond: (request: AiRequest) => unknown, report: Partial<A
       return { output: respond(request), usage: { model: "synthetic-model", inputTokens: 10, outputTokens: 5, ...report } };
     },
   };
-  return { backend: { model, provider } satisfies AiBackend, calls };
+  return { backend: { model, provider, route: "server", engine: "synthetic:model" } satisfies AiBackend, calls };
 }
 
 const fake = (): AiBackend | null => resolveAiBackend({ EDITOR_AI_MODE: "fake", NODE_ENV: "test" });
@@ -130,15 +234,32 @@ function authAs(userId: string | null): AuthProvider {
   };
 }
 
-type Options = { usage?: MemoryUsage | null; ai?: () => AiBackend | null; limitUsd?: number | null; settings?: EditorSettings | null };
+type Options = {
+  usage?: MemoryUsage | null;
+  ai?: () => AiBackend | null;
+  limitUsd?: number | null;
+  settings?: EditorSettings | null;
+  conversations?: MemoryConversations | null;
+  /** 同じフォルダのほかのページ（自動参考）。 */
+  references?: { title: string; blocks: Block[] }[] | null;
+};
 
 function deps(userId: string | null, store: MemoryStore | null, options: Options = {}): AiApiDeps {
   const usage = options.usage === undefined ? memoryUsage() : options.usage;
+  const chats = options.conversations === undefined ? memoryConversations(store) : options.conversations;
   return {
     auth: () => authAs(userId),
     store: () => store,
     usage: () => (store ? usage : null),
+    conversations: () => (store ? chats : null),
     settings: options.settings === undefined ? undefined : () => (options.settings === null ? null : async () => options.settings!),
+    references:
+      options.references === undefined
+        ? undefined
+        : () =>
+            options.references === null
+              ? null
+              : async () => options.references!.map((page, index) => ({ id: `ref-${index}`, title: page.title, kind: "note", blocks: page.blocks })),
     ai: options.ai ?? fake,
     limitUsd: () => options.limitUsd ?? null,
     now: () => NOW,
@@ -155,6 +276,11 @@ function request(method: string, path: string, body?: unknown, headers: Record<s
 const propose = (id: string, body: unknown, d: AiApiDeps, headers?: Record<string, string>) => createAiProposal(request("POST", `/api/pages/${id}/ai/proposals`, body, headers), id, d);
 const adopt = (id: string, body: unknown, d: AiApiDeps, headers?: Record<string, string>) => adoptAiProposal(request("POST", `/api/pages/${id}/ai/adoptions`, body, headers), id, d);
 const usageOf = (d: AiApiDeps) => getAiUsageSummary(request("GET", "/api/ai/usage"), d);
+const deviceProposal = (id: string, body: unknown, d: AiApiDeps) =>
+  recordDeviceProposal(request("POST", `/api/pages/${id}/ai/proposals/device`, body), id, d);
+const listChats = (id: string, d: AiApiDeps) => listAiConversations(request("GET", `/api/pages/${id}/ai/conversations`), id, d);
+const openChat = (id: string, conversationId: string, d: AiApiDeps) =>
+  getAiConversation(request("GET", `/api/pages/${id}/ai/conversations/${conversationId}`), id, conversationId, d);
 
 /** date 以外の header を並べたもの（同じ応答かどうかを比べる）。 */
 async function snapshot(response: Response) {
@@ -169,7 +295,7 @@ const bold = (value: string): Block => ({ type: "paragraph", content: [{ type: "
 
 const sample = (): Block[] => [p("合成の  一段落目"), heading("合成の見出し"), bullet("合成の項目"), bold("すでに整っています。")];
 
-type ProposalBody = { proposal: Proposal; usage: UsageSummary };
+type ProposalBody = { proposal: Proposal; usage: UsageSummary; conversation: { id: string; messageId: string } | null };
 
 describe("POST /api/pages/{id}/ai/proposals", () => {
   it("returns a proposal with word diffs and the month's usage, and writes nothing to the page", async () => {
@@ -181,7 +307,7 @@ describe("POST /api/pages/{id}/ai/proposals", () => {
     const response = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { usage }));
     expect(response.status).toBe(200);
     const body = (await response.json()) as ProposalBody;
-    expect(Object.keys(body).sort()).toEqual(["proposal", "usage"]);
+    expect(Object.keys(body).sort()).toEqual(["conversation", "proposal", "usage"]);
     expect(body.proposal).toEqual({
       label: "整える",
       baseRevision: 1,
@@ -203,7 +329,7 @@ describe("POST /api/pages/{id}/ai/proposals", () => {
     const page = await store.createPage("user-a", { blocks: [p("合成の 一")], lang: "ja" });
     const glossary = [{ term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "合成" }];
     const stub = stubBackend(() => ({ edits: [], inserts: [] }));
-    const settings: EditorSettings = { aiLang: "en", glossary, recipes: [] };
+    const settings: EditorSettings = { aiLang: "en", glossary, recipes: [], about: "" };
     const d = deps("user-a", store, { ai: () => stub.backend, settings });
     expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
     expect(stub.calls[0]?.glossary).toEqual(glossary);
@@ -236,7 +362,8 @@ describe("POST /api/pages/{id}/ai/proposals", () => {
 
     const read = await usageOf(d);
     expect(read.status).toBe(200);
-    expect(await read.json()).toEqual({ usage: second.usage });
+    // 経路ごとに分けて返す（device はこの Mac の CLI の分。上限が効くのは usage の方だけ）
+    expect(await read.json()).toEqual({ usage: second.usage, device: null });
   });
 
   it("estimates the cost from the price table, warns near the limit, and stops with 429 before calling the model", async () => {
@@ -365,7 +492,7 @@ describe("POST /api/pages/{id}/ai/proposals", () => {
         throw Object.assign(new Error("upstream said: secret prompt text"), { name: "ProviderError" });
       },
     };
-    const failed = await propose(page.id, { baseRevision: 1, intent: { text: "直して" } }, deps("user-a", store, { usage, ai: () => ({ model: throwing, provider: null }) }));
+    const failed = await propose(page.id, { baseRevision: 1, intent: { text: "直して" } }, deps("user-a", store, { usage, ai: () => ({ model: throwing, provider: null, route: "server", engine: "synthetic:model" }) }));
     expect(failed.status).toBe(502);
     expect(await failed.text()).toBe('{"error":"ai_failed"}');
     expect(usage.rows.size).toBe(0);
@@ -448,7 +575,7 @@ describe("POST /api/pages/{id}/ai/adoptions", () => {
     );
     expect(response.status).toBe(200);
     const body = (await response.json()) as { page: Page };
-    expect(Object.keys(body)).toEqual(["page"]);
+    expect(Object.keys(body)).toEqual(["page", "adopted"]);
     expect(body.page.revision).toBe(2);
     expect(body.page.blocks).toEqual([heading("見出し"), p("[fake] 合成の 一段落目。"), bold("太字のまま"), bullet("項目")]);
     expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
@@ -696,7 +823,7 @@ describe("AI routes with the Anthropic adapter (fake fetch)", () => {
       sent.push({ url: String(input), body: JSON.parse(String(init?.body)), key: new Headers(init?.headers).get("x-api-key") });
       return answer();
     }) as typeof globalThis.fetch;
-    const backend: AiBackend = { model: createAnthropicModel({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: key }, fetch }), provider: "claude" };
+    const backend: AiBackend = { model: createAnthropicModel({ model: "claude-sonnet-5-5", env: { ANTHROPIC_API_KEY: key }, fetch }), provider: "claude", route: "server", engine: "anthropic:claude-sonnet-5-5" };
     const d = deps("user-a", store, { usage, ai: () => backend, limitUsd: 0.15 });
 
     const response = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d);
@@ -756,6 +883,8 @@ describe("AI routes: usage of a failed model call", () => {
         },
       },
       provider: "claude",
+      route: "server",
+      engine: "anthropic:claude-sonnet-5-5",
     });
     const ask = (backend: AiBackend, usage: MemoryUsage) => propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { usage, ai: () => backend }));
 
@@ -765,7 +894,7 @@ describe("AI routes: usage of a failed model call", () => {
     const response = await ask(failing(notJson), counted);
     expect([response.status, await response.text()]).toEqual([502, '{"error":"ai_failed"}']);
     // 1,000 × 2 + 500 × 10 = 7,000 micro-USD
-    expect(counted.rows.get(`user-a/${MONTH}`)).toEqual({ owner: "user-a", month: MONTH, requests: 1, inputTokens: 1_000, outputTokens: 500, costMicroUsd: 7_000 });
+    expect(counted.rows.get(`user-a/${MONTH}`)).toEqual({ owner: "user-a", month: MONTH, source: "server", requests: 1, inputTokens: 1_000, outputTokens: 500, costMicroUsd: 7_000 });
 
     // 使用量の無い例外（HTTP の失敗・時間切れ・AnthropicError でないもの）では増えない
     for (const error of [new AnthropicError("overloaded", { status: 529 }), new AnthropicError("timeout"), Object.assign(new Error("synthetic"), { usage: { model: "claude-sonnet-5-5", inputTokens: 1_000, outputTokens: 500 } })]) {
@@ -787,11 +916,412 @@ describe("AI routes: usage of a failed model call", () => {
         },
       },
       provider: "claude",
+      route: "server",
+      engine: "anthropic:claude-sonnet-5-5",
     };
     expect((await propose(long.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { usage: both, ai: () => second }))).status).toBe(502);
     expect(call).toBe(2);
     expect(both.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 2, inputTokens: 300, outputTokens: 30, costMicroUsd: 900 });
     log.mockRestore();
     expect(store.writes).toEqual([]);
+  });
+});
+
+describe("the conversation of a page (AI チャット)", () => {
+  type ChatBody = { conversation: AiConversationSummary; messages: AiMessage[] };
+
+  it("keeps the ask and the proposal as one turn, and continues the same conversation", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: sample() });
+    const chats = memoryConversations(store);
+    const d = deps("user-a", store, { conversations: chats });
+
+    const first = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
+    expect(first.conversation).not.toBeNull();
+    const conversationId = first.conversation!.id;
+
+    const second = await propose(page.id, { baseRevision: 1, intent: { text: "もっと短く" }, conversationId }, d);
+    expect(second.status).toBe(200);
+    expect(((await second.json()) as ProposalBody).conversation!.id).toBe(conversationId);
+
+    const opened = (await (await openChat(page.id, conversationId, d)).json()) as ChatBody;
+    expect(opened.messages.map((message) => [message.role, message.text, message.preset])).toEqual([
+      ["user", "整える", "tidy"],
+      ["assistant", "提案が 1 件あります", null],
+      ["user", "もっと短く", null],
+      ["assistant", "提案が 1 件あります", null],
+    ]);
+    // 提案そのものも残る（履歴から差分を見られる）
+    expect(opened.messages[1]?.proposal).toEqual(first.proposal);
+    // 会話に残しても、ページには何も書かない
+    expect(store.writes).toEqual([]);
+  });
+
+  it("is only the owner's own: another owner's conversation and a missing page are the same 404", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
+    const chats = memoryConversations(store);
+    const mine = deps("user-a", store, { conversations: chats });
+    const theirs = deps("user-b", store, { conversations: chats });
+    const body = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, mine)).json()) as ProposalBody;
+    const conversationId = body.conversation!.id;
+    const messageId = body.conversation!.messageId;
+
+    const missing = await snapshot(await openChat(randomUUID(), conversationId, mine));
+    expect(await snapshot(await openChat(page.id, conversationId, theirs))).toEqual(missing);
+    expect(await snapshot(await listChats(page.id, theirs))).toEqual(await snapshot(await listChats(randomUUID(), mine)));
+    expect(missing.status).toBe(404);
+
+    // 他人の会話・無い会話を続けようとしても同じ 404（モデルは呼ばない）
+    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
+    const watched = deps("user-b", store, { conversations: chats, ai: () => stub.backend });
+    const theirPage = await store.createPage("user-b", { blocks: [p("合成の 一")] });
+    expect((await propose(theirPage.id, { baseRevision: 1, intent: { preset: "tidy" }, conversationId }, watched)).status).toBe(404);
+    expect((await propose(theirPage.id, { baseRevision: 1, intent: { preset: "tidy" }, conversationId: randomUUID() }, watched)).status).toBe(404);
+    expect(stub.calls).toEqual([]);
+
+    // 他人の提案の発言には採用を繋げない（ページの保存も起きない）
+    expect((await adopt(theirPage.id, { baseRevision: 1, changes: [{ index: 0, text: "合成" }], messageId }, watched)).status).toBe(404);
+    expect(store.writes).toEqual([]);
+  });
+
+  it("answers 401 when there is no session, before looking at the page", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
+    const signedOut = deps(null, store);
+    for (const response of [await listChats(page.id, signedOut), await openChat(page.id, randomUUID(), signedOut)]) {
+      expect([response.status, await response.text()]).toEqual([401, '{"error":"unauthorized"}']);
+    }
+  });
+
+  it("answers 503 while the database is away, and lists the conversations of one page newest first", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
+    const chats = memoryConversations(store);
+    const d = deps("user-a", store, { conversations: chats });
+    expect((await listChats(page.id, deps("user-a", store, { conversations: null }))).status).toBe(503);
+
+    expect(((await (await listChats(page.id, d)).json()) as { conversations: AiConversationSummary[] }).conversations).toEqual([]);
+    const first = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
+    const second = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
+    const list = ((await (await listChats(page.id, d)).json()) as { conversations: AiConversationSummary[] }).conversations;
+    expect(list.map((item) => item.id)).toEqual([second.conversation!.id, first.conversation!.id]);
+    expect(list[0]).toMatchObject({ pageId: page.id, messages: 2, lastText: "提案が 1 件あります" });
+  });
+
+  it("says in the conversation when there was nothing to change", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [bold("すでに整っています。")] });
+    const chats = memoryConversations(store);
+    const d = deps("user-a", store, { conversations: chats });
+    const body = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
+    expect(body.proposal.changes).toEqual([]);
+    expect(chats.rows.get(body.conversation!.id)?.messages.at(-1)?.text).toBe("変えるところはありませんでした");
+  });
+
+  it("does not call the model, and writes nothing to the conversation, when the month is over the limit", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
+    const usage = memoryUsage();
+    usage.seed("user-a", MONTH, 10_000_000);
+    const chats = memoryConversations(store);
+    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
+    const d = deps("user-a", store, { usage, conversations: chats, limitUsd: 10, ai: () => stub.backend });
+
+    const response = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d);
+    expect([response.status, await response.text()]).toEqual([429, '{"error":"quota_exceeded"}']);
+    expect(stub.calls).toEqual([]);
+    expect(chats.rows.size).toBe(0);
+
+    // 会話を続ける要求でも同じ（会話が増えても上限は同じ意味で働く）
+    const allowed = deps("user-a", store, { usage: memoryUsage(), conversations: chats, ai: () => stub.backend });
+    const body = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, allowed)).json()) as ProposalBody;
+    const conversationId = body.conversation!.id;
+    const over = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" }, conversationId }, d);
+    expect(over.status).toBe(429);
+    expect(chats.rows.get(conversationId)?.messages).toHaveLength(2);
+  });
+
+  it("writes the adoption and the version number on the proposal that was adopted", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の  一段落目"), p("二段落目")] });
+    const chats = memoryConversations(store);
+    const d = deps("user-a", store, { conversations: chats });
+    const proposed = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
+    const messageId = proposed.conversation!.messageId;
+    const change = proposed.proposal.changes[0]!;
+
+    const response = await adopt(page.id, { baseRevision: 1, changes: [{ index: change.index, text: change.after }], messageId }, d);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { page: Page; adopted: { messageId: string; version: number } | null };
+    expect(body.adopted).toEqual({ messageId, version: 1 });
+    // 採用した分だけが版になり（版は採用の前の本文）、ページは 1 回だけ保存される
+    expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
+    expect(store.versions).toEqual([{ pageId: page.id, version: 1, reason: "ai", blocks: [p("合成の  一段落目"), p("二段落目")] }]);
+    expect(body.page.blocks).toEqual([p(change.after), p("二段落目")]);
+
+    const message = await chats.message("user-a", page.id, messageId);
+    expect(message?.version).toBe(1);
+    expect(message?.adopted).toEqual({ changes: [{ index: change.index, text: change.after }], inserts: [] });
+
+    // 閉じた（採用しなかった）提案はページも会話も変えない
+    const other = (await (await propose(page.id, { baseRevision: 2, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
+    expect((await chats.message("user-a", page.id, other.conversation!.messageId))?.adopted).toBeNull();
+    expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
+  });
+
+  it("still saves the page when the adoption cannot be linked to a conversation (no messageId)", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の  一段落目")] });
+    const d = deps("user-a", store);
+    const response = await adopt(page.id, { baseRevision: 1, changes: [{ index: 0, text: "合成の 一段落目。" }] }, d);
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { adopted: unknown }).adopted).toBeNull();
+    expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
+  });
+
+  it("writes the adoption once (a replayed adoption does not move the version number)", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の  一段落目")] });
+    const chats = memoryConversations(store);
+    const d = deps("user-a", store, { conversations: chats });
+    const proposed = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
+    const messageId = proposed.conversation!.messageId;
+    const change = proposed.proposal.changes[0]!;
+    const body = { changes: [{ index: change.index, text: change.after }], messageId };
+    expect((await adopt(page.id, { ...body, baseRevision: 1 }, d)).status).toBe(200);
+
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const again = await adopt(page.id, { ...body, baseRevision: 2 }, d);
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { adopted: unknown }).adopted).toBeNull();
+    log.mockRestore();
+    expect((await chats.message("user-a", page.id, messageId))?.version).toBe(1);
+  });
+});
+
+describe("the person's context goes into the proposal (「あなたについて」と自動参考ページ)", () => {
+  it("sends 「あなたについて」 and the other pages of the folder, as data", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
+    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
+    const settings: EditorSettings = { ...DEFAULT_EDITOR_SETTINGS, about: "合成の自己紹介です。" };
+    const d = deps("user-a", store, {
+      ai: () => stub.backend,
+      settings,
+      references: [{ title: "同じフォルダのページ", blocks: [p("参考の本文")] }],
+    });
+    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
+    expect(stub.calls[0]?.about).toBe("合成の自己紹介です。");
+    expect(stub.calls[0]?.references).toEqual([{ title: "同じフォルダのページ", text: "参考の本文" }]);
+  });
+
+  it("asks without them when there is no 「あなたについて」 and no other page", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
+    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
+    const d = deps("user-a", store, { ai: () => stub.backend, references: [] });
+    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
+    expect(stub.calls[0]?.about).toBeUndefined();
+    expect(stub.calls[0]?.references).toBeUndefined();
+  });
+
+  it("asks anyway when the folder cannot be read", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
+    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
+    const d = deps("user-a", store, { ai: () => stub.backend, references: null });
+    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
+    expect(stub.calls[0]?.references).toBeUndefined();
+  });
+
+  it("puts the same context on every request when the page is split", async () => {
+    const store = memoryStore();
+    const long = await store.createPage("user-a", { blocks: [p("あ".repeat(3_000)), p("い".repeat(3_000))] });
+    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
+    const settings: EditorSettings = { ...DEFAULT_EDITOR_SETTINGS, about: "合成の自己紹介です。" };
+    const d = deps("user-a", store, { ai: () => stub.backend, settings, references: [{ title: "参考", blocks: [p("参考の本文")] }] });
+    expect((await propose(long.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
+    expect(stub.calls).toHaveLength(2);
+    for (const call of stub.calls) {
+      expect(call.about).toBe("合成の自己紹介です。");
+      expect(call.references).toEqual([{ title: "参考", text: "参考の本文" }]);
+    }
+  });
+
+  it("writes who made the proposal into the conversation", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の 一")] });
+    const chats = memoryConversations(store);
+    const d = deps("user-a", store, { conversations: chats });
+    expect((await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).status).toBe(200);
+    const conversation = [...chats.rows.values()][0];
+    expect(conversation?.messages.at(-1)).toMatchObject({ role: "assistant" });
+  });
+});
+
+describe("POST /api/pages/{id}/ai/proposals/device（この Mac の CLI が作った提案）", () => {
+  const body = (extra: Record<string, unknown> = {}) => ({
+    baseRevision: 1,
+    input: "二段落目を短くして",
+    reply: "短くしました。",
+    engine: "cli:claude-code",
+    changes: [{ index: 0, text: "短くした一段落目" }],
+    inserts: [],
+    ...extra,
+  });
+
+  it("builds the diff from the page itself, records the turn as device, and leaves the page alone", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("もとの一段落目"), p("二段落目")] });
+    const before = structuredClone(store.rows.get(page.id));
+    const chats = memoryConversations(store);
+    const usage = memoryUsage();
+    const stub = stubBackend(() => ({ edits: [], inserts: [] }));
+    const d = deps("user-a", store, { conversations: chats, usage, ai: () => stub.backend });
+
+    const response = await deviceProposal(page.id, body(), d);
+    expect(response.status).toBe(200);
+    const answer = (await response.json()) as { proposal: Proposal; conversation: { id: string; messageId: string } };
+    // 差分はサーバーが今の本文から作る（モデルは呼ばない）
+    expect(stub.calls).toEqual([]);
+    expect(answer.proposal.changes).toEqual([
+      // 差分は engine.ts と同じ語の単位（共通の「一段落目」は残る）
+      { index: 0, before: "もとの一段落目", after: "短くした一段落目", parts: [{ del: "もとの" }, { ins: "短くした" }, "一段落目"] },
+    ]);
+    // ページは変わらない（採用のときだけ）
+    expect(store.rows.get(page.id)).toEqual(before);
+    expect(store.writes).toEqual([]);
+    // 会話には「この Mac の CLI が作った」と残る
+    const conversation = chats.rows.get(answer.conversation.id);
+    expect(conversation?.messages.map((message) => message.text)).toEqual(["二段落目を短くして", "短くしました。"]);
+    // サブスクなので金額は 0（上限には効かない）
+    expect(usage.rows.get(`user-a/${MONTH}`)).toMatchObject({ requests: 1, costMicroUsd: 0 });
+  });
+
+  it("can be adopted like any other proposal (the version and the link are the same)", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("もとの一段落目")] });
+    const chats = memoryConversations(store);
+    const d = deps("user-a", store, { conversations: chats });
+    const answer = (await (await deviceProposal(page.id, body(), d)).json()) as { conversation: { messageId: string } };
+    const adopted = await adopt(page.id, { baseRevision: 1, changes: [{ index: 0, text: "短くした一段落目" }], messageId: answer.conversation.messageId }, d);
+    expect(adopted.status).toBe(200);
+    expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
+    expect((await chats.message("user-a", page.id, answer.conversation.messageId))?.version).toBe(1);
+  });
+
+  it("drops a change that changes nothing and refuses one that is not an editable paragraph", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("そのまま"), bullet("項目")] });
+    const d = deps("user-a", store);
+    const same = (await (await deviceProposal(page.id, body({ changes: [{ index: 0, text: "そのまま" }] }), d)).json()) as { proposal: Proposal };
+    expect(same.proposal.changes).toEqual([]);
+    expect(same.proposal.unchanged).toBe(1);
+    expect((await deviceProposal(page.id, body({ changes: [{ index: 1, text: "書き換え" }] }), d)).status).toBe(400);
+    expect((await deviceProposal(page.id, body({ changes: [{ index: 9, text: "書き換え" }] }), d)).status).toBe(400);
+  });
+
+  it("answers 401, 404, 409 and 400, and never writes", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("もとの一段落目")] });
+    expect((await deviceProposal(page.id, body(), deps(null, store))).status).toBe(401);
+    const theirs = await deviceProposal(page.id, body(), deps("user-b", store));
+    const missing = await deviceProposal(randomUUID(), body(), deps("user-a", store));
+    expect([theirs.status, await theirs.text()]).toEqual([404, '{"error":"not_found"}']);
+    expect([missing.status, await missing.text()]).toEqual([404, '{"error":"not_found"}']);
+    // 本文が進んでいれば 409（黙って古い版に当てない）
+    expect((await deviceProposal(page.id, body({ baseRevision: 2 }), deps("user-a", store))).status).toBe(409);
+    for (const bad of [
+      body({ engine: "CLI Claude Code" }),
+      body({ input: "" }),
+      body({ changes: [], inserts: [] }),
+      body({ inserts: [{ afterIndex: 9, kind: "paragraph", text: "x" }] }),
+      body({ extra: 1 }),
+    ]) {
+      expect((await deviceProposal(page.id, bad, deps("user-a", store))).status, JSON.stringify(bad)).toBe(400);
+    }
+    expect(store.writes).toEqual([]);
+  });
+
+  it("refuses a conversation that is not this page's", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("もとの一段落目")] });
+    const chats = memoryConversations(store);
+    const d = deps("user-a", store, { conversations: chats });
+    expect((await deviceProposal(page.id, body({ conversationId: "someone-elses" }), d)).status).toBe(404);
+  });
+});
+
+describe("会話に書けなくても、提案と採用は壊さない", () => {
+  /** 会話の store が投げる（大きすぎる提案・DB の一時的な失敗）。読む側はそのまま。 */
+  function throwingChats(chats: MemoryConversations): MemoryConversations {
+    return Object.assign({ ...chats, rows: chats.rows }, {
+      append: async () => {
+        throw new TypeError("editor-store: proposal must be a small JSON object");
+      },
+      adopt: async () => {
+        throw new Error("synthetic database failure");
+      },
+    });
+  }
+
+  it("returns the proposal even when the conversation cannot keep it", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: sample() });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const response = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { conversations: throwingChats(memoryConversations(store)) }));
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as ProposalBody;
+      // 提案は使える（モデルを呼んだ分は課金済み）。会話に残せなかったことだけが null で分かる
+      expect(body.proposal.changes).toHaveLength(1);
+      expect(body.conversation).toBeNull();
+      // ログに出すのは route と失敗の名前だけ
+      expect(JSON.stringify(log.mock.calls)).not.toContain("合成の");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("keeps the saved page when the adoption cannot be written to the conversation", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の  一段落目")] });
+    const chats = memoryConversations(store);
+    const d = deps("user-a", store, { conversations: chats });
+    const proposed = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
+    const messageId = proposed.conversation!.messageId;
+    const change = proposed.proposal.changes[0]!;
+
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const broken = deps("user-a", store, { conversations: throwingChats(chats) });
+      const response = await adopt(page.id, { baseRevision: 1, changes: [{ index: change.index, text: change.after }], messageId }, broken);
+      // ページの保存は済んでいるので 200 のまま（成功したのに失敗に見せない）
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { page: Page; adopted: unknown };
+      expect(body.page.blocks).toEqual([p(change.after)]);
+      expect(body.adopted).toBeNull();
+      expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("returns the Mac's proposal even when the conversation cannot keep it", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("もとの一段落目")] });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const response = await deviceProposal(
+        page.id,
+        { baseRevision: 1, input: "短くして", reply: "短くしました。", engine: "cli:claude-code", changes: [{ index: 0, text: "短くした一段落目" }], inserts: [] },
+        deps("user-a", store, { conversations: throwingChats(memoryConversations(store)) }),
+      );
+      expect(response.status).toBe(200);
+      expect(((await response.json()) as { conversation: unknown }).conversation).toBeNull();
+    } finally {
+      log.mockRestore();
+    }
   });
 });

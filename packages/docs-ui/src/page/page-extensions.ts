@@ -1,9 +1,7 @@
 import type { Extensions } from "@tiptap/core";
-import StarterKit from "@tiptap/starter-kit";
-import { isSafeLinkHref } from "./blocks";
 import type { ImageSrcOf, PageImages } from "./images";
-import { PageCallout } from "./callout";
 import { PageImage } from "./image-node";
+import { buildMarkdownExtensions } from "./markdown-extensions";
 import { PageSlashMenu } from "./slash-menu";
 
 /**
@@ -32,21 +30,8 @@ export type PageExtensionsOptions = {
 
 export function buildPageExtensions(options: PageExtensionsOptions = {}): Extensions {
   return [
-    StarterKit.configure({
-      heading: { levels: [2, 3] },
-      code: false,
-      codeBlock: false,
-      strike: false,
-      underline: false,
-      link: {
-        openOnClick: false,
-        autolink: false,
-        // 保存してよい scheme だけをリンクにする（貼り付けた `javascript:` も、設定した値も、文字のままになる）
-        isAllowedUri: (url) => isSafeLinkHref(url),
-      },
-    }),
+    ...buildMarkdownExtensions(),
     PageSlashMenu,
-    PageCallout,
     PageImage.configure({ images: options.images ?? null, pageId: options.pageId ?? null, srcOf: options.srcOf ?? null }),
   ];
 }

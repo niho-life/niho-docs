@@ -100,7 +100,7 @@ function stepsFor(page: GalleryPage): { root: GalleryPage; steps: ShellStep[] } 
  * 手順と AI の節は出さない）。note: 言語を保存できなかったときの一言を出す。
  * newrec で web: editor-web の「録音から」（#36 段 3b-1。取り込める形式の長い一言と、音声を選んだときの「取り込む」）。
  */
-export type ScreenForced = { sidebar?: boolean; rail?: boolean; pick?: ShellDest; conn?: boolean; page?: string; web?: boolean; note?: boolean; terms?: boolean; recipe?: string; add?: boolean; url?: boolean; confirm?: string; issuedKey?: boolean } & TranscriptForced;
+export type ScreenForced = { sidebar?: boolean; rail?: boolean; pick?: ShellDest; conn?: boolean; page?: string; web?: boolean; note?: boolean; terms?: boolean; about?: boolean; recipe?: string; add?: boolean; url?: boolean; confirm?: string; issuedKey?: boolean } & TranscriptForced;
 
 const noop = () => undefined;
 

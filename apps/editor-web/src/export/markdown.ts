@@ -11,6 +11,7 @@
  * - `![alt](photos/…)` の写真（`photoPath` を渡したときだけ。フォルダの書き出し（#37）が zip の中の相対 path を渡す）
  * 区切り線・録音は出さない。`photoPath` が無ければ画像も出さない。code・取り消し線などその他の mark は文字だけ。
  *
+ * 箱は既定で `:::note`。一般の Markdown の読み手へ渡すときは `{ boxes: "quote" }` で `> ` にする（Google ドキュメントへの書き出し）。
  * 本文の文字は、サブセットの記法として読まれないよう `\` で逃がす（日本語の文字は変えない）。
  * 規則と根拠は src/export/markdown.test.ts の oracle（guide-markdown.ts の受理規則を写したもの）に書いている。
  */
@@ -35,13 +36,6 @@ type Block =
   | { type: "note"; blocks: TextBlock[] }
   | { type: "photo"; path: string; alt: string };
 
-export type ExportMarkdownOptions = {
-  /**
-   * 写真の書き出し先（資産の id → 書き出しの中の相対の path。入っていない資産は null）。
-   * 渡さなければ画像は出さない（共有・公開の書き出しは今までどおり本文だけ）。
-   */
-  photoPath?: (assetId: string) => string | null;
-};
 
 /** 書き出さないノード（資産・区切り）。 */
 const SKIPPED = new Set(["horizontalRule", "image", "docAssetImage", "recording"]);
@@ -462,7 +456,7 @@ function renderTextBlock(block: TextBlock): string[] {
   return line === "" ? [] : [line];
 }
 
-function renderBlock(block: Block): string[] {
+function renderBlock(block: Block, boxes: MarkdownBoxStyle): string[] {
   if (block.type === "photo") return [`![${escapeAlt(block.alt)}](${block.path})`];
   if (block.type === "heading") {
     const line = renderInline(block.inline);
@@ -471,18 +465,49 @@ function renderBlock(block: Block): string[] {
   if (block.type === "note") {
     const inner = block.blocks.flatMap(renderTextBlock);
     // 空の箱は parser が断るので出さない
-    return inner.length === 0 ? [] : [`:::note\n${inner.join("\n\n")}\n:::`];
+    if (inner.length === 0) return [];
+    // 一般の Markdown（`:::note` を知らない読み手）では引用にする
+    if (boxes === "quote") {
+      return [
+        inner
+          .join("\n\n")
+          .split("\n")
+          .map((line) => (line === "" ? ">" : `> ${line}`))
+          .join("\n"),
+      ];
+    }
+    return [`:::note\n${inner.join("\n\n")}\n:::`];
   }
   return renderTextBlock(block);
 }
 
 /**
+ * 箱（引用・囲み）の書き方。
+ *
+ * - `note`（既定）: `:::note` … `:::`。niho-experience のサブセット（`.md` の書き出し）。
+ * - `quote`: `> `。`:::note` を知らない一般の Markdown の読み手へ渡すとき（Google ドキュメントへの書き出し。
+ *   src/google-docs/ が使う）。ほかの記法はどちらも同じ。
+ */
+export type MarkdownBoxStyle = "note" | "quote";
+
+export type ExportMarkdownOptions = {
+  /** 箱（引用・囲み）の書き方。既定は `note`。 */
+  boxes?: MarkdownBoxStyle;
+  /**
+   * 写真の書き出し先（資産の id → 書き出しの中の相対の path。入っていない資産は null）。
+   * 渡さなければ画像は出さない（共有・公開の書き出しは今までどおり本文だけ）。
+   */
+  photoPath?: (assetId: string) => string | null;
+};
+
+/**
  * 本文（TipTap の doc の content）を Markdown にする。空の本文は空文字列、それ以外は末尾に改行 1 つ。
  * 未知のノードは投げずに、文字のブロックなら段落、入れ物なら中身を書き出す。
  */
-export function exportMarkdown(blocks: readonly unknown[], options?: ExportMarkdownOptions): string {
+export function exportMarkdown(blocks: readonly unknown[], options: ExportMarkdownOptions = {}): string {
+  const boxes = options.boxes ?? "note";
   const converted: Block[] = [];
   convertBlocks(Array.isArray(blocks) ? blocks : [], 0, converted, options);
-  const parts = converted.flatMap(renderBlock);
+  const parts = converted.flatMap((block) => renderBlock(block, boxes));
   return parts.length === 0 ? "" : `${parts.join("\n\n")}\n`;
 }

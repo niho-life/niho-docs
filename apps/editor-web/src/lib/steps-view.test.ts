@@ -27,16 +27,18 @@ function run(over: Partial<StepRun> = {}): StepRun {
   return { id: "run-1", recipe: "tpl-1", state: "running", fromStep: 0, steps: [step(0), step(1), step(2)], ...over };
 }
 
-/** サーバーが答える、その人の手順（既定の 3 つに手を入れていないとき）。 */
+/** サーバーが答える、その人の手順（既定の 4 つに手を入れていないとき）。 */
 const DEFAULTS: StepRecipeChoice[] = DEFAULT_RECIPES.map((recipe) => ({ id: recipe.id, name: recipe.name, defaultName: recipe.name }));
 
 describe("steps-view（手順の帯の見た目）", () => {
   it("入口はサーバーが答えた手順の順で、既定の名前のままなら決まった言い方", () => {
-    expect(DEFAULT_RECIPES.map((recipe) => recipe.name)).toEqual(["記事制作", "議事録", "インサイト整理"]);
+    expect(DEFAULT_RECIPES.map((recipe) => recipe.name)).toEqual(["記事制作", "議事録", "インサイト整理", "コーチング"]);
     expect(stepStartChoices(DEFAULTS)).toEqual([
       { id: "tpl-1", label: "記事にする" },
       { id: "tpl-2", label: "議事録にする" },
       { id: "tpl-3", label: "インサイトを整理する" },
+      // コーチングは決まった言い方を持たず、既定の `{名前}にする` で出す（オーナー 2026-11-01）
+      { id: "tpl-4", label: "コーチングにする" },
     ]);
     expect(stepRecipeName(DEFAULTS, "tpl-2")).toBe("議事録");
   });

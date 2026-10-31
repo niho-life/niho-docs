@@ -9,11 +9,19 @@
 ## マージ
 
 - `main` へは PR だけ。必須チェック `premerge-gate` と未解決スレッドの解決は ruleset が強制する。
-- **セッションは次の 3 つが揃ったときだけ、自分の PR に `ghN pr merge <PR> --auto --squash` を設定してよい**（オーナー決定 2026-11-01）。
+- **セッションは次の 3 つが揃ったときだけ、自分の PR をマージキューへ入れてよい**（オーナー決定 2026-11-01）。
   1. 全チェックが緑（失敗 0・保留 0）
   2. 未解決のレビュースレッドが 0
   3. **自分で差分を見直した**
 - 3 を飛ばさない。実際に、マージ前の自己確認で設計の誤り（#129）や本文が消える欠陥（#109）が見つかっている。
+- このリポは**マージキュー**方式で、`ghN pr merge <PR> --auto --squash` は `Auto merge is not allowed for this repository` と断られる（auto-merge は無効）。キューへは GraphQL で入れる。マージの仕方（squash）はキューの設定が決める。
+
+  ```sh
+  id=$(ghN pr view <PR> --repo niho-life/niho-editor --json id --jq .id)
+  ghN api graphql -f query='mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{position}}}' -F id="$id"
+  ```
+
+  入れたら `ghN pr view <PR> --repo niho-life/niho-editor --json state,mergedAt` で結果を確かめる（キューが赤で弾き返すことがある）。待つ間は 1 分に 1 回まで。
 - CI のトリガーに `paths` / `paths-ignore` を足さない。
 
 ## migration

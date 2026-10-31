@@ -1,7 +1,10 @@
 import "server-only";
+import { getAiUsage, getEditorSettings, listReferencePages, recordAiUsage } from "@niho/editor-store";
+import { monthlyLimitUsd, resolveAiCompose } from "../ai/config";
 import { getAuthProvider } from "../auth";
+import { createAiStepExecutor } from "../steps/ai-executor";
 import { CloudTasksQueue, resolveCloudTasksConfig, type CloudTasksConfig } from "../steps/cloud-tasks";
-import { fakeExecutor, type StepExecutor } from "../steps/executor";
+import type { StepExecutor } from "../steps/executor";
 import { createInlineQueue, resolveStepsMode } from "../steps/inline";
 import type { TaskQueue } from "../steps/queue";
 import type { RecipeReader } from "../steps/recipes";
@@ -12,9 +15,40 @@ import { ownerRecipes as readOwnerRecipes } from "./recipe-source";
 import type { StepsApiDeps } from "./steps-api";
 import type { StepsWorkerDeps } from "./steps-worker-api";
 
-/** 段階の実行器。今は偽物（AI を呼ばない）。本物（#38 の AiModel を包んだもの）に替えるのはここだけ。 */
-function stepExecutor(): StepExecutor {
-  return fakeExecutor;
+/**
+ * 段階の実行器（本物。#38 の AI を包んだ ai-executor.ts）。AI・DB・上限は要求のたびに遅延して読む
+ * （`EDITOR_AI_MODE` が無効なら段階は `ai_unavailable`、DB が無ければ `usage_unavailable` で失敗する）。
+ * 開発と CI の `EDITOR_AI_MODE=fake` では偽物の 1 往復（`[fake]` の印が付く）。
+ */
+const aiStepExecutor: StepExecutor = createAiStepExecutor({
+  compose: () => resolveAiCompose(process.env),
+  usage: () => {
+    const pool = getPool();
+    return pool
+      ? {
+          get: (owner, month, source) => getAiUsage(pool, owner, month, source),
+          record: (owner, month, delta, source) => recordAiUsage(pool, owner, month, delta, source),
+        }
+      : null;
+  },
+  limitUsd: () => monthlyLimitUsd(process.env),
+  settings: () => {
+    const pool = getPool();
+    return pool ? (owner) => getEditorSettings(pool, owner) : null;
+  },
+  references: () => {
+    const pool = getPool();
+    return pool ? (owner, pageId) => listReferencePages(pool, owner, pageId) : null;
+  },
+});
+
+/**
+ * 段階の実行器を返す、ただ 1 か所。**偽物（`fakeExecutor`）に戻さないこと。**
+ * 戻すと本番で `[fake]` の印の付いた文書がページに書かれる（偽物の結果を利用者に見せない、が設計の約束）。
+ * この約束は `steps-deps.test.ts` が守っている（偽物に差し替えると CI が落ちる）。
+ */
+export function stepExecutor(): StepExecutor {
+  return aiStepExecutor;
 }
 
 /** その人の手順（表 `recipes`。無ければ既定を写して入れる。#37・#108）。DB が無ければ null。 */

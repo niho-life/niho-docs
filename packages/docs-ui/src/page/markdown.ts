@@ -4,7 +4,7 @@ import MarkdownIt from "markdown-it";
 import { MarkdownParser, MarkdownSerializer, type MarkdownSerializerState, type ParseSpec } from "prosemirror-markdown";
 import { validateBlocks, type Block } from "./blocks";
 import { CALLOUT_NODE_NAME } from "./callout";
-import { buildPageExtensions } from "./page-extensions";
+import { buildMarkdownExtensions } from "./markdown-extensions";
 
 /**
  * 限定 AST（blocks.ts）↔ Markdown。
@@ -65,8 +65,11 @@ function calloutRule(state: StateCore): void {
   }
 }
 
-/** 限定 AST と同じ範囲だけの schema（エディタと同じもの）。 */
-export const pageMarkdownSchema: Schema = getSchema(buildPageExtensions());
+/**
+ * 限定 AST と同じ範囲だけの schema（エディタと同じ素から作る。画像は Markdown に置き場が無いので入れない）。
+ * 画面の部品（React）に触れないので、サーバーからも読める。
+ */
+export const pageMarkdownSchema: Schema = getSchema(buildMarkdownExtensions());
 
 const tokens: Record<string, ParseSpec> = {
   paragraph: { block: "paragraph" },

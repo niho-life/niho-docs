@@ -3,7 +3,10 @@ import {
   PageActionError,
   deletePageRequest,
   duplicatePageRequest,
+  exportPageToGoogleDoc,
   getPageShare,
+  googleDocExportStatus,
+  newGoogleDocExportId,
   listPageVersions,
   pageExportUrl,
   restorePageVersion,
@@ -137,5 +140,57 @@ describe("page actions client", () => {
       mockFetch(200, { page });
       await expect(restorePageVersion(ID, 2, 7)).rejects.toMatchObject({ status: 500 });
     }
+  });
+});
+
+describe("Google ドキュメントへの書き出し", () => {
+  const EXPORT_ID = "4b1a0f26-0b0e-4a6a-9f36-2b7c4a8e5d10";
+  const DOCUMENT_ID = "1AbCdEfGhIjKlMnOpQrStUvWxYz_-012345";
+  const completed = { exportId: EXPORT_ID, status: "completed", documentId: DOCUMENT_ID, url: `https://docs.google.com/document/d/${DOCUMENT_ID}/edit` };
+
+  it("送るのは受付の id だけ（本文は送らない）", async () => {
+    const fetchMock = mockFetch(200, completed);
+    expect(await exportPageToGoogleDoc(ID, EXPORT_ID)).toEqual({ status: "completed", documentId: DOCUMENT_ID, url: completed.url });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [path, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(path).toBe(`/api/pages/${ID}/export/google-doc`);
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("same-origin");
+    expect(init.cache).toBe("no-store");
+    expect(JSON.parse(init.body as string)).toEqual({ exportId: EXPORT_ID });
+  });
+
+  it("受付の状態は exportId の path を読む", async () => {
+    const fetchMock = mockFetch(202, { exportId: EXPORT_ID, status: "pending", retryable: true });
+    expect(await googleDocExportStatus(EXPORT_ID)).toEqual({ status: "pending", retryable: true });
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe(`/api/google-docs/exports/${EXPORT_ID}`);
+  });
+
+  it("documentId と合わない url の応答は受け付けない", async () => {
+    for (const body of [
+      { status: "completed", documentId: DOCUMENT_ID, url: "https://evil.test/document/d/x/edit" },
+      { status: "completed", documentId: DOCUMENT_ID, url: `https://docs.google.com/document/d/${DOCUMENT_ID}/edit?x=1` },
+      { status: "completed", documentId: DOCUMENT_ID },
+      { status: "completed", url: completed.url },
+      { status: "unknown" },
+      {},
+    ]) {
+      mockFetch(200, body);
+      await expect(exportPageToGoogleDoc(ID, EXPORT_ID)).rejects.toThrow(PageActionError);
+    }
+  });
+
+  it("断られたときは status と短い code を持つ", async () => {
+    mockFetch(409, { error: "drive_not_connected" });
+    const error = await exportPageToGoogleDoc(ID, EXPORT_ID).catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(PageActionError);
+    expect((error as PageActionError).status).toBe(409);
+    expect((error as PageActionError).code).toBe("drive_not_connected");
+  });
+
+  it("受付の id は小文字の UUID", async () => {
+    const id = newGoogleDocExportId();
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(newGoogleDocExportId()).not.toBe(id);
   });
 });

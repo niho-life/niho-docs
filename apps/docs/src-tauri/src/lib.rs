@@ -41,9 +41,12 @@ mod resident;
 mod sample_url;
 mod samples;
 mod secrets;
+mod shell;
+mod shell_ai;
 #[cfg(target_os = "macos")]
 mod single_instance;
 mod speech;
+mod staging;
 mod store;
 mod updater;
 
@@ -2639,9 +2642,21 @@ pub fn run() {
     .setup(move |app| {
       let data_dir = resolve_data_dir(app, dev);
       let _ = std::fs::create_dir_all(&data_dir);
+      // 一時置き場（設計 §13）の古い残骸を掃く
+      let _ = staging::Staging::new(&data_dir).sweep(staging::SWEEP_AFTER);
       if dev {
         if let Some(window) = app.get_webview_window("main") {
           let _ = window.set_title(DEV_WINDOW_TITLE);
+        }
+      }
+      // Mac の殻（設計 §13）: NIHO_DOCS_SHELL=remote なら editor.niho.life を読む（URL は shell.rs の定数だけ。
+      // remote から呼べるコマンドは capabilities/remote-editor.json で決まる）。既定は今までの画面
+      let shell_mode = shell::shell_mode(std::env::var(shell::SHELL_ENV).ok().as_deref(), dev);
+      if let Some(url) = shell::remote_url(shell_mode) {
+        if let Some(window) = app.get_webview_window("main") {
+          if let Err(error) = window.navigate(url) {
+            eprintln!("shell: could not open the editor screen: {error}");
+          }
         }
       }
       conversation::cleanup_stale_chat_workspaces(&data_dir);
@@ -2739,6 +2754,20 @@ pub fn run() {
       }
     })
     .invoke_handler(tauri::generate_handler![
+      shell::shell_capabilities,
+      shell::shell_mic_status,
+      shell::shell_recording_start,
+      shell::shell_recording_stop,
+      shell::shell_recording_discard,
+      shell::shell_recording_read,
+      shell::shell_audio_pick,
+      shell::shell_audio_read,
+      shell::shell_staging_discard,
+      shell::shell_transcribe_local,
+      shell::shell_transcribe_stop,
+      shell_ai::shell_ai_engines,
+      shell_ai::shell_ai_turn,
+      shell_ai::shell_ai_stop,
       app_paths,
       load_settings,
       save_settings,

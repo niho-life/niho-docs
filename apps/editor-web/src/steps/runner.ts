@@ -41,7 +41,7 @@ function asStepError(error: unknown): StepError {
 }
 
 async function recordFailure(deps: RunnerDeps, ref: AttemptRef, error: StepError): Promise<AttemptOutcome> {
-  const result = await deps.store.failAttempt({ ...ref, code: error.code, retryable: error.retryable });
+  const result = await deps.store.failAttempt({ ...ref, code: error.code, retryable: error.retryable, partial: error.partial });
   if (!result.ok) return { status: "stale" };
   if (result.outcome === "failed") return { status: "failed" };
   await deps.queue.enqueue({
@@ -93,6 +93,8 @@ export async function runAttempt(deps: RunnerDeps, task: { runId: string; stepIn
       const output = await deps.executor.run({
         recipe,
         stepIndex: claim.stepIndex,
+        owner: claim.owner,
+        parentPageId: claim.parentId,
         parentBlocks: input.parentBlocks,
         previousBlocks: input.previousBlocks,
         signal: controller.signal,

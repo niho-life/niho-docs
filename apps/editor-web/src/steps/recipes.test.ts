@@ -22,15 +22,18 @@ const addedDef: RecipeDef = {
 };
 
 describe("recipes", () => {
-  it("copies the three templates of design §7.2 from docs-core, without coaching", () => {
+  it("copies the four templates of design §7.2 from docs-core, coaching included", () => {
     expect(DEFAULT_RECIPES.map((recipe) => [recipe.id, recipe.name, recipe.steps.length])).toEqual([
       ["tpl-1", "記事制作", 3],
       ["tpl-2", "議事録", 2],
       ["tpl-3", "インサイト整理", 1],
+      ["tpl-4", "コーチング", 2],
     ]);
-    expect(DEFAULT_RECIPES.flatMap((recipe) => recipe.steps.map((step) => step.id))).toEqual(["k7m2q9xa", "r4t8wz3c", "h2n6v5pe", "d9c3x7mf", "w5q1j8ks", "u3e7z6rh"]);
-    expect(findRecipeIn(DEFAULT_RECIPES, "tpl-4")).toBeUndefined();
-    expect(isDefaultRecipeId("tpl-4")).toBe(false);
+    expect(DEFAULT_RECIPES.flatMap((recipe) => recipe.steps.map((step) => step.id))).toEqual(["k7m2q9xa", "r4t8wz3c", "h2n6v5pe", "d9c3x7mf", "w5q1j8ks", "u3e7z6rh", "c5v8n3qd", "a3m9t6kw"]);
+    // コーチングは「文字起こし修正」を記事制作と共有し、1 行だけ足した指示文で持つ（docs-core の COACHING_TRANSCRIPT_LINE）
+    expect(findRecipeIn(DEFAULT_RECIPES, "tpl-4")?.steps.map((step) => step.name)).toEqual(["文字起こし修正", "分析"]);
+    expect(isDefaultRecipeId("tpl-4")).toBe(true);
+    expect(isDefaultRecipeId("tpl-9")).toBe(false);
     expect(isDefaultRecipeId("tpl-1")).toBe(true);
     expect(findRecipeIn(DEFAULT_RECIPES, "tpl-2")?.steps.map((step) => step.name)).toEqual(["議事録", "共有用の要約"]);
   });
@@ -63,7 +66,7 @@ describe("recipesOf", () => {
   it("lays a saved copy over the default of the same id, in the default's place", () => {
     const override: SettingsRecipe = { id: "tpl-2", name: "議事録（短め）", guide: "短く", steps: [{ id: "d9c3x7mf", name: "要点", instruction: "要点だけ。" }] };
     const recipes = recipesOf([override]);
-    expect(recipes.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3"]);
+    expect(recipes.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3", "tpl-4"]);
     // 設定の形にはプロファイルが無いので、同じ id の工程のプロファイル（既定の「軽量」）を引き継ぐ
     expect(recipes[1]).toEqual({
       ...override,
@@ -78,7 +81,7 @@ describe("recipesOf", () => {
   it("puts the added recipes after the defaults, in the saved order", () => {
     const second: SettingsRecipe = { ...added, id: "r-2", name: "対談" };
     const recipes = recipesOf([second, added]);
-    expect(recipes.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3", "r-2", "r-1"]);
+    expect(recipes.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3", "tpl-4", "r-2", "r-1"]);
     expect(findRecipeIn(recipes, "r-1")).toEqual(addedDef);
   });
 
@@ -90,10 +93,10 @@ describe("recipesOf", () => {
 });
 
 /**
- * T1（#37）の条件: 固定で持っていた 3 つの手順が、表（`recipes`）から読んだ既定として同じように動くこと。
+ * T1（#37）の条件: 固定で持っていた既定の手順が、表（`recipes`）から読んだ既定として同じように動くこと。
  * 表との行き来は `toRecipeInputs`（書く形）と `recipesFromStored`（読んだ行）で、どちらも純粋な関数。
  */
-describe("the recipes table holds the three fixed recipes without changing them", () => {
+describe("the recipes table holds the fixed recipes without changing them", () => {
   /** 表に入れて読み直したのと同じ（jsonb は列の値をそのまま返す。既定は `origin` が builtin で並びは渡した順）。 */
   function roundTrip(recipes: readonly RecipeDef[]): StoredRecipe[] {
     return toRecipeInputs(recipes).map((input, index) => {
@@ -102,13 +105,14 @@ describe("the recipes table holds the three fixed recipes without changing them"
     });
   }
 
-  it("writes the three defaults as storable rows, in order, marked as builtin", () => {
+  it("writes every default as a storable row, in order, marked as builtin", () => {
     const inputs = toRecipeInputs(DEFAULT_RECIPES);
     expect(recipesProblem(inputs)).toBeNull();
     expect(inputs.map((input) => [input.id, input.origin])).toEqual([
       ["tpl-1", "builtin"],
       ["tpl-2", "builtin"],
       ["tpl-3", "builtin"],
+      ["tpl-4", "builtin"],
     ]);
   });
 
@@ -130,11 +134,11 @@ describe("the recipes table holds the three fixed recipes without changing them"
     const override: SettingsRecipe = { id: "tpl-2", name: "議事録（短め）", guide: "短く", steps: [{ id: "d9c3x7mf", name: "要点", instruction: "要点だけ。" }] };
     const effective = recipesOf([override, added]);
     expect(recipesFromStored(roundTrip(effective))).toEqual(effective);
-    expect(toRecipeInputs(effective).map((input) => input.origin)).toEqual(["builtin", "builtin", "builtin", "own"]);
+    expect(toRecipeInputs(effective).map((input) => input.origin)).toEqual(["builtin", "builtin", "builtin", "builtin", "own"]);
   });
 
   it("drops a row whose 工程 have all gone, so that the runner never claims an empty recipe", () => {
     const rows = roundTrip(DEFAULT_RECIPES);
-    expect(recipesFromStored(rows.map((row) => (row.id === "tpl-2" ? { ...row, steps: [] } : row))).map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-3"]);
+    expect(recipesFromStored(rows.map((row) => (row.id === "tpl-2" ? { ...row, steps: [] } : row))).map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-3", "tpl-4"]);
   });
 });
