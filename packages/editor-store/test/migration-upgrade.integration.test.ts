@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import type { Pool as PgPool } from "pg";
-import { applyMigrations, defaultMigrationsDir } from "../src/migrate.ts";
+import { MIGRATION_FILE_PATTERN, applyMigrations, defaultMigrationsDir } from "../src/migrate.ts";
 import { EditorStore } from "../src/store.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -60,8 +60,12 @@ describe("migration 0002 on a database that already has pages and versions", { s
         code: "23514",
       });
 
-      const second = await applyMigrations(client);
-      // 0002 のあとに足された migration（0003 の検索など）も、ここでいっしょに適用される。このテストが見るのは 0002 の上がり方
+      // 0002 のあとに足された migration（0003 の検索など）も、ここでいっしょに適用される。このテストが見るのは 0002 の上がり方。
+      // 0008 は 0001 の publications を作り直す（行があれば止まる）ので、ここでは 0007 までを流す（0008 は publications.integration.test.ts）
+      for (const name of await readdir(defaultMigrationsDir)) {
+        if (MIGRATION_FILE_PATTERN.test(name) && name < "0008") await copyFile(new URL(name, defaultMigrationsDir), join(onlyFirst, name));
+      }
+      const second = await applyMigrations(client, pathToFileURL(`${onlyFirst}/`));
       assert.equal(second.applied[0], "0002_versions_and_trash.sql");
       assert.deepEqual(second.skipped, ["0001_editor_store.sql"]);
 
