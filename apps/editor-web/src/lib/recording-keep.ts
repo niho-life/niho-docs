@@ -162,14 +162,18 @@ export function createIndexedDbRecordingKeep(
       await run([KEEP_TAKES_STORE], "readwrite", (transaction) => transaction.objectStore(KEEP_TAKES_STORE).put(started, take.id));
     },
     async addChunk(id, seq, bytes, durationSec) {
-      await run([KEEP_TAKES_STORE, KEEP_CHUNKS_STORE], "readwrite", (transaction) => {
-        transaction.objectStore(KEEP_CHUNKS_STORE).put(bytes, chunkKey(id, seq));
-        return patch(transaction, id, (take) => ({
-          ...take,
-          durationSec: Math.max(take.durationSec, durationSec),
-          bytes: take.bytes + bytes.byteLength,
-        }));
-      });
+      await run([KEEP_TAKES_STORE, KEEP_CHUNKS_STORE], "readwrite", (transaction) =>
+        // 塊は、見出しがあると確かめた同じ transaction の中で書く。消したあとに遅れて届いた塊を先に書くと、
+        // 一覧にも 7 日の掃除にも出ない塊が残って、端末の容量を使い続ける
+        patch(transaction, id, (take) => {
+          transaction.objectStore(KEEP_CHUNKS_STORE).put(bytes, chunkKey(id, seq));
+          return {
+            ...take,
+            durationSec: Math.max(take.durationSec, durationSec),
+            bytes: take.bytes + bytes.byteLength,
+          };
+        }),
+      );
     },
     async finish(id, durationSec) {
       await run([KEEP_TAKES_STORE], "readwrite", (transaction) => patch(transaction, id, (take) => ({ ...take, durationSec, finished: true })));

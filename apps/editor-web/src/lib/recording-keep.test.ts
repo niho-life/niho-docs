@@ -1,6 +1,6 @@
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { KEEP_MAX_AGE_MS, chunkKey, createIndexedDbRecordingKeep, type RecordingKeep } from "./recording-keep";
+import { KEEP_CHUNKS_STORE, KEEP_DB_NAME, KEEP_MAX_AGE_MS, chunkKey, createIndexedDbRecordingKeep, type RecordingKeep } from "./recording-keep";
 
 // 合成の音声（中身は数バイト）だけを使う
 
@@ -21,6 +21,23 @@ afterEach(() => {
 /** 同じ端末（同じ IndexedDB）を、画面を開き直したものとして作り直す。 */
 function keepOn(factory: IDBFactory, now: number = NOW): RecordingKeep {
   return createIndexedDbRecordingKeep(factory, { now: () => now })!;
+}
+
+/** chunks の表に残っている行の数。一覧と読み出しは見出しから引くので、見出しの無い塊はそこでは見えない。 */
+function countChunks(factory: IDBFactory): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const opening = factory.open(KEEP_DB_NAME);
+    opening.onerror = () => reject(opening.error);
+    opening.onsuccess = () => {
+      const db = opening.result;
+      const counting = db.transaction(KEEP_CHUNKS_STORE, "readonly").objectStore(KEEP_CHUNKS_STORE).count();
+      counting.onerror = () => reject(counting.error);
+      counting.onsuccess = () => {
+        db.close();
+        resolve(counting.result);
+      };
+    };
+  });
 }
 
 describe("createIndexedDbRecordingKeep（録音の控え）", () => {
@@ -63,9 +80,11 @@ describe("createIndexedDbRecordingKeep（録音の控え）", () => {
     await recording.remove(TAKE.id);
     expect(await recording.list()).toEqual([]);
     expect(await recording.load(TAKE.id)).toBeNull();
-    // 消したあとに遅れて届いた塊で、控えを作り直さない
+    expect(await countChunks(factory)).toBe(0);
+    // 消したあとに遅れて届いた塊で、控えを作り直さない。塊も書かない（一覧からも掃除からも見えない塊が残るため）
     await recording.addChunk(TAKE.id, 2, bytes(2), 2);
     expect(await recording.list()).toEqual([]);
+    expect(await countChunks(factory)).toBe(0);
   });
 
   it("新しい順に返し、7 日より古い控えは開いたときに消す", async () => {
