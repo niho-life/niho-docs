@@ -24,6 +24,12 @@ function props(patch: Partial<EditorSettingsPageProps> = {}): EditorSettingsPage
     onTermsDraft: noop,
     onCancelTerms: noop,
     onSaveTerms: noop,
+    about: "合成の自己紹介です。",
+    aboutDraft: null,
+    onEditAbout: noop,
+    onAboutDraft: noop,
+    onCancelAbout: noop,
+    onSaveAbout: noop,
     recipes: RECIPES,
     recipeDraft: null,
     onEditRecipe: noop,
@@ -39,7 +45,7 @@ function props(patch: Partial<EditorSettingsPageProps> = {}): EditorSettingsPage
     usageNote: null,
     transcription: { engine: "deepgram", timeoutSec: 1200, maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30, extensions: ["m4a", "mp3"] },
     storage: "CLOUD",
-    limits: { glossary: 200, recipes: 20, steps: 12 },
+    limits: { glossary: 200, recipes: 20, steps: 12, aboutChars: 2_000 },
     ...patch,
   };
 }
@@ -118,7 +124,7 @@ describe("EditorSettingsPage", () => {
   });
 
   it("hides 手順を追加 and 複製 once the limit is reached", () => {
-    const markup = html({ limits: { glossary: 200, recipes: RECIPES.length, steps: 12 } });
+    const markup = html({ limits: { glossary: 200, recipes: RECIPES.length, steps: 12, aboutChars: 2_000 } });
     expect(markup).not.toContain("手順を追加");
     expect(markup).not.toContain('aria-label="記事制作を複製"');
   });
@@ -184,5 +190,40 @@ describe("EditorSettingsPage", () => {
     expect(busy).toContain("保存しています…");
     // disabled にはしない（フォーカスが外れる）
     expect(busy).not.toMatch(/<button[^>]*\sdisabled/);
+  });
+});
+
+describe("「あなたについて」", () => {
+  it("shows the summary and the editor, and says it is not the author information of a published page", () => {
+    expect(text()).toContain("あなたについて");
+    expect(text()).toContain("合成の自己紹介です。");
+    const editing = text({ aboutDraft: "合成の自己紹介です。" });
+    expect(editing).toContain(EDITOR_SETTINGS_TEXT.aboutHelp);
+    expect(editing).toContain("2,000 字");
+  });
+
+  it("says when it is empty, and marks the save as not allowed when it is too long", () => {
+    expect(text({ about: "" })).toContain(EDITOR_SETTINGS_TEXT.empty);
+    const over = html({ aboutDraft: "あ".repeat(2_001) });
+    expect(over).toContain("長すぎるので保存できません");
+    expect(over).toMatch(/aria-label="あなたについてを保存"[^>]*aria-disabled="true"|aria-disabled="true"[^>]*aria-label="あなたについてを保存"/);
+  });
+
+  it("keeps every button and input labelled", () => {
+    const markup = html({ aboutDraft: "合成の自己紹介です。" });
+    expect(unlabeledButtons(markup)).toEqual([]);
+    expect(unlabeledInputs(markup)).toEqual([]);
+  });
+
+  /** gallery は型で守られていない（どの tsconfig にも入っていない）ので、渡し忘れても画面が落ちないこと。 */
+  it("still renders when the caller does not pass it at all", () => {
+    const without = props();
+    for (const key of ["about", "aboutDraft", "onEditAbout", "onAboutDraft", "onCancelAbout", "onSaveAbout"]) {
+      delete (without as unknown as Record<string, unknown>)[key];
+    }
+    delete (without.limits as unknown as Record<string, unknown>).aboutChars;
+    const markup = renderToStaticMarkup(<EditorSettingsPage {...without} />);
+    expect(markup).toContain("あなたについて");
+    expect(markup).toContain(EDITOR_SETTINGS_TEXT.empty);
   });
 });

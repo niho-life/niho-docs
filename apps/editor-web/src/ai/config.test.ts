@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ANTHROPIC_MESSAGES_URL } from "./anthropic";
-import { DEFAULT_ANTHROPIC_MODEL, monthlyLimitUsd, resolveAiBackend, type AiEnv } from "./config";
+import { DEFAULT_ANTHROPIC_MODEL, monthlyLimitUsd, resolveAiBackend, resolveAiCompose, type AiEnv } from "./config";
 import type { AiRequest } from "./model";
 
 // 合成の鍵（本物の API は呼ばない。fetch は global を差し替える）
@@ -90,5 +90,55 @@ describe("monthlyLimitUsd", () => {
 
   it("falls back to 0 (AI stopped) for a value that is not a non-negative number", () => {
     for (const value of ["abc", "-1", "Infinity", "NaN", "1e400", "$5"]) expect(monthlyLimitUsd({ EDITOR_AI_MONTHLY_LIMIT_USD: value }), value).toBe(0);
+  });
+});
+
+describe("resolveAiCompose", () => {
+  const on: AiEnv = { EDITOR_AI_MODE: "anthropic", ANTHROPIC_API_KEY: KEY };
+
+  it("is open and closed on the same conditions as the proposal backend", () => {
+    for (const env of [
+      { EDITOR_AI_MODE: undefined },
+      { EDITOR_AI_MODE: "off" },
+      { EDITOR_AI_MODE: "claude", ANTHROPIC_API_KEY: KEY },
+      { EDITOR_AI_MODE: "anthropic" },
+      { EDITOR_AI_MODE: "anthropic", ANTHROPIC_API_KEY: "  " },
+      // 名前の形が違う・単価表に無いモデルは、金額を数えられないので閉じたまま
+      { ...on, EDITOR_AI_MODEL: "Claude/Sonnet" },
+      { ...on, EDITOR_AI_MODEL: "claude-unknown-model" },
+      // 本番で偽物は受け付けない
+      { EDITOR_AI_MODE: "fake", NODE_ENV: "production" },
+    ] satisfies AiEnv[]) {
+      expect(resolveAiCompose(env), JSON.stringify(env)).toBeNull();
+      expect(resolveAiBackend(env), JSON.stringify(env)).toBeNull();
+    }
+  });
+
+  it("uses the model of the settings (default claude-sonnet-5-5) and the claude price table", () => {
+    expect(resolveAiCompose(on)).toMatchObject({ model: DEFAULT_ANTHROPIC_MODEL, provider: "claude" });
+    expect(resolveAiCompose({ ...on, EDITOR_AI_MODEL: "claude-opus-5-5" })).toMatchObject({ model: "claude-opus-5-5", provider: "claude" });
+  });
+
+  it("answers the fake one-shot in development, with no price table", async () => {
+    const compose = resolveAiCompose({ EDITOR_AI_MODE: "fake", NODE_ENV: "development" });
+    expect(compose).toMatchObject({ model: "fake", provider: null });
+    const completion = await compose!.client.complete({ system: "s", user: "## 頼むこと\n合成の段階\n## 資料\n<untrusted_data>\n合成の資料\n</untrusted_data>" });
+    // 偽物の結果には必ず印が付く（本物と見間違えない）
+    expect(completion.text).toContain("[fake]");
+    expect(JSON.parse(completion.text)).toMatchObject({ blocks: [{ kind: "heading" }, { kind: "paragraph" }, { kind: "paragraph" }] });
+    expect(completion.usage.model).toBe("fake");
+  });
+
+  it("calls the fixed Anthropic URL with the key of the moment", async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void input;
+      void init;
+      return Response.json({ model: "claude-sonnet-5-5", content: [{ type: "text", text: "{}" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } });
+    });
+    vi.stubGlobal("fetch", fetch);
+    await resolveAiCompose(on)!.client.complete({ system: "s", user: "u" });
+    const [input, init] = fetch.mock.calls[0]!;
+    expect(String(input)).toBe(ANTHROPIC_MESSAGES_URL);
+    expect(new Headers(init?.headers).get("x-api-key")).toBe(KEY);
   });
 });

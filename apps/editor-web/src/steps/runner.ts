@@ -93,6 +93,8 @@ export async function runAttempt(deps: RunnerDeps, task: { runId: string; stepIn
       const output = await deps.executor.run({
         recipe,
         stepIndex: claim.stepIndex,
+        owner: claim.owner,
+        parentPageId: claim.parentId,
         parentBlocks: input.parentBlocks,
         previousBlocks: input.previousBlocks,
         signal: controller.signal,

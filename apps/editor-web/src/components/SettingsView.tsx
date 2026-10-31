@@ -38,6 +38,7 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [termsDraft, setTermsDraft] = useState<EditorSettingsTermDraft[] | null>(null);
+  const [aboutDraft, setAboutDraft] = useState<string | null>(null);
   const [recipeDraft, setRecipeDraft] = useState<EditorSettingsRecipe | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [usageNote, setUsageNote] = useState<string | null>(null);
@@ -89,6 +90,15 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
         if (!termsDraft) return;
         const glossary: SettingsTerm[] = termsDraft.map((entry) => ({ ...entry, variants: parseVariants(entry.variants) }));
         void apply({ glossary }, () => setTermsDraft(null));
+      }}
+      about={settings.about}
+      aboutDraft={aboutDraft}
+      onEditAbout={() => setAboutDraft(settings.about)}
+      onAboutDraft={setAboutDraft}
+      onCancelAbout={() => setAboutDraft(null)}
+      onSaveAbout={() => {
+        if (aboutDraft === null) return;
+        void apply({ about: aboutDraft }, () => setAboutDraft(null));
       }}
       recipes={settings.recipes}
       recipeDraft={recipeDraft}

@@ -245,7 +245,7 @@ describe("PATCH /api/settings", () => {
 
   it("never hands the response a key the screen does not need", async () => {
     const dto = await settingsOf(await read(deps(OWNER, memoryStore())));
-    expect(Object.keys(dto).sort()).toEqual(["aiLang", "glossary", "limits", "recipes"]);
+    expect(Object.keys(dto).sort()).toEqual(["about", "aiLang", "glossary", "limits", "recipes"]);
     expect(Object.keys(dto.recipes[0]!).sort()).toEqual(["defaults", "guide", "id", "isDefault", "modified", "name", "steps"]);
   });
 });

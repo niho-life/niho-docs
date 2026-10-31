@@ -138,6 +138,23 @@ AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messa
 | `AI_MODEL` | `claude-sonnet-5-5` | `EDITOR_AI_MODEL` | 文を整える・要約・見出しには十分な品質で、Opus 系の約半額（入力 $2・出力 $10／100 万トークン）。docs-core の単価表にあり、見込み金額が出る |
 | `AI_MONTHLY_LIMIT_USD` | `10` | `EDITOR_AI_MONTHLY_LIMIT_USD` | 1 人・1 か月の見込みの上限。数段落の提案は 1 回 $0.01 前後、出力が上限まで出るいちばん悪い 1 回の呼び出し（本文 約 4,000 文字・出力 12,000 トークン）でも約 $0.13 なので、普段使いでは届かず、誤用や暴走は止まる |
 
+会話（AI チャット）はページごとに DB（`ai_conversations`・`ai_messages`・`ai_message_changes`。migration 0022・0025）に残る。残すのは頼んだことと提案の中身・作業の要約（道具とページの名前と成否）・採用や書き換えで残った版の番号だけで、**鍵・プロンプト・モデルへ送った文は残さない**。ページを消せば会話も消える。GCP の追加の資源は無い。
+
+**Mac アプリ（この Mac の CLI）がサーバーへ返す口は 2 つ**（設計 §6.1）。`POST /api/pages/{id}/ai/proposals/device` は**提案として返す**（ページは変わらず、採用のときだけ版に残して保存する＝ブラウザの提案と同じ扱い。差分はサーバーが今の本文から作り、Mac から来た差分は信用しない）。`POST /api/pages/{id}/ai/chat/turns` は**直接書き換える**（チャットと同じ道：作業場の確認 → 版を残す → 保存 → 会話に記録）。どちらもモデルをサーバーで呼ばず、**月の上限には数えない**。
+
+**使用量は経路ごとに分けて数える**（サーバーの API は表 `ai_usage`、この Mac の CLI は表 `ai_usage_device`。**`ai_usage` の形は 0005 のまま変えない** — 主キーを貼り替えると、migration がサービスの入れ替えより先に走るぶん、**まだ動いている古い revision の `ON CONFLICT (owner, month)` が落ちる**。そのため列ではなく表で分けている）。**月の上限（USD）で止めるのは
+`server`（サーバーの API）だけ**で、`device`（Mac アプリがこの Mac の CLI で作ったもの。`POST /api/pages/{id}/ai/chat/turns`
+で書き戻す）は回数だけ記録し、止めない（利用者のサブスクで従量が出ないため）。`GET /api/ai/usage` の `usage` は
+サーバー経路の合計（上限が効く方）で、`device` は別の欄に出る。
+
+**AI に渡す文脈が増えた**（旧 NIHO docs の引き継ぎ）: 「あなたについて」（設定。2,000 字まで）と、**自動参考ページ**
+（開いているページと同じフォルダの直下のほかのページ。サブページは入れない）。参考は 1 枚 4,000 字・合わせて 16,000 字まで
+入れ、それを超えた分は名前だけにする。**1 回の提案に入る量の目安**は、本文（最大 4,000 字 × 分けた回数）＋ 参考 16,000 字
+＋ あなたについて 2,000 字で、日本語なら 1 回の呼び出しで**およそ 2 万〜3 万トークン**（`claude-sonnet-5-5` の入力
+$2／100 万トークンで **1 回あたり $0.04〜0.06**）。フォルダが空なら今までどおり（$0.01 前後）。
+
+**チャット（自由入力）は AI がページを直接書き換える**（候補の提案は採用を待つ）。1 回の依頼でモデルと往復するのは 8 回まで・道具は 12 回までで、触れるのは「開いているページ・その親・そのサブページ」だけ（同じフォルダのほかのページは読むだけ）。書く前の本文は必ず版（`ai`）に残り、画面の「元に戻す」で戻せる。1 回の依頼で何度か往復するので、提案 1 回より費用がかかる（往復のたびに上限を見て、上限以上はその場で止める）。**出力の上限で切れた往復の道具は実行しない**（引数が途中で切れた write で本文を欠けさせないため）ので、`EDITOR_AI_MAX_TOKENS`（既定 12,000 トークン）に収まらない長さのページは、チャットでは丸ごと書き換えられない（範囲を分けて頼む。段階の実行器だけは続きを書かせて繋ぐ）。
+
 1 回の提案で送る本文は 30,000 文字まで（超えたら 413 `too_large`。範囲を選んで頼む）で、段落の切れ目で約 4,000 文字ずつに分けて順に呼ぶ。1 回の呼び出しの時間切れ（`EDITOR_AI_TIMEOUT_MS`、既定 120 秒）と出力の上限（`EDITOR_AI_MAX_TOKENS`、既定 12,000 トークン。思考の分を含む）は `deploy.sh` から渡さない（アプリの既定のまま）。Cloud Run の要求の時間切れはそれに合わせて 300 秒。自動の再試行はしない。上流の失敗（401・429・529・5xx・時間切れ）と、使えない応答（JSON でない・出力の上限で途中で切れた）は 502 `ai_failed`。
 
 ### 有効にする
@@ -162,13 +179,17 @@ AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messa
 
 ### 費用の見方
 
+- **0025 が本番の既存の行に触る所は無い**（足すのは新しい表だけ）。戻すときも、足した表を落とせば 0005 の形に戻る。
 - 1 人・1 か月（Asia/Tokyo の月）の見込み金額は、画面の設定（`GET /api/ai/usage`）に出る。返ったトークン数 × docs-core の単価表。上限の 80% 以上で一言出し、上限以上はモデルを呼ぶ前に 429 `quota_exceeded`。上限を変えるときは `deploy.env` の `AI_MONTHLY_LIMIT_USD` を変えて `deploy.sh --no-build`。
 - 請求の正は Anthropic の Console の使用量と請求。アプリの金額は見込み。応答が届いて使えなかった呼び出し（JSON でない・途中で切れた）の分も数える。HTTP の失敗・時間切れ・通信の失敗はトークン数が返らないので数えない。
 - GCP 側の追加は Secret の版 1 つだけ（無料の範囲）。
 
 ## 11. 手順の実行基盤（#37）
 
-手順（記事制作・議事録・インサイト整理）の段階を、画面を閉じても進むようにサーバー側で実行する。方式は [editor-steps-execution.md](../architecture/editor-steps-execution.md) の B（§5.2 実行・§5.5 費用）。**この段階では実行器が偽物（`[fake]` の印を付けた決定的な結果。AI は呼ばない）なので、有効にしても本物の記事は作られない。** 本物の実行器は後段で、差し替える所は `apps/editor-web/src/server/steps-deps.ts` の 1 か所。
+手順（記事制作・議事録・インサイト整理）の段階を、画面を閉じても進むようにサーバー側で実行する。方式は [editor-steps-execution.md](../architecture/editor-steps-execution.md) の B（§5.2 実行・§5.5 費用）。
+
+**段階は本物の AI（§10 と同じ Anthropic の鍵・モデル・月の上限）で実行する。** 実行器を偽物に戻さないこと（戻すと `[fake]` の印の付いた文書がページに書かれる）。この約束は `apps/editor-web/src/server/steps-deps.test.ts` が守っていて、偽物に差し替えると CI が落ちる。 1 段階 = モデルの 1 往復で、資料は段階 1 が録音ページの本文、それ以降は前の段階の結果（合わせて 24,000 文字まで。超えた分は先頭だけ送る）。作られるのは見出し・段落・箇条書き・囲みだけ。配線は `apps/editor-web/src/server/steps-deps.ts` の 1 か所。
+**`EDITOR_AI_MODE` が無効なあいだ、段階は `ai_unavailable` で失敗する**（手順を使うなら §10 の AI も有効にする）。開発と CI の `EDITOR_AI_MODE=fake` では偽物の 1 往復（`[fake]` の印が付く）で、本番では偽物を受け付けない。
 
 ### 構成
 
@@ -232,12 +253,17 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
   - `editor-web: request failed`（500）: `code` は `tasks_http_<status>`（Cloud Tasks の拒否。403 なら実行 ID の権限）・`tasks_token_*`（メタデータサーバー）・DB の code。Cloud Tasks が同じ task を再試行する。
   - `editor-web: sweep could not requeue every step`: 掃除の積み直しの一部が失敗した（次の回でまた拾う）。
   - `editor-web: sweep read only the oldest queued steps`: queued の段階が 1,000 件を超えて残っている（掃除は古い順に 100 件ずつ 10 回まで読む）。Cloud Tasks のキューが止まっていないか（`gcloud tasks queues describe`）を見る。
-- **段階の失敗の理由**: 帯（`GET /api/pages/{id}/steps` の `errorCode`）。`lease_expired` は実行中に worker が落ちて lease が切れたもの。
+- **段階の失敗の理由**: 帯（`GET /api/pages/{id}/steps` の `errorCode`）。`lease_expired` は実行中に worker が落ちて lease が切れたもの。AI の分は次のとおり（再試行するものは Cloud Tasks が自動で、しないものはその段階で失敗にする）:
+  - 再試行しない: `ai_unavailable`（`EDITOR_AI_MODE` が無効・鍵が無い）・`quota_exceeded`（今月の上限に達した。モデルを呼ぶ前に止めた）・`ai_auth`（鍵が通らない。401・402・403）・`ai_bad_request`・`invalid_output`（答えが使える形でなかった）・`output_too_long`（出力の上限で切れ、続きを 8 回頼んでも終わらなかった）・`unknown_step`
+  - 再試行する: `ai_rate_limit`（429）・`ai_overloaded`（529）・`ai_server`（5xx）・`ai_timeout`・`ai_network`・`usage_unavailable`（DB に届かず使用量を数えられなかった）
+- **段階の費用**: §10 の使用量（`GET /api/ai/usage`）に提案と一緒に入る（1 人・1 か月の見込みの上限は同じものが効く）。
 - **Cloud Scheduler のジョブ**の最後の実行: 成功は 200 `{"requeued": n}`。
 
 ### 制約
 
-- 1 つの段階は 1 回の要求。今の `deploy.sh` の Cloud Run の要求の上限（`lib.sh` の `service_request_timeout`。既定 300 秒）を超える段階は途中で切れる（Cloud Tasks が再試行し、lease が切れれば掃除が拾う）。偽物の実行器はすぐ終わるので今は当たらない。本物の実行器をつなぐ段で、段階の長さに合わせて上げる（上限は task の 30 分）。
+- 続きが終わらずに失敗した段階は、**そこまでに書けた本文を `StepError.partial` で運ぶ**（払った分を捨てないため）。記録（`step_attempts.partial_blocks`。#138）には残すが、**サブページの本文には書かず、ログにも code にも出さない**（中途半端な文書が黙って入る方が、はっきり失敗するより悪い）。
+- **出力が `EDITOR_AI_MAX_TOKENS`（既定 12,000）で切れたら、同じ答えの続きを書かせて繋ぐ**（旧 NIHO docs と同じ。続きは 8 回まで、重なりは 400 字まで除く。docs-core の `MAX_CONTINUATIONS`・`joinContinuation`）。続きの 1 回ずつも使用量に数え、月の上限は続きの前にも見る（上限に達したらそこで止める）。8 回で終わらなければ `output_too_long` で失敗し、**途中まで書けた文書はページに書かない**。
+- 1 つの段階は 1 回の要求（続きを頼んだ分だけ往復は増える）。今の `deploy.sh` の Cloud Run の要求の上限（`lib.sh` の `service_request_timeout`。既定 300 秒）を超える段階は途中で切れる（Cloud Tasks が再試行し、lease が切れれば掃除が拾う）。1 回のモデルの呼び出しの時間切れは `EDITOR_AI_TIMEOUT_MS`（既定 120 秒）なので、今の 300 秒に収まる。長い資料で足りなくなったら、要求の上限を段階の長さに合わせて上げる（上限は task の 30 分）。
 
 ## 12. 文字起こし（#36）
 
