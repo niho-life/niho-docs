@@ -24,7 +24,9 @@ import {
   BLOCK_CHOICES,
   LINE_TYPE_CHOICES,
   addButtonVisible,
+  blankLineAfterCursor,
   fillBlankLine,
+  insertBlankLine,
   isEmptyParagraphAt,
   lineTypeOf,
   setLineType,
@@ -34,6 +36,7 @@ import {
 } from "@/editor/block-types";
 import { checkLinkInput } from "@/editor/link-href";
 import { slashMenuStore, type SlashMenuSnapshot } from "@/editor/slash-menu";
+import { useShortcuts } from "@/lib/shortcuts";
 
 /** docs-ui の ShellBubbleMenu の plugin key（packages/docs-ui/src/shell/bubble.tsx）。 */
 const FORMAT_BAR_KEY = "shellFormatBar";
@@ -56,7 +59,8 @@ type Anchor = { left: number; top: number; bottom: number };
 type Panel =
   | { kind: "lineType"; anchor: Anchor | null; current: LineTypeId | null }
   | { kind: "link"; anchor: Anchor | null; range: { from: number; to: number }; href: string; linked: boolean }
-  | { kind: "add"; anchor: Anchor | null; at: number };
+  /** insert: ⌘/ で、文字のある行の下に足す（選んだときに at へ空の段落を足してから変える）。 */
+  | { kind: "add"; anchor: Anchor | null; at: number; insert?: boolean };
 
 const BLOCK_IDS: ReadonlySet<string> = new Set(BLOCK_CHOICES.map((choice) => choice.id));
 
@@ -420,6 +424,21 @@ function Chrome({ editor }: { editor: Editor }) {
     setPanel({ kind: "add", at: $anchor.before(), anchor: rect ? { left: rect.left, top: rect.top, bottom: rect.bottom } : selectionAnchor(editor) });
   };
 
+  // ⌘/（設計 §11）: 本文にフォーカスがあるとき、「＋」と同じブロックの一覧を開く。いまの行が空ならその行を、
+  // 文字があればその下に足す行を、選んだブロックにする。Esc で閉じると本文の元の位置へ戻る（何も足さない）
+  useShortcuts({
+    blockMenu: () => {
+      if (!editor.isEditable || !editor.view.hasFocus()) return false;
+      const below = blankLineAfterCursor(editor.state);
+      escaped.current = false;
+      setPanel(
+        below === null
+          ? { kind: "add", at: editor.state.selection.$anchor.before(), anchor: selectionAnchor(editor) }
+          : { kind: "add", at: below, anchor: selectionAnchor(editor), insert: true },
+      );
+    },
+  });
+
   const linkRange = panel?.kind === "link" ? panel.range : null;
 
   return (
@@ -468,7 +487,8 @@ function Chrome({ editor }: { editor: Editor }) {
             items={blockMenuItems(BLOCK_CHOICES)}
             onSelect={(id) => {
               setPanel(null);
-              if (isBlockChoiceId(id)) fillBlankLine(editor, id, { at: panel.at });
+              if (!isBlockChoiceId(id) || (panel.insert && !insertBlankLine(editor, panel.at))) return;
+              fillBlankLine(editor, id, { at: panel.at });
             }}
             onClose={() => dismiss("add")}
           />
