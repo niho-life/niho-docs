@@ -70,11 +70,18 @@ function memoryStore(rows: Row[] = []) {
       const row = find(owner, id);
       if (!row?.recording) return null;
       if (row.recording.revision !== baseRevision) return { status: "conflict", recording: row.recording };
-      const next = mutate(structuredClone({ segments: row.recording.segments, speakerNames: row.recording.speakerNames }));
+      // 本物の store と同じく、長さも渡し、書き換えが返したときだけ入れ替える（packages/editor-store の copyData・updateRecording）
+      const next = mutate(structuredClone({ segments: row.recording.segments, speakerNames: row.recording.speakerNames, durationSec: row.recording.durationSec }));
       if ("rejected" in next) return { status: "rejected", reason: next.rejected };
       const problem = recordingDataProblem(next);
       if (problem) throw new Error(problem);
-      row.recording = { ...row.recording, ...next, revision: row.recording.revision + 1 };
+      row.recording = {
+        ...row.recording,
+        segments: next.segments,
+        speakerNames: next.speakerNames,
+        durationSec: next.durationSec === undefined ? row.recording.durationSec : next.durationSec,
+        revision: row.recording.revision + 1,
+      };
       return { status: "ok", recording: row.recording };
     },
   };
@@ -424,6 +431,106 @@ describe("recording data from the API", () => {
     expect(body).not.toMatch(/internal|hidden/);
     const data: RecordingData = JSON.parse(body).recording;
     expect(Object.keys(data.segments[0]!)).toEqual(["start", "end", "text", "speaker"]);
+  });
+});
+
+describe("PATCH /api/pages/{id}/recording（あとの .vtt を足す）", () => {
+  const SECOND_VTT = ["WEBVTT", "", "00:00:00.000 --> 00:00:02.000", "<v 司会役>続きです", "", "00:00:02.000 --> 00:00:05.000", "<v 新しい人>はい", "", ""].join("\n");
+
+  it("足した段落の時刻を、前の音声の長さだけずらして 1 本につなぐ", async () => {
+    const { store, rows } = memoryStore();
+    const { page } = await imported(store);
+    const d = deps("user-a", store);
+    // 1 本目は 6 秒の字幕（合成の VTT）。音声の長さを 10 秒として、そのあとに足す
+    const row = rows.find((item) => item.id === page.id)!;
+    row.recording = { ...row.recording!, durationSec: 10 };
+
+    const response = await patch(page.id, { baseRevision: 1, appendVtt: { name: "合成の会議 2.vtt", vtt: SECOND_VTT } }, d);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.recording.revision).toBe(2);
+    expect(body.recording.segments.map((item: { start: number; end: number; text: string; speaker: number }) => [item.start, item.end, item.text, item.speaker])).toEqual([
+      [1, 2.5, "はじめます", 1],
+      [2.5, 4, "お願いします", 2],
+      [4, 6, "一つ目の議題です", 1],
+      // 10 秒（1 本目の音声の長さ）だけ後ろへ。同じ名前の「司会役」は話者 1 のまま
+      [10, 12, "続きです", 1],
+      [12, 15, "はい", 3],
+    ]);
+    expect(body.recording.speakerNames).toEqual({ "1": "司会役", "2": "記録役", "3": "新しい人" });
+    // 録音の長さは 10 + 5（次に足すときのずらす量）
+    expect(body.recording.durationSec).toBe(15);
+    expect(body.speakers).toEqual([
+      { speaker: 1, name: "司会役", count: 3 },
+      { speaker: 2, name: "記録役", count: 1 },
+      { speaker: 3, name: "新しい人", count: 1 },
+    ]);
+  });
+
+  it("続けて足すと、そのつど前までの長さだけずらす", async () => {
+    const { store } = memoryStore();
+    const { page } = await imported(store);
+    const d = deps("user-a", store);
+    const first = await (await patch(page.id, { baseRevision: 1, appendVtt: { name: "2.vtt", vtt: SECOND_VTT } }, d)).json();
+    expect(first.recording.durationSec).toBe(11);
+    const second = await (await patch(page.id, { baseRevision: 2, appendVtt: { name: "3.vtt", vtt: SECOND_VTT } }, d)).json();
+    expect(second.recording.segments.at(-1).start).toBe(13);
+    expect(second.recording.durationSec).toBe(16);
+  });
+
+  it("読めない .vtt・発言のない .vtt・形の違う要求は 400（何も書かない）", async () => {
+    const { store } = memoryStore();
+    const { page } = await imported(store);
+    const d = deps("user-a", store);
+    const reasons: [unknown, string][] = [
+      [{ baseRevision: 1, appendVtt: { name: "x.vtt", vtt: "これは字幕ではありません" } }, "vtt_invalid"],
+      [{ baseRevision: 1, appendVtt: { name: "x.vtt", vtt: "WEBVTT\n" } }, "vtt_empty"],
+      [{ baseRevision: 1, appendVtt: { name: "x\u0000.vtt", vtt: SECOND_VTT } }, "name"],
+      [{ baseRevision: 1, appendVtt: { name: "x.vtt", vtt: SECOND_VTT, lang: "ja" } }, "body"],
+      [{ baseRevision: 1, appendVtt: { name: "x.vtt" } }, "body"],
+      [{ baseRevision: 1, appendVtt: { name: 7, vtt: SECOND_VTT } }, "name"],
+      [{ baseRevision: 1, appendVtt: { name: "x.vtt", vtt: SECOND_VTT }, edits: [{ index: 0, text: "x" }] }, "body"],
+    ];
+    for (const [body, reason] of reasons) {
+      const response = await patch(page.id, body, d);
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      expect(await response.json()).toEqual({ error: "bad_request", reason });
+    }
+    // 1 件も書いていない
+    expect((await (await get(page.id, d)).json()).recording.revision).toBe(1);
+  });
+
+  it("先に直されていたら足さずに 409（最新を返す）。別の人・存在しないページは 404、未認証は 401、別の origin は 403", async () => {
+    const { store } = memoryStore();
+    const { page } = await imported(store);
+    const append = { appendVtt: { name: "2.vtt", vtt: SECOND_VTT } };
+    await patch(page.id, { baseRevision: 1, edits: [{ index: 0, text: "先に直した" }] }, deps("user-a", store));
+
+    const conflict = await patch(page.id, { baseRevision: 1, ...append }, deps("user-a", store));
+    expect(conflict.status).toBe(409);
+    const body = await conflict.json();
+    expect(body.error).toBe("conflict");
+    expect(body.recording.segments).toHaveLength(3);
+
+    expect((await patch(page.id, { baseRevision: 2, ...append }, deps("user-b", store))).status).toBe(404);
+    expect((await patch(randomUUID(), { baseRevision: 2, ...append }, deps("user-a", store))).status).toBe(404);
+    expect((await patch(page.id, { baseRevision: 2, ...append }, deps(null, store))).status).toBe(401);
+    expect((await patch(page.id, { baseRevision: 2, ...append }, deps("user-a", store), { origin: "http://evil.test" })).status).toBe(403);
+  });
+
+  it("本文が大きすぎたら 413（4 MiB の .vtt は入る）", async () => {
+    const { store } = memoryStore();
+    const { page } = await imported(store);
+    const d = deps("user-a", store);
+    const big = `WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n${"あ".repeat(1000)}\n`;
+    expect((await patch(page.id, { baseRevision: 1, appendVtt: { name: "2.vtt", vtt: big } }, d)).status).toBe(200);
+    const overBody = JSON.stringify({ baseRevision: 2, appendVtt: { name: "2.vtt", vtt: "x" } }).padEnd(RECORDING_PATCH_BODY_MAX_BYTES + 1, " ");
+    expect((await patch(page.id, overBody, d)).status).toBe(413);
+    // VTT そのものの上限を超えるものは 400（vtt_too_large）
+    const tooLarge = `WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n${"あ".repeat(VTT_IMPORT_MAX_BYTES / 3 + 10)}\n`;
+    const response = await patch(page.id, { baseRevision: 2, appendVtt: { name: "2.vtt", vtt: tooLarge } }, d);
+    expect(response.status).toBe(400);
+    expect((await response.json()).reason).toBe("vtt_too_large");
   });
 });
 

@@ -271,6 +271,30 @@ describe("page recordings on PostgreSQL", { skip: databaseUrl === undefined }, (
     assert.equal(second.recording.segments[0]?.text, "おはようございます。直した", "the earlier edit is kept");
   });
 
+  it("writes a new length only when the change returns one（音声・字幕を足して長くなるとき）", async () => {
+    const { page } = await createRecordingPage(pool, OWNER, input());
+    // 長さを返さない書き換え（文章・話者）は今の長さのまま
+    const edited = await updateRecording(pool, OWNER, page.id, 1, editText(0, "直した"));
+    assert.ok(edited?.status === "ok");
+    assert.equal(edited.recording.durationSec, 7.5);
+
+    // 足す書き換えは、新しい長さ（ずらす量 ＋ 足す側の長さ）を返す
+    const appended = await updateRecording(pool, OWNER, page.id, 2, (data) => ({
+      segments: [...data.segments, segment("続きです", 1, (data.durationSec ?? 0) + 0, (data.durationSec ?? 0) + 2)],
+      speakerNames: data.speakerNames,
+      durationSec: (data.durationSec ?? 0) + 2,
+    }));
+    assert.ok(appended?.status === "ok");
+    assert.equal(appended.recording.durationSec, 9.5);
+    assert.equal(appended.recording.segments.at(-1)?.start, 7.5);
+    assert.equal((await getRecording(pool, OWNER, page.id))?.durationSec, 9.5);
+
+    // null は「長さが分からない」（0007 の CHECK は null を許す）
+    const cleared = await updateRecording(pool, OWNER, page.id, 3, (data) => ({ segments: data.segments, speakerNames: data.speakerNames, durationSec: null }));
+    assert.ok(cleared?.status === "ok");
+    assert.equal(cleared.recording.durationSec, null);
+  });
+
   it("lets only one of two concurrent writes with the same revision through", async () => {
     const { page } = await createRecordingPage(pool, OWNER, input());
     const results = await Promise.all([

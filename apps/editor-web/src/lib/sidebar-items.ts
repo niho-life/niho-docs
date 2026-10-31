@@ -21,22 +21,27 @@ export function searchRows(hits: readonly SearchHit[], now: number): ShellListIt
   });
 }
 
+/** 手順の段階の状態の言葉（#37。色・印だけでなく文字でも出す）。済みは何も出さない（ふつうのページと同じ）。 */
+const STEP_SAY: Readonly<Record<string, string>> = { run: "作成中…", wait: "待機", failed: "失敗", stale: "前提変更" };
+
 /**
  * 2 行目（モック v6 の sidebar の sub と同じ順）: 公開中（限定公開を含む）は発信先の名前と印、公開をやめたページは「公開をやめた」、
- * 録音は「録音」、手順が動いているページは「作成中…」。それ以外は出さない。
+ * 録音は「録音」、手順のサブページは段階の状態（作成中…・待機・失敗・前提変更）。それ以外は出さない。
  */
 function subOf(page: PageSummary): ShellListItem["sub"] {
   const publication = page.publication;
   if (publication && !publication.stopped) return { text: DEST_NAMES[publication.dest], dest: publication.dest };
   if (publication?.stopped) return { text: "公開をやめた" };
   if (page.kind === "rec") return { text: "録音" };
-  if (page.stepStatus === "run") return { text: "作成中…" };
-  return undefined;
+  const say = page.stepStatus === null ? undefined : STEP_SAY[page.stepStatus];
+  return say ? { text: say } : undefined;
 }
 
 function rowOf(page: PageSummary, now: number, child: boolean): ShellListItem {
   const item: ShellListItem = { id: page.id, title: page.title, when: formatWhen(page.updatedAt, now) };
   if (child) item.child = true;
+  // 進行中の行は回るマーク（#37）。公開中のサブページでも、作っている間は印を出す
+  if (page.stepStatus === "run") item.busy = true;
   const sub = subOf(page);
   if (sub) item.sub = sub;
   return item;

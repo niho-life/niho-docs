@@ -10,7 +10,8 @@ export default defineConfig([
   {
     // ブラウザで動く部品から DB・認証の実装を読み込まない（token・接続をブラウザへ持ち込まない）
     files: ["src/components/**/*.tsx", "src/lib/**/*.ts"],
-    ignores: ["src/components/StubBadge.tsx", "src/components/Notice.tsx"],
+    // test はブラウザへ配らないので、画面の受入を本物の受付 API（src/server）で確かめてよい（例: PageSteps.test.tsx）
+    ignores: ["src/components/StubBadge.tsx", "src/components/Notice.tsx", "src/components/**/*.test.tsx"],
     rules: {
       "@typescript-eslint/no-restricted-imports": ["error", {
         paths: [
