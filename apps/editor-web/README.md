@@ -26,7 +26,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | `EDITOR_AUTH_MODE` | `stub`（開発・CI だけ）か `niho`。開発では未設定で `stub` |
 | `EDITOR_ORIGIN` | 任意。更新系の要求の Origin 検査に使う origin（未設定なら Host と転送の header から） |
 | `EDITOR_AI_MODE` | 任意。未設定・`off` は AI を使わない（提案・採用は 503 `ai_unavailable`）。`anthropic` は本物のモデル（Anthropic の Messages API。`ANTHROPIC_API_KEY` が空・未設定なら 503）。`fake` は偽物のモデル（開発・CI だけ。`NODE_ENV=production` では 503） |
-| `ANTHROPIC_API_KEY` | `EDITOR_AI_MODE=anthropic` の鍵。サーバーだけが要求のたびに読む（本番は Secret Manager から。[editor-deploy.md](../../docs/ops/editor-deploy.md) §11）。リポジトリ・ログに書かない |
+| `ANTHROPIC_API_KEY` | `EDITOR_AI_MODE=anthropic` の鍵。サーバーだけが要求のたびに読む（本番は Secret Manager から。[editor-deploy.md](../../docs/ops/editor-deploy.md) §10）。リポジトリ・ログに書かない |
 | `EDITOR_AI_MODEL` | 任意。`anthropic` のモデル。既定 `claude-sonnet-5-5`。`^[a-z0-9][a-z0-9._-]{0,63}$` に合わなければ 503 |
 | `EDITOR_AI_TIMEOUT_MS` | 任意。モデルの 1 回の呼び出しの時間切れ（ミリ秒）。既定 120,000、1,000〜300,000 に丸める |
 | `EDITOR_AI_MAX_TOKENS` | 任意。1 回の出力の上限（トークン。思考の分を含む）。既定 12,000、256〜32,000 に丸める（提案は送る文字数からこれ以下で決める） |
