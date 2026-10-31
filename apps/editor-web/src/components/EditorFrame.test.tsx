@@ -4,7 +4,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
 import { EditorFrame, useEditorFrame, type FrameInitial } from "./EditorFrame";
-import { PUBLISH_NOTICE_MS, PUBLISH_NOTICE_TEXT } from "./FramePublish";
 
 const nav = vi.hoisted(() => ({ pathname: "/", search: "", push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -315,30 +314,17 @@ describe("EditorFrame", () => {
     expect(dialog()).toBeNull();
   });
 
-  it("the sheet's 公開する only says publishing is not available yet (aria-live), after closing the sheet", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      nav.pathname = `/p/${PAGE_ID}`;
-      await mount({ pages: [page(PAGE_ID, "合成の題名")] });
-      const notice = container!.querySelector<HTMLElement>("[data-publish-notice]")!;
-      expect(notice.getAttribute("role")).toBe("status");
-      expect(notice.getAttribute("aria-live")).toBe("polite");
-      expect(notice.textContent).toBe("");
-
-      await act(async () => buttonByText("公開")!.click());
-      const niho = [...dialog()!.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((radio) => radio.querySelector("b")?.textContent === "NIHO")!;
-      await act(async () => niho.click());
-      await act(async () => buttonByText("公開する", dialog()!)!.click());
-      expect(dialog()).toBeNull();
-      expect(notice.textContent).toBe(PUBLISH_NOTICE_TEXT);
-      expect(nav.push).not.toHaveBeenCalled();
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(PUBLISH_NOTICE_MS);
-      });
-      expect(notice.textContent).toBe("");
-    } finally {
-      vi.useRealTimers();
-    }
+  it("the sheet shows every destination as not connected, so nothing is selectable and 公開する cannot be pressed", async () => {
+    nav.pathname = `/p/${PAGE_ID}`;
+    await mount({ pages: [page(PAGE_ID, "合成の題名")] });
+    await act(async () => buttonByText("公開")!.click());
+    const sheet = dialog()!;
+    expect(sheet.querySelectorAll('[role="radio"][aria-checked]').length).toBe(0);
+    expect(sheet.textContent).not.toContain("条件はそろっています");
+    const connect = [...sheet.querySelectorAll("button")].filter((button) => button.textContent?.includes("接続する"));
+    expect(connect.map((button) => button.querySelector("b")?.textContent)).toEqual(["NIHO Experience", "NIHO", "自分のサイト"]);
+    expect(buttonByText("公開する", sheet)?.disabled).toBe(true);
+    expect(container!.querySelector("[data-publish-notice]")?.textContent).toBe("");
   });
 
   it("発信先を追加 and 接続する lead to the destinations settings", async () => {

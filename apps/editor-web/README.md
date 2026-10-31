@@ -114,7 +114,7 @@ const found = usePageSearch(find.open ? find.value : ""); // found.results を�
 | ⌘⇧P | 公開のシート（ヘッダーの「公開」と同じ） | ページ（`/p/{id}`）の画面だけ。一覧・設定・新しいページ・録音から、狭い画面で一覧を出しているときは無視 |
 
 - **ブラウザが先に取るキー**: ページは keydown を `preventDefault` できるときだけ勝てる。⌘N（Ctrl+N）はブラウザのタブでは新しいウィンドウが開き、ページに届かない（そのときは一覧の「＋」から）。Firefox の Ctrl+Shift+P（プライベートウィンドウ）も届かない見込み。どちらも実ブラウザ・インストールした PWA の窓では確かめていない。
-- **公開のシートは仮**: 発信先（NIHO Experience・NIHO・未接続の自分のサイト）と条件は `src/components/FramePublish.tsx` の固定の値で、役割・接続・条件は見ていない。「公開する」はシートを閉じて「公開はまだ使えません」を `aria-live` で知らせるだけ。「発信先を追加」「接続する」は発信先の設定（`/destinations`）へ。公開の実行・役割・条件は #39・#40。ページからは `useEditorFrame().openPublish()` で開ける。
+- **公開のシートは仮**: 発信先（NIHO Experience・NIHO・自分のサイト）は `src/components/FramePublish.tsx` の固定の一覧で、どれも**未接続**として見せる（役割・接続・条件はまだ見ていないので、選べず、「公開する」は押せない）。押せるようになったときの受け皿として、確定はシートを閉じて「公開はまだ使えません」を `aria-live` で知らせるだけにしてある。「発信先を追加」「接続する」は発信先の設定（`/destinations`）へ。公開の実行・役割・条件は #39・#40。ページからは `useEditorFrame().openPublish()` で開ける。
 
 ## まだやらないこと
 

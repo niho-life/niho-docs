@@ -11,18 +11,18 @@ export const PUBLISH_NOTICE_MS = 4000;
 export type FramePublishKind = "publish" | "addDest";
 
 /**
- * 公開のシートの発信先（仮）。役割の読み込み・発信先の接続・条件の判定・URL の slug は #39・#40 で入れ替える。
- * 設計 §8.1・§10 の NIHO が運営する 2 つと、本人のサイト（未接続。「接続する」で発信先の設定へ）。
+ * 公開のシートの発信先（仮）。発信先の接続と役割の読み込み（#39・#40・#42）が入るまで、どれも接続できていない状態で見せる。
+ * 実際と違う「出せる」「条件はそろっています」は出さない（選べず、公開は押せない）。設計 §8.1・§10 の NIHO が運営する 2 つと、本人のサイト。
  */
 const DRAFT_DESTS: PublishDestOption[] = [
-  { id: "exp", label: "NIHO Experience", who: "旅行者向け · 英語", url: "experience.niho.life/guides/…", role: "ライター", connected: true },
-  { id: "niho", label: "NIHO", who: "鎌倉の人向け", url: "niho.life/article/…", role: "鎌倉の人", connected: true },
+  { id: "exp", label: "NIHO Experience", who: "旅行者向け · 英語", url: "接続すると選べます", role: "", connected: false },
+  { id: "niho", label: "NIHO", who: "鎌倉の人向け", url: "接続すると選べます", role: "", connected: false },
   { id: "site", label: "自分のサイト", who: "本人のサイト", url: "接続すると選べます", role: "", connected: false },
 ];
 
 /**
  * 枠の公開のシート（docs-ui の PublishSheet。EditorShell の overlay に置く）。選んだ発信先・範囲・あわせては開いているあいだだけ持つ。
- * 確定（公開する）は onUnavailable で「まだ使えません」と知らせるだけ。発信先を追加・接続するは発信先の設定へ。
+ * 発信先はどれも未接続なので選べず、確定（公開する）は押せない。押せるようになったときの受け皿として、確定は onUnavailable で「まだ使えません」と知らせるだけ。発信先を追加・接続するは発信先の設定へ。
  */
 export function FramePublishSheet(props: { kind: FramePublishKind; onKind: (kind: FramePublishKind) => void; onClose: () => void; onUnavailable: () => void; onDestinations: () => void }) {
   const [picked, setPicked] = useState<ShellDest | undefined>(undefined);
