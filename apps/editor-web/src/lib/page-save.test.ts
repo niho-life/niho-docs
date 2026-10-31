@@ -76,6 +76,13 @@ describe("jsonEqual / sameContent", () => {
   it("treats the editor's empty paragraph as the empty body", () => {
     expect(sameContent({ title: "", blocks: [{ type: "paragraph" }] }, { title: "", blocks: [] })).toBe(true);
   });
+
+  it("compares the language only when both sides know it (an old draft or a response without it is compared by title and body)", () => {
+    expect(sameContent({ title: "t", blocks: [], lang: "ja" }, { title: "t", blocks: [], lang: "en" })).toBe(false);
+    expect(sameContent({ title: "t", blocks: [], lang: "en" }, { title: "t", blocks: [], lang: "en" })).toBe(true);
+    expect(sameContent({ title: "t", blocks: [] }, { title: "t", blocks: [], lang: "en" })).toBe(true);
+    expect(sameContent({ title: "t", blocks: [], lang: "ja" }, { title: "u", blocks: [], lang: "ja" })).toBe(false);
+  });
 });
 
 describe("classifySaveFailure", () => {
@@ -186,6 +193,51 @@ describe("createPageSaver", () => {
     expect(server.calls.map((call) => call.options.baseRevision)).toEqual([2, 2]);
     expect(saver.revision).toBe(3);
     expect(server.page).toMatchObject({ title: "新しい題", blocks: paragraph("採用した本文"), revision: 3 });
+  });
+
+  describe("the language (info panel) on the same save", () => {
+    const UPDATED = "2026-10-31T03:40:00.000Z";
+    const conflict = (page: Omit<ConflictPage, "updatedAt">) => new PageConflictError({ ...page, updatedAt: UPDATED });
+
+    it("sends the language with the page's revision and knows the language the server now has", async () => {
+      const request = vi.fn(async (_id: string, _body: PageBody, options: SaveRequestOptions) => options.baseRevision + 1);
+      const saver = createPageSaver({ pageId: PAGE_ID, revision: 4, content: { title: "t", blocks: [], lang: "ja" }, request });
+      expect(saver.content.lang).toBe("ja");
+      await saver.save({ lang: "en" }, NO_KEEPALIVE);
+      expect(request).toHaveBeenCalledWith(PAGE_ID, { lang: "en" }, { baseRevision: 4, overwrite: false, keepalive: false });
+      expect(saver.revision).toBe(5);
+      expect(saver.content).toEqual({ title: "t", blocks: [], lang: "en" });
+      // 題名だけの保存のあとも、言語はそのまま
+      await saver.save({ title: "u" }, NO_KEEPALIVE);
+      expect(saver.content).toEqual({ title: "u", blocks: [], lang: "en" });
+    });
+
+    it("does not take a 409 as its own save when only the language differs (another screen saved; the change did not land)", async () => {
+      const request = vi.fn(async (): Promise<number> => {
+        throw conflict({ title: "t", blocks: [], lang: "ja", revision: 5 });
+      });
+      const saver = createPageSaver({ pageId: PAGE_ID, revision: 4, content: { title: "t", blocks: [], lang: "ja" }, request });
+      await expect(saver.save({ lang: "en" }, NO_KEEPALIVE)).rejects.toBeInstanceOf(PageConflictError);
+      expect(saver.revision).toBe(4);
+      expect(saver.content.lang).toBe("ja");
+    });
+
+    it("takes a 409 whose title, body and language equal what it is sending as its own (the response was lost)", async () => {
+      const request = vi.fn(async (): Promise<number> => {
+        throw conflict({ title: "t", blocks: [], lang: "en", revision: 5 });
+      });
+      const saver = createPageSaver({ pageId: PAGE_ID, revision: 4, content: { title: "t", blocks: [], lang: "ja" }, request });
+      await saver.save({ lang: "en" }, NO_KEEPALIVE);
+      expect(saver.revision).toBe(5);
+      expect(saver.content.lang).toBe("en");
+    });
+
+    it("overwrites onto the conflicting page with its language as what the server has", () => {
+      const saver = createPageSaver({ pageId: PAGE_ID, revision: 4, content: { title: "t", blocks: [], lang: "ja" } });
+      saver.overwriteOnto({ title: "別", blocks: paragraph("別"), revision: 9, updatedAt: UPDATED, lang: "en" });
+      expect(saver.revision).toBe(9);
+      expect(saver.content).toEqual({ title: "別", blocks: paragraph("別"), lang: "en" });
+    });
   });
 
   it("creates a new page with the first save (POST), then PATCHes that page on the revision it was created with", async () => {

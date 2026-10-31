@@ -76,6 +76,7 @@ export {
   InvalidImageError,
   completeImageUpload,
   countPageImages,
+  findImageUploadByKey,
   imageAsset,
   imageObjectPath,
   sharedImageAsset,

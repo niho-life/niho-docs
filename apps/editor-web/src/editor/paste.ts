@@ -8,9 +8,19 @@
  * 見出し 1 は題名の役なので 2 に、4 以下は 3 にそろえる（schema は 2・3 だけ）。
  *
  * **外の `<img src>` は文字どおり落とす**（`DROP_WITH_CONTENT` に `img`・`picture`・`source`。本文（AST）は資産の id しか
- * 持たないので、他のサイトの画像に繋いだまま（hotlink）にはしない）。本文に入るのは、貼り付け・ドロップされた**ファイル**を
+ * 持たないので、他のサイトの画像に繋いだまま（hotlink）にはしない）。例外は、このエディタが書き出した
+ * `img[data-asset-id]`（資産の id が UUID のもの。エディタの中でコピー・切り取りした画像）で、`data-asset-id`・`alt`・
+ * `data-credit`・`data-consent` だけ残す（`src` などは落とす）。本文に入るのは、貼り付け・ドロップされた**ファイル**を
  * private bucket にアップロードした画像だけ（`imageFilesFrom` → src/editor/image-node.ts）。
  */
+
+/** このエディタが書き出した画像（`img[data-asset-id]`。資産の id が UUID のもの。src/editor/image-node.ts の読み取りと同じ条件）。 */
+const ASSET_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const IMAGE_ATTRIBUTES = new Set(["data-asset-id", "alt", "data-credit", "data-consent"]);
+
+function isEditorImage(element: Element): boolean {
+  return element.tagName.toLowerCase() === "img" && ASSET_ID.test(element.getAttribute("data-asset-id") ?? "");
+}
 
 const DROP_WITH_CONTENT = [
   "script",
@@ -65,6 +75,7 @@ function cleanAttributes(element: Element): void {
     const name = attribute.name.toLowerCase();
     if (name === "href" && tag === "a") continue;
     if (name === "start" && tag === "ol") continue;
+    if (tag === "img" && IMAGE_ATTRIBUTES.has(name)) continue;
     if (name === "style") {
       const kept = keptStyle(attribute.value);
       if (kept) element.setAttribute("style", kept);
@@ -86,7 +97,9 @@ function renameTag(element: Element, tag: string): Element {
 export function normalizePastedHtml(html: string): string {
   // DOMParser の文書は不活性（script は動かず、画像も読み込まれない）
   const doc = new DOMParser().parseFromString(html, "text/html");
-  for (const element of Array.from(doc.body.querySelectorAll(DROP_WITH_CONTENT.join(",")))) element.remove();
+  for (const element of Array.from(doc.body.querySelectorAll(DROP_WITH_CONTENT.join(",")))) {
+    if (!isEditorImage(element)) element.remove();
+  }
   // コメント・処理命令（条件付きコメントなど）
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_COMMENT);
   const comments: Node[] = [];

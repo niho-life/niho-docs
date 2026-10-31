@@ -35,6 +35,9 @@ const VARIANTS: { id: string; widths: readonly number[] }[] = [
   { id: "page:rec?speakers=3&edit=1&rail=0", widths: [1440, 390, 375, 320] },
   { id: "page:rec?speakers=6&rail=0", widths: [1440, 390, 375, 320] },
   { id: "page:rec?time=0&play=0&rail=0", widths: [1440, 390, 375, 320] },
+  // editor-web の情報パネル（#34 第 3 段。自分だけ・肩書なし・Markdown だけ・ページを削除・言語の一言）
+  { id: "page:memo?rail=1&web=1", widths: [1440, 390, 375, 320] },
+  { id: "page:rec?rail=1&web=1&note=1", widths: [1440, 390, 375, 320] },
   // フェーズ2: 公開のシート（発信先を選んだ後の足りないもの・条件がそろった・未接続・公開中の更新）
   { id: "sheet:publish?pick=exp", widths: [1440, 390, 375, 320] },
   { id: "sheet:publish?pick=niho", widths: [1440, 390, 375, 320] },

@@ -3,7 +3,7 @@
 import "niho-ui/styles/tokens.css";
 import "niho-docs-ui/styles/tokens.css";
 import "niho-docs-ui/styles/editor.css";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import type { PageKind, PageLang } from "@niho/editor-store";
 import { PageTitle } from "niho-docs-ui/components/BlockEditor";
@@ -28,6 +28,7 @@ import {
   type DraftStorage,
   type PageDraft,
 } from "@/lib/drafts";
+import type { PageText } from "@/lib/attached-page";
 import { MAX_TITLE_CHARS } from "@/lib/page-limits";
 import { UNCREATED_REVISION, classifySaveFailure, createPageSaver, type PageSaver } from "@/lib/page-save";
 import type { RestoredPage } from "@/lib/page-actions-client";
@@ -39,11 +40,18 @@ export { docFromBlocks };
 /** 右上の保存状態（`conflict` は競合の帯が出ていて、自動保存を止めている）。 */
 export type { SaveStatus };
 
+/** 言語を指定しないページの言語（新しいページの既定。サーバーの既定と同じ）。 */
+export const DEFAULT_PAGE_LANG: PageLang = "ja";
+
+/** 言語を保存できず、前の言語に戻したときの一言（情報パネルの言語の下）。 */
+export const LANG_NOT_SAVED = "言語を保存できませんでした";
+
 export type EditablePage = {
   title: string;
   blocks: unknown[];
-  /** ページの種類と言語（AI の候補を選ぶ。無ければメモ・日本語＝新しいページ）。 */
+  /** ページの種類（AI の候補を選ぶ。無ければメモ）。 */
   kind?: PageKind;
+  /** ページの言語（読み込んだときの値）。省略は `DEFAULT_PAGE_LANG`。 */
   lang?: PageLang;
 } & (
   | {
@@ -72,6 +80,8 @@ export type PageEditorEvents = {
    * 渡す関数は、全てサーバーにあれば true、保存できなければ（オフライン・失敗・競合・変換中）false。
    */
   registerSaveNow?: (saveNow: () => Promise<boolean>) => () => void;
+  /** 情報パネルで変えた言語がサーバーに届いた（届いた言語。一覧の言語を替える）。 */
+  onLangChange?: (lang: PageLang) => void;
 };
 
 export type PageEditorProps = {
@@ -84,7 +94,8 @@ export type PageEditorProps = {
 type ScreenProps = PageEditorProps & {
   shared: boolean | null;
   setShared: (shared: boolean) => void;
-  reopen: (page: RestoredPage) => void;
+  /** 版に戻したページで開き直す（言語は版に戻しても変わらないので、今の画面の言語を持っていく）。 */
+  reopen: (page: RestoredPage, lang: PageLang) => void;
 };
 
 const noSubscription = () => () => undefined;
@@ -102,7 +113,7 @@ function loadDraft(editor: Editor, draft: PageDraft): boolean {
  * ページのエディタ（中身は下の EditorScreen）。「…」の「履歴」で版に戻したら、サーバーが返した戻したあとのページ
  * （題名・本文・revision）でエディタを開き直す（key を替えて作り直す。保存・下書き・Undo の部品も新しくなり、
  * 次の保存の `baseRevision` は戻したあとの revision から始まる。開いたときと同じく端末の下書きとも比べる）。
- * 共有の状態（「共有中」の印）は開き直しても持ち越す。
+ * 共有の状態（「共有中」の印）と言語（版に戻しても変わらない）は開き直しても持ち越す。
  */
 export function PageEditor(props: PageEditorProps) {
   const [reopened, setReopened] = useState<{ count: number; page: EditablePage } | null>(null);
@@ -113,9 +124,9 @@ export function PageEditor(props: PageEditorProps) {
   useEffect(() => {
     savedRef.current = props.onSaved;
   });
-  const reopen = useCallback((restored: RestoredPage) => {
+  const reopen = useCallback((restored: RestoredPage, lang: PageLang) => {
     const { id, title, blocks, revision, updatedAt } = restored;
-    setReopened((current) => ({ count: (current?.count ?? 0) + 1, page: { id, title, blocks, revision, updatedAt } }));
+    setReopened((current) => ({ count: (current?.count ?? 0) + 1, page: { id, title, blocks, revision, updatedAt, lang } }));
     // 戻した（サーバーの更新時刻が進んだ）。一覧の上へ動かす
     savedRef.current?.();
   }, []);
@@ -160,11 +171,19 @@ export function PageEditor(props: PageEditorProps) {
  *
  * AI の箱（src/components/AiBox.tsx）は、選んだ文字の上の「AI」（選んだ範囲）とページの上の「AI」（ページ全体）から開く。
  * 頼む前に未保存の入力を保存し終え、採用の結果は本文を差し替えて revision を進める（自動保存は起こさない。src/lib/ai-bridge.ts）。
+ *
+ * 言語（情報パネル。枠の `attachPage` の `setLang`）も同じ自動保存・下書きに載せる（別の PATCH を撃たない。revision・
+ * 競合の判定・端末の下書きは題名・本文と同じ）。変えたら 1 秒を待たずに送り、届かなければサーバーが持っている言語に戻して
+ * 一言出す（戻した言語も同じ保存に載せる。届いたか分からない失敗のあとでも、サーバーを画面の言語に揃えるため）。
+ * 「この内容で上書き」は、競合の相手と言語が違えば画面の言語も送る。
  */
 function EditorScreen(props: ScreenProps) {
   const { page, shared, setShared, reopen } = props;
   const { attachPage } = useEditorFrame();
+  const initialLang = page.lang ?? DEFAULT_PAGE_LANG;
   const [title, setTitle] = useState(page.title);
+  const [lang, setLang] = useState<PageLang>(initialLang);
+  const [langNote, setLangNote] = useState<string | null>(null);
   const [state, setState] = useState<SaveState>("saved");
   // 保存先のページの id（新しいページは最初の保存で作ったときに決まる）
   const [pageId, setPageId] = useState<string | null>(page.id);
@@ -182,6 +201,13 @@ function EditorScreen(props: ScreenProps) {
 
   const initialRef = useRef(page);
   const titleRef = useRef(page.title);
+  const langRef = useRef(initialLang);
+  // 言語の変更の番号（後から別の言語を選んだら、前の変更の結果では戻さない）
+  const langChangeRef = useRef(0);
+  // 保存の部品が生きているか（画面を離れたあとに、言語の結果で状態を変えない）
+  const aliveRef = useRef(false);
+  // 本文が変わったことを知らせる先（情報パネルの文字数）
+  const [textListeners] = useState(() => new Set<() => void>());
   const readyRef = useRef(ready);
   const unreadableRef = useRef(false);
   const composingRef = useRef(false);
@@ -223,7 +249,7 @@ function EditorScreen(props: ScreenProps) {
     const saver = createPageSaver({
       pageId: initial.id,
       revision: initial.revision ?? UNCREATED_REVISION,
-      content: { title: initial.title, blocks: initial.blocks },
+      content: { title: initial.title, blocks: initial.blocks, lang: initial.lang ?? DEFAULT_PAGE_LANG },
       onCreated: (created) => {
         setPageId(created.id);
         eventsRef.current.onCreated?.(created.id);
@@ -257,6 +283,7 @@ function EditorScreen(props: ScreenProps) {
           baseRevision: saver.revision,
           title: titleRef.current,
           blocks: editorRef.current?.getJSON().content ?? initial.blocks,
+          lang: langRef.current,
         }),
         onResult: (ok) => setDraftsKept(ok),
       });
@@ -265,6 +292,7 @@ function EditorScreen(props: ScreenProps) {
     autosaveRef.current = autosave;
     keeperRef.current = keeper;
     const unregisterSaveNow = eventsRef.current.registerSaveNow?.(() => autosave.saveNow());
+    aliveRef.current = true;
 
     // タブを閉じる・隠れる瞬間。下書きの書き込みを先に起こし（終わりを待たない）、保存を keepalive で試す。
     // どちらも完了の保証は無い。閉じたあとに届かなかった分は、次に開いたときに下書きから戻す。
@@ -287,6 +315,7 @@ function EditorScreen(props: ScreenProps) {
     window.addEventListener("keydown", onKeyDown);
     return () => {
       unregisterSaveNow?.();
+      aliveRef.current = false;
       window.removeEventListener("pagehide", hide);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("keydown", onKeyDown);
@@ -319,12 +348,14 @@ function EditorScreen(props: ScreenProps) {
       // 入力のたびに本文を JSON にしない（送る・端末に書く直前にだけ getJSON する）
       autosaveRef.current?.change({ blocks: () => current.getJSON().content ?? [] });
       keeperRef.current?.touch();
+      textListeners.forEach((listener) => listener());
     },
   });
 
   useEffect(() => {
     editorRef.current = editor;
-  }, [editor]);
+    textListeners.forEach((listener) => listener());
+  }, [editor, textListeners]);
 
   // 開いたとき: 端末の下書きを読み、サーバーのページと比べる
   useEffect(() => {
@@ -356,7 +387,8 @@ function EditorScreen(props: ScreenProps) {
         return;
       }
       // 新しいページは、空のページ（作る前の revision）と比べる
-      const decision = decideRestore(result.draft, { title: initial.title, blocks: initial.blocks, revision: initial.revision ?? UNCREATED_REVISION });
+      const openedLang = initial.lang ?? DEFAULT_PAGE_LANG;
+      const decision = decideRestore(result.draft, { title: initial.title, blocks: initial.blocks, revision: initial.revision ?? UNCREATED_REVISION, lang: openedLang });
       if (result.draft) keeper?.adopt(result.draft);
       if (decision.action === "discard") {
         keeper?.discard();
@@ -368,19 +400,25 @@ function EditorScreen(props: ScreenProps) {
           finish();
           return;
         }
+        textListeners.forEach((listener) => listener());
         titleRef.current = draft.title;
         setTitle(draft.title);
         eventsRef.current.onTitleChange?.(draft.title);
+        // 下書きの言語（言語を持つ前の下書きなら、読み込んだときの言語のまま）。違うときだけ保存に載せる
+        const draftLang = draft.lang ?? openedLang;
+        langRef.current = draftLang;
+        setLang(draftLang);
+        const langPatch = draftLang !== openedLang ? { lang: draftLang } : {};
         const blocks = () => editor.getJSON().content ?? [];
         if (decision.action === "load" || initial.id === null) {
           // 届いていなかった下書きを保存し直す（新しいページは、比べるサーバーのページが無いので、下書きでページを作る）
-          autosave.change({ title: draft.title, blocks });
+          autosave.change({ title: draft.title, blocks, ...langPatch });
         } else {
           // サーバーが先へ進んでいる: 自分の本文（下書き）を出したまま、自動保存を止めて帯を出す
           saver.rebase(draft.baseRevision);
           autosave.stop();
-          autosave.change({ title: draft.title, blocks });
-          setConflict({ title: initial.title, blocks: initial.blocks, revision: initial.revision, updatedAt: initial.updatedAt });
+          autosave.change({ title: draft.title, blocks, ...langPatch });
+          setConflict({ title: initial.title, blocks: initial.blocks, revision: initial.revision, updatedAt: initial.updatedAt, lang: openedLang });
         }
       }
       finish();
@@ -388,13 +426,13 @@ function EditorScreen(props: ScreenProps) {
     return () => {
       cancelled = true;
     };
-  }, [editor, storage]);
+  }, [editor, storage, textListeners]);
 
   useEffect(() => {
     if (editor) editor.setEditable(ready && !unreadable, false);
   }, [editor, ready, unreadable]);
 
-  // 枠のヘッダー（状態の丸と「…」）へ、このページを登録する。「…」の操作（共有・書き出し・履歴・複製・削除）は、この flush で
+  // 枠のヘッダー（状態の丸と「…」）と情報パネルへ、このページを登録する。「…」の操作（共有・書き出し・履歴・複製・削除）は、この flush で
   // まだ届いていない変更を先に保存し、届かなければ止める。下書きを読み終えるまでと、まだ作っていないページは id を渡さない
   // （「…」を出さない。読み終える前に操作すると、あとから載せる下書きが操作に入らないため）。画面を離れたら外す。
   // 版に戻すときは revision（今の本文がもとにしている revision）を送り、戻したら reopen でこの画面ごと開き直す
@@ -403,10 +441,62 @@ function EditorScreen(props: ScreenProps) {
     const saver = saverRef.current;
     return saver && saver.pageId !== null ? saver.revision : null;
   }, []);
+  // 版に戻して開き直すとき、言語は今の画面のものを持っていく（版に戻しても言語は変わらない）
+  const reopenHere = useCallback((restored: RestoredPage) => reopen(restored, langRef.current), [reopen]);
+
+  // 情報パネルの言語。題名・本文と同じ自動保存に載せて今送り、届かなければサーバーが持っている言語に戻す
+  const changeLang = useCallback(
+    (next: PageLang) => {
+      const autosave = autosaveRef.current;
+      const saver = saverRef.current;
+      if (!autosave || !saver || !aliveRef.current || !readyRef.current || next === langRef.current) return;
+      const previous = langRef.current;
+      langRef.current = next;
+      setLang(next);
+      setLangNote(null);
+      autosave.change({ lang: next });
+      keeperRef.current?.touch();
+      const change = ++langChangeRef.current;
+      void autosave.settle().then((state) => {
+        // 後から別の言語を選んだ（その結果に任せる）・画面を離れた
+        if (change !== langChangeRef.current || !aliveRef.current || autosaveRef.current !== autosave) return;
+        // settle は終わったときの保存の状態を返す（全て届いたら saved）
+        if (state === "saved") {
+          eventsRef.current.onLangChange?.(saver.content.lang ?? langRef.current);
+          return;
+        }
+        // 届かなかった（オフライン・ログイン切れ・競合・サーバーの失敗）。サーバーが持っている言語に戻し、それも同じ保存に載せる
+        // （届いたか分からない失敗でも、次に届いたときにサーバーを画面の言語に揃える）
+        const back = saver.content.lang ?? previous;
+        if (back === langRef.current) return;
+        langRef.current = back;
+        setLang(back);
+        setLangNote(LANG_NOT_SAVED);
+        autosave.change({ lang: back });
+        keeperRef.current?.touch();
+      });
+    },
+    [],
+  );
+
+  // 本文の文字（情報パネルの文字数。開いているあいだだけ読む）
+  const text = useMemo<PageText>(
+    () => ({
+      read: () => editorRef.current?.getText({ blockSeparator: "\n" }) ?? "",
+      subscribe: (onChange) => {
+        textListeners.add(onChange);
+        return () => {
+          textListeners.delete(onChange);
+        };
+      },
+    }),
+    [textListeners],
+  );
+
   const status = statusOf(state);
   useEffect(
-    () => attachPage({ id: ready ? pageId : null, status, flush, revision, reopen, shared, setShared }),
-    [attachPage, ready, pageId, status, flush, revision, reopen, shared, setShared],
+    () => attachPage({ id: ready ? pageId : null, status, flush, revision, reopen: reopenHere, shared, setShared, lang, setLang: changeLang, langNote, text }),
+    [attachPage, ready, pageId, status, flush, revision, reopenHere, shared, setShared, lang, changeLang, langNote, text],
   );
 
   const overwrite = () => {
@@ -415,9 +505,11 @@ function EditorScreen(props: ScreenProps) {
     const current = editorRef.current;
     if (!conflict || !saver || !autosave) return;
     saver.overwriteOnto(conflict);
-    // 題名と本文の全てを送る（題名だけの競合でも、見えている本文がそのまま保存される）
+    // 題名と本文の全てを送る（題名だけの競合でも、見えている本文がそのまま保存される）。
+    // 言語は、相手の言語が分かっていて画面の言語と違うときだけ送る（画面に出している言語で上書きする）
     autosave.change({
       title: titleRef.current,
+      ...(conflict.lang !== undefined && conflict.lang !== langRef.current ? { lang: langRef.current } : {}),
       ...(current && !unreadableRef.current ? { blocks: () => current.getJSON().content ?? [] } : {}),
     });
     autosave.resume();

@@ -217,6 +217,19 @@ async function findByKey(db: Queryable, owner: OwnerId, key: string, pageId: str
 }
 
 /**
+ * 同じ owner・uploadKey の資産が既にあるか（1 ページの枚数の上限の判定の前に、冪等な再送を見分けるために使う。何も書かない）。
+ * 無ければ null。ページと要求の内容（requestHash）が同じなら existing、違えば conflict（`startImageUpload` と同じ判定）。
+ */
+export async function findImageUploadByKey(
+  db: Queryable,
+  owner: OwnerId,
+  input: { uploadKey: string; pageId: string; requestHash: string },
+): Promise<StartImageUploadResult> {
+  assertOwner(owner);
+  return findByKey(db, owner, input.uploadKey.toLowerCase(), input.pageId.toLowerCase(), input.requestHash);
+}
+
+/**
  * 画像のアップロードを始める: 本人の・ゴミ箱でないページに assets の 1 行（kind = 'image'・upload_status = 'uploading'・
  * consent = false）を入れ、資産の id と object の場所を返す。1 文の INSERT … SELECT なので transaction は要らない。
  * 冪等: 同じ owner・同じ uploadKey の資産が既にあれば、ページと要求の内容（requestHash）が同じなら何も書かずにそれを返し
