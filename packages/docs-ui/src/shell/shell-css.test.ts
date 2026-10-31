@@ -201,6 +201,19 @@ describe("shell.css（モック v6 の枠のスタイル）", () => {
     expect(inside('.es-root[data-rail="open"] .es-mtb')).toContain("display:none");
     expect(bodyOf(".es-mtb")).toContain("display:none");
   });
+
+  it("900px 未満: レールのシート（.es-sheet--rail）は背の高い下からのシートで、中のレールは全画面の位置取りをやめて残りの高さを使う（#43）", () => {
+    const media = root.nodes.find((node): node is AtRule => node.type === "atrule" && node.name === "media" && node.params === "(max-width:900px)")!;
+    const inside = (selector: string) => {
+      const rule = media.nodes?.find((node): node is Rule => node.type === "rule" && node.selectors.includes(`${PREFIX}.es-root ${selector}`));
+      return rule?.nodes.filter((n): n is Declaration => n.type === "decl").map((n) => `${n.prop}:${n.value}`).join(";") ?? "";
+    };
+    expect(inside(".es-sheet--rail")).toContain("height:calc(100% - 24px)");
+    expect(inside(".es-sheet--rail>.es-rail")).toContain("position:static");
+    expect(inside(".es-sheet--rail>.es-rail")).toContain("flex:1");
+    // シートはデスクトップでは出さない（JS の matchMedia と同じ境目の中だけに書く）
+    expect(selectors.filter((selector) => selector.includes("es-sheet--rail") && !media.nodes?.some((node) => node.type === "rule" && (node as Rule).selectors.includes(selector)))).toEqual([]);
+  });
 });
 
 describe("文字の最小は 12px（#43）", () => {
