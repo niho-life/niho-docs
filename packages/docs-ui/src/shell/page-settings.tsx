@@ -19,12 +19,21 @@ export type ShellPageSettingsProps = {
   related?: { items: { id: string; title: string; by: string }[]; max?: number; onRemove?: (id: string) => void; onAdd?: () => void };
   lang: ShellLang;
   onLang?: (lang: ShellLang) => void;
+  /** 言語の下に出す短い一言（変えられなかったときなど）。無ければ出さない。 */
+  langNote?: string;
+  /** 著者。title（肩書）が空なら肩書の行を出さない。 */
   author: { name: string; title: string; initial: string };
   info: { label: string; value: string }[];
+  /** 書き出し: Markdown を押した。 */
+  onExportMarkdown?: () => void;
+  /** 書き出し: Google ドキュメントを押した。渡さなければ Google ドキュメントのボタンを出さない。 */
+  onExportGoogle?: () => void;
+  /** 「ページを削除」を押した（確認は呼ぶ側）。渡さなければ削除の行を出さない。 */
+  onDelete?: () => void;
 };
 
 /** 右のレールの「ページ設定」の中身。上のバーが状態を言うので、ここは「どこに・何が足りないか」だけを置く。 */
-export function ShellPageSettings({ destination, category, related, lang, onLang, author, info }: ShellPageSettingsProps) {
+export function ShellPageSettings({ destination, category, related, lang, onLang, langNote, author, info, onExportMarkdown, onExportGoogle, onDelete }: ShellPageSettingsProps) {
   return (
     <div className="es-ps">
       {destination && (
@@ -109,6 +118,11 @@ export function ShellPageSettings({ destination, category, related, lang, onLang
             English
           </button>
         </div>
+        {langNote && (
+          <p role="alert" className="es-upnote">
+            {langNote}
+          </p>
+        )}
       </section>
       <section>
         <h3>著者</h3>
@@ -118,7 +132,7 @@ export function ShellPageSettings({ destination, category, related, lang, onLang
           </span>
           <div>
             {author.name}
-            <small>{author.title}</small>
+            {author.title && <small>{author.title}</small>}
           </div>
         </div>
       </section>
@@ -135,15 +149,25 @@ export function ShellPageSettings({ destination, category, related, lang, onLang
       </section>
       <section>
         <h3>書き出し</h3>
-        <button type="button" className="es-linkrow">
+        <button type="button" className="es-linkrow" onClick={onExportMarkdown}>
           <Icon name="doc" />
           Markdown
         </button>
-        <button type="button" className="es-linkrow">
-          <Icon name="ext" />
-          Google ドキュメント
-        </button>
+        {onExportGoogle && (
+          <button type="button" className="es-linkrow" onClick={onExportGoogle}>
+            <Icon name="ext" />
+            Google ドキュメント
+          </button>
+        )}
       </section>
+      {onDelete && (
+        <section>
+          <button type="button" className="es-linkrow es-danger" onClick={onDelete}>
+            <Icon name="trash" />
+            ページを削除
+          </button>
+        </section>
+      )}
     </div>
   );
 }

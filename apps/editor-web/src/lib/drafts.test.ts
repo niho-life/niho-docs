@@ -85,6 +85,26 @@ describe("createIndexedDbDraftStorage", () => {
     expect(await storage.get(PAGE_ID)).toBeNull();
   });
 
+  it("keeps the page's language with the draft, and drops a language it cannot read without losing the title and body", async () => {
+    const factory = new IDBFactory();
+    const storage = createIndexedDbDraftStorage(factory)!;
+    await storage.put(PAGE_ID, { ...draftOf("題", "本文"), lang: "en" });
+    expect(await storage.get(PAGE_ID)).toEqual({ ...draftOf("題", "本文"), lang: "en" });
+    await new Promise<void>((resolve, reject) => {
+      const open = factory.open(DRAFT_DB_NAME);
+      open.onsuccess = () => {
+        const transaction = open.result.transaction(DRAFT_STORE, "readwrite");
+        transaction.objectStore(DRAFT_STORE).put({ ...draftOf("題", "本文"), lang: "fr" }, PAGE_ID);
+        transaction.oncomplete = () => {
+          open.result.close();
+          resolve();
+        };
+        transaction.onabort = () => reject(transaction.error);
+      };
+    });
+    expect(await storage.get(PAGE_ID)).toEqual(draftOf("題", "本文"));
+  });
+
   it("is null without IndexedDB, and rejects (does not throw) when IndexedDB cannot open", async () => {
     expect(createIndexedDbDraftStorage(undefined)).toBeNull();
     const broken = createIndexedDbDraftStorage({
@@ -105,6 +125,15 @@ describe("decideRestore", () => {
     expect(decideRestore(draftOf("題", "サーバー", 2), server)).toEqual({ action: "discard" });
     expect(decideRestore(draftOf("題", "下書き", 3), server)).toEqual({ action: "load", draft: draftOf("題", "下書き", 3) });
     expect(decideRestore(draftOf("題", "下書き", 2), server)).toEqual({ action: "conflict", draft: draftOf("題", "下書き", 2) });
+  });
+
+  it("compares the language too: a draft that only changed the language is loaded (or conflicts), an old draft without one is compared by title and body", () => {
+    const withLang = { ...server, lang: "ja" as const };
+    const english = { ...draftOf("題", "サーバー", 3), lang: "en" as const };
+    expect(decideRestore(english, withLang)).toEqual({ action: "load", draft: english });
+    expect(decideRestore({ ...english, baseRevision: 2 }, withLang)).toEqual({ action: "conflict", draft: { ...english, baseRevision: 2 } });
+    expect(decideRestore({ ...english, lang: "ja" }, withLang)).toEqual({ action: "discard" });
+    expect(decideRestore(draftOf("題", "サーバー", 3), withLang)).toEqual({ action: "discard" });
   });
 
   it("loads a new page's draft against the empty page, and drops an empty one", () => {

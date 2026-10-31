@@ -61,6 +61,12 @@ export type PageMenu = {
   more: ShellHeaderProps["more"];
   note: string | null;
   confirm: { busy: boolean; error: string | null; onConfirm: () => void; onCancel: () => void } | null;
+  /**
+   * 情報パネルの「書き出し（Markdown）」と「ページを削除」。「…」の書き出し・削除と同じ動き（保存してから書き出す・確認してから削除）。
+   * フォーカスは押したボタンに残す（削除の確認を閉じたら、押したボタンへ戻る）。「…」を出さないページでは何もしない。
+   */
+  exportMarkdown: () => void;
+  askDelete: () => void;
 };
 
 /** 同じ origin の `<a href download>` を押す（本文は fetch で読まない。ファイル名は応答の Content-Disposition）。 */
@@ -125,10 +131,11 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
     }
   };
 
-  const select = (item: string) => {
+  /** 項目を行う。「…」から選んだときは「…」へフォーカスを戻す（情報パネルから押したときは、押したボタンに残す）。 */
+  const perform = (item: string, refocus: boolean) => {
     if (!owner) return;
     const target = owner;
-    latest.current.focusMore();
+    if (refocus) latest.current.focusMore();
     if (item === "delete") {
       update(target, (current) => ({ ...current, open: false, note: null, confirm: { busy: false, error: null } }));
       return;
@@ -190,9 +197,11 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
           items: pageMenuItems(options.page?.shared ?? null),
           onToggle: () => update(owner, (current) => ({ ...current, open: !current.open, note: current.open ? current.note : null })),
           onClose: () => update(owner, (current) => ({ ...current, open: false })),
-          onSelect: select,
+          onSelect: (item) => perform(item, true),
         }
       : undefined,
+    exportMarkdown: () => perform("export", false),
+    askDelete: () => perform("delete", false),
     note: view?.note ?? null,
     confirm:
       owner && view?.confirm

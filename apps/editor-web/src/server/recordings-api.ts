@@ -180,6 +180,23 @@ export function getRecordingRoute(request: Request, id: string, deps: Recordings
   });
 }
 
+/**
+ * 録音ページを開くとき（`/p/{id}` の RSC）に、情報パネルの「録音」の長さ（秒）だけを読む。段落・話者名は画面へ渡さない。
+ * 録音が無い・長さが分からない（0 以下を含む）・DB を使えない・読めなかったときは null（「録音」の行を出さない。ページは開く）。
+ */
+export async function readRecordingSeconds(store: Pick<RecordingsStore, "getRecording"> | null, owner: OwnerId, pageId: string): Promise<number | null> {
+  if (!store) return null;
+  try {
+    const recording = await store.getRecording(owner, pageId);
+    const seconds = recording?.durationSec;
+    return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+  } catch (error) {
+    // 値（本文・SQL）は出さない
+    console.error("editor-web: recording length read failed", { name: error instanceof Error ? error.name : "unknown" });
+    return null;
+  }
+}
+
 type Patch = { baseRevision: number; mutate: RecordingMutation<RecordingMutationRejection> };
 
 const PATCH_OPERATIONS = ["edits", "renameSpeaker", "mergeSpeakers"] as const;

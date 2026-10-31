@@ -25,16 +25,29 @@ export function HomeRedirect({ lastPageId }: { lastPageId: string | null }) {
 /**
  * `/p/{id}`。最後に開いたページとして覚え、題名と保存を一覧へ知らせる。revision は読み込んだときの値（保存の `baseRevision`）、
  * 更新時刻は開いたときに端末の下書きと競合したら帯に出す値。shared はリンクで共有しているか（サーバーが読んだ値。読めなければ null。
- * 「…」の「共有中」の印だけに使い、リンクそのものは渡さない）。
+ * 「…」の「共有中」の印だけに使い、リンクそのものは渡さない）。recordingSec は録音ページの録音の長さ（秒。情報パネルに出す。
+ * 録音ページでない・読めなければ null）。情報パネルで言語を変えて保存したら、一覧の言語も替える。
  */
-export function OpenPage({ summary, blocks, revision, shared = null }: { summary: PageSummary; blocks: unknown[]; revision: number; shared?: boolean | null }) {
+export function OpenPage({
+  summary,
+  blocks,
+  revision,
+  shared = null,
+  recordingSec = null,
+}: {
+  summary: PageSummary;
+  blocks: unknown[];
+  revision: number;
+  shared?: boolean | null;
+  recordingSec?: number | null;
+}) {
   const frame = useEditorFrame();
   const { pageOpened } = frame;
   const { id } = summary;
   useEffect(() => {
     rememberLastPage(summary.id);
-    pageOpened(summary);
-  }, [summary, pageOpened]);
+    pageOpened(summary, { recordingSec });
+  }, [summary, recordingSec, pageOpened]);
   const editor = (
     <PageEditor
       page={{ id, title: summary.title, blocks, revision, updatedAt: summary.updatedAt, kind: summary.kind, lang: summary.lang }}
@@ -42,6 +55,7 @@ export function OpenPage({ summary, blocks, revision, shared = null }: { summary
       onTitleChange={(value) => frame.pageTitleChanged(id, value)}
       onSaved={() => frame.pageSaved(id)}
       registerSaveNow={frame.registerPageSaver}
+      onLangChange={(lang) => frame.pageLangChanged(id, lang)}
     />
   );
   // 録音ページは、文字起こしの録音ブロックが本文の上に入る（設計 §7.1）
@@ -110,6 +124,9 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
         if (createdRef.current) frame.pageSaved(createdRef.current);
       }}
       registerSaveNow={frame.registerPageSaver}
+      onLangChange={(lang) => {
+        if (createdRef.current) frame.pageLangChanged(createdRef.current, lang);
+      }}
     />
   );
 }
