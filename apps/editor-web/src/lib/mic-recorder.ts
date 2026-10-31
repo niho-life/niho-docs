@@ -249,7 +249,11 @@ export class MicRecorder {
     this.phase = "stopped";
     const file = new File(this.chunks, name, { type: type || "audio/webm" });
     this.chunks = [];
-    const recording: MicRecording = { file, durationSec: Math.max(0, this.stoppedAt - this.startedAt) / 1000, mimeType: type || "audio/webm" };
+    // 自動停止のタイマーが遅れて動くと、実際の経過が上限をわずかに超える。そのまま渡すと取り込みの事前検査（too_long）で
+    // 断られ、再試行も同じ値で断られ続けて取り込めなくなる。録音の長さの申告は、この録音の上限を超えない値にする。
+    const limitSec = (this.options.maxDurationMs ?? MIC_MAX_DURATION_MS) / 1000;
+    const elapsedSec = Math.max(0, this.stoppedAt - this.startedAt) / 1000;
+    const recording: MicRecording = { file, durationSec: Math.min(elapsedSec, limitSec), mimeType: type || "audio/webm" };
     if (pending) pending.resolve(recording);
     else this.options.onAutoStop?.(recording);
   }

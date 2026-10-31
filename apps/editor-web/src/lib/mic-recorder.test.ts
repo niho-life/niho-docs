@@ -201,6 +201,30 @@ describe("MicRecorder", () => {
     expect(MIC_MAX_DURATION_MS).toBe(6 * 60 * 60 * 1000);
   });
 
+  it("keeps the reported length within the limit when the auto-stop timer fires late", async () => {
+    const onAutoStop = vi.fn();
+    const { env } = environment();
+    const recorder = new MicRecorder(env, { onAutoStop });
+    await recorder.start();
+    vi.advanceTimersByTime(MIC_MAX_DURATION_MS - 1);
+    // タイマーが遅れて動いた（その間に時計が 3 秒進んだ）ときも、申告する長さは上限を超えない（超えると取り込みが too_long で断られ続ける）
+    vi.setSystemTime(Date.now() + 3000);
+    vi.advanceTimersByTime(1);
+    expect(onAutoStop).toHaveBeenCalledTimes(1);
+    expect(onAutoStop.mock.calls[0]![0].durationSec).toBe(6 * 60 * 60);
+  });
+
+  it("does not shorten a recording that ends before the limit", async () => {
+    const onAutoStop = vi.fn();
+    const { env, instances } = environment();
+    const recorder = new MicRecorder(env, { onAutoStop });
+    await recorder.start();
+    vi.advanceTimersByTime(90_500);
+    instances[0]!.emit([1]);
+    const recording = await recorder.stop();
+    expect(recording.durationSec).toBe(90.5);
+  });
+
   it("stops when the microphone goes away, keeping what was recorded", async () => {
     const onAutoStop = vi.fn();
     const { env, streams, instances } = environment();
