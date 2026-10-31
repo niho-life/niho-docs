@@ -21,6 +21,35 @@ load_deploy_env() {
     [[ -n "${!name:-}" ]] || die "$name is not set in $DEPLOY_ENV"
   done
   APP_DOMAIN="${APP_DOMAIN:-}"
+  # Login (#47, docs/ops/editor-deploy.md §13). The default is niho (fail-closed until niho-app #19459 ships the contract).
+  # google is the temporary way in: Google's sign-in plus an allowlist of addresses. stub never reaches production
+  # (the app exits before it opens the port), so the only values accepted here are niho and google.
+  EDITOR_AUTH_MODE="${EDITOR_AUTH_MODE:-niho}"
+  [[ "$EDITOR_AUTH_MODE" == niho || "$EDITOR_AUTH_MODE" == google ]] \
+    || die "EDITOR_AUTH_MODE must be niho or google in $DEPLOY_ENV (stub is for development and CI only)"
+  GOOGLE_OAUTH_CLIENT_ID="${GOOGLE_OAUTH_CLIENT_ID:-}"
+  GOOGLE_ALLOWED_EMAILS="${GOOGLE_ALLOWED_EMAILS:-}"
+  # The allowlist is one variable holding a comma-separated list, and gcloud splits --set-env-vars on commas, so with
+  # google the whole flag uses gcloud's own escaped-list form (^|^A=1|B=2). '|' appears in none of the values, and the
+  # checks below refuse anything that could carry one in.
+  ENV_SEP=","
+  ENV_PREFIX=""
+  if [[ "$EDITOR_AUTH_MODE" == google ]]; then
+    ENV_SEP="|"
+    ENV_PREFIX="^|^"
+    [[ -n "$GOOGLE_OAUTH_CLIENT_ID" ]] || die "GOOGLE_OAUTH_CLIENT_ID is not set in $DEPLOY_ENV (required by EDITOR_AUTH_MODE=google)"
+    # An empty allowlist lets nobody in, and the app refuses to start with it: stop here instead of deploying that.
+    [[ -n "$GOOGLE_ALLOWED_EMAILS" ]] \
+      || die "GOOGLE_ALLOWED_EMAILS is not set in $DEPLOY_ENV (required by EDITOR_AUTH_MODE=google: an empty list lets nobody in)"
+    [[ "$GOOGLE_OAUTH_CLIENT_ID" =~ ^[A-Za-z0-9._-]{1,200}$ ]] || die "GOOGLE_OAUTH_CLIENT_ID in $DEPLOY_ENV is not an OAuth client id"
+    # One or more addresses separated by commas, nothing else (no spaces, no '=', no '|': they would change the flag).
+    [[ "$GOOGLE_ALLOWED_EMAILS" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+(,[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+)*$ ]] \
+      || die "GOOGLE_ALLOWED_EMAILS in $DEPLOY_ENV must be one or more addresses separated by commas, with no spaces"
+    # The app sends https://<origin>/auth/callback, and Google only accepts a redirect URI registered on the client.
+    # Without APP_DOMAIN the origin would be the run.app URL, which is not the registered one, so stop here (§13).
+    [[ -n "${APP_DOMAIN:-}" ]] \
+      || die "APP_DOMAIN is not set in $DEPLOY_ENV (EDITOR_AUTH_MODE=google sends https://<APP_DOMAIN>/auth/callback, which must be the redirect URI registered on the OAuth client)"
+  fi
   # AI (#38). Optional: the model and the monthly limit per person (estimated USD). The key itself is a secret (set-ai-key.sh).
   AI_MODEL="${AI_MODEL:-claude-sonnet-5-5}"
   AI_MONTHLY_LIMIT_USD="${AI_MONTHLY_LIMIT_USD:-10}"
@@ -65,6 +94,8 @@ load_deploy_env() {
   SECRET_MIGRATE_DATABASE_URL=niho-editor-migrate-database-url
   SECRET_ANTHROPIC_KEY=niho-editor-anthropic-key
   SECRET_DEEPGRAM_KEY=niho-editor-deepgram-key
+  # The OAuth client secret of the Google sign-in (#47 google). The owner adds the version with set-google-oauth-secret.sh.
+  SECRET_GOOGLE_OAUTH=niho-editor-google-oauth-secret
 }
 
 # GCLOUD replaces the binary in the dry-run checks (scripts/editor-deploy/steps-infra.test.sh); the default is gcloud.
@@ -95,6 +126,10 @@ newest_version_enabled() {
   [[ "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')" == enabled ]]
 }
 ai_key_ready() { newest_version_enabled "$SECRET_ANTHROPIC_KEY"; }
+# The Google sign-in (#47 google) needs the OAuth client secret under the same rule: without an enabled newest version the
+# service still starts, but nobody can log in (the login screen says it is unavailable), so deploy.sh only attaches it
+# when it is there. The owner adds it with set-google-oauth-secret.sh.
+google_oauth_secret_ready() { newest_version_enabled "$SECRET_GOOGLE_OAUTH"; }
 # An API key in the shape the transcription engine accepts: printable ASCII without spaces, 1..512 characters
 # (API_KEY in apps/editor-web/src/transcription/config.ts). `[!-~]` is that range (0x21-0x7e).
 # The length is checked apart from the regex on purpose: bash refuses a repetition count above 255, so writing
@@ -108,25 +143,35 @@ transcribe_key_ready() { newest_version_enabled "$SECRET_DEEPGRAM_KEY"; }
 # 0 = no) and never call gcloud for them, so lib-test.sh checks them without GCP.
 
 # Secrets of the web service. `--set-secrets` replaces the whole list on every deploy: the database URL is always in it.
+# $3 is the Google sign-in switch (1 = google_oauth_secret_ready said yes).
 service_secrets() {
   local secrets="DATABASE_URL=$SECRET_DATABASE_URL:latest"
   if [[ "${1:-0}" == 1 ]]; then secrets+=",ANTHROPIC_API_KEY=$SECRET_ANTHROPIC_KEY:latest"; fi
   if [[ "${2:-0}" == 1 ]]; then secrets+=",DEEPGRAM_API_KEY=$SECRET_DEEPGRAM_KEY:latest"; fi
+  if [[ "${3:-0}" == 1 ]]; then secrets+=",GOOGLE_OAUTH_CLIENT_SECRET=$SECRET_GOOGLE_OAUTH:latest"; fi
   printf '%s' "$secrets"
 }
 
-# Environment of the web service (`--set-env-vars` also replaces the whole list). Auth is always `niho`: the app refuses to
-# start in production otherwise.
+# Environment of the web service (`--set-env-vars` also replaces the whole list). The login is EDITOR_AUTH_MODE from
+# deploy.env (niho by default; google adds the client id and the allowlist). stub never gets here: the app refuses to
+# start with it in production. With google the list is joined with '|' behind gcloud's ^|^ marker, because the allowlist
+# itself holds commas (see load_deploy_env).
 service_env_vars() {
   # EDITOR_STORAGE is always gcs here: unset means `off` in production (src/storage/config.ts), which answers 503 for
   # every image and audio request. The bucket goes with it, and the runner may only create and read objects in it.
-  printf 'EDITOR_AUTH_MODE=niho,EDITOR_ORIGIN=%s,EDITOR_STORAGE=gcs,EDITOR_ASSETS_BUCKET=%s' "$(app_origin)" "$ASSETS_BUCKET"
+  printf '%sEDITOR_AUTH_MODE=%s%sEDITOR_ORIGIN=%s%sEDITOR_STORAGE=gcs%sEDITOR_ASSETS_BUCKET=%s' \
+    "$ENV_PREFIX" "$EDITOR_AUTH_MODE" "$ENV_SEP" "$(app_origin)" "$ENV_SEP" "$ENV_SEP" "$ASSETS_BUCKET"
+  if [[ "$EDITOR_AUTH_MODE" == google ]]; then
+    printf '%sEDITOR_GOOGLE_CLIENT_ID=%s%sEDITOR_GOOGLE_ALLOWED_EMAILS=%s' \
+      "$ENV_SEP" "$GOOGLE_OAUTH_CLIENT_ID" "$ENV_SEP" "$GOOGLE_ALLOWED_EMAILS"
+  fi
   if [[ "${1:-0}" == 1 ]]; then
-    printf ',EDITOR_AI_MODE=anthropic,EDITOR_AI_MODEL=%s,EDITOR_AI_MONTHLY_LIMIT_USD=%s' "$AI_MODEL" "$AI_MONTHLY_LIMIT_USD"
+    printf '%sEDITOR_AI_MODE=anthropic%sEDITOR_AI_MODEL=%s%sEDITOR_AI_MONTHLY_LIMIT_USD=%s' \
+      "$ENV_SEP" "$ENV_SEP" "$AI_MODEL" "$ENV_SEP" "$AI_MONTHLY_LIMIT_USD"
   fi
   if [[ "${2:-0}" == 1 ]]; then
-    printf ',EDITOR_TRANSCRIBE_ENGINE=deepgram'
-    if [[ -n "$TRANSCRIBE_TIMEOUT_SEC" ]]; then printf ',EDITOR_TRANSCRIBE_TIMEOUT_SEC=%s' "$TRANSCRIBE_TIMEOUT_SEC"; fi
+    printf '%sEDITOR_TRANSCRIBE_ENGINE=deepgram' "$ENV_SEP"
+    if [[ -n "$TRANSCRIBE_TIMEOUT_SEC" ]]; then printf '%sEDITOR_TRANSCRIBE_TIMEOUT_SEC=%s' "$ENV_SEP" "$TRANSCRIBE_TIMEOUT_SEC"; fi
   fi
 }
 
@@ -134,8 +179,8 @@ service_env_vars() {
 # Prints the extra env (with a leading comma) only when STEPS_MODE=cloud-tasks; otherwise nothing (the steps stay off).
 steps_env_vars() {
   [[ "$STEPS_MODE" == cloud-tasks ]] || return 0
-  printf ',EDITOR_STEPS_MODE=cloud-tasks,EDITOR_STEPS_QUEUE=projects/%s/locations/%s/queues/%s,EDITOR_STEPS_WORKER_URL=%s,EDITOR_STEPS_INVOKER_SA=%s' \
-    "$GCP_PROJECT" "$GCP_REGION" "$STEPS_QUEUE" "$(service_url "$SERVICE")" "$TASKS_SA_EMAIL"
+  printf '%sEDITOR_STEPS_MODE=cloud-tasks%sEDITOR_STEPS_QUEUE=projects/%s/locations/%s/queues/%s%sEDITOR_STEPS_WORKER_URL=%s%sEDITOR_STEPS_INVOKER_SA=%s' \
+    "$ENV_SEP" "$ENV_SEP" "$GCP_PROJECT" "$GCP_REGION" "$STEPS_QUEUE" "$ENV_SEP" "$(service_url "$SERVICE")" "$ENV_SEP" "$TASKS_SA_EMAIL"
 }
 
 # Transcription (#36): same shape as steps_env_vars, with the transcription's own queue and worker routes
@@ -143,8 +188,8 @@ steps_env_vars() {
 # production, so starting a transcription answers 503 (the VTT import, which needs neither engine nor dispatcher, still works).
 transcribe_env_vars() {
   [[ "$TRANSCRIBE_MODE" == cloud-tasks ]] || return 0
-  printf ',EDITOR_TRANSCRIBE_MODE=cloud-tasks,EDITOR_TRANSCRIBE_QUEUE=projects/%s/locations/%s/queues/%s,EDITOR_TRANSCRIBE_WORKER_URL=%s,EDITOR_TRANSCRIBE_INVOKER_SA=%s' \
-    "$GCP_PROJECT" "$GCP_REGION" "$TRANSCRIBE_QUEUE" "$(service_url "$SERVICE")" "$TASKS_SA_EMAIL"
+  printf '%sEDITOR_TRANSCRIBE_MODE=cloud-tasks%sEDITOR_TRANSCRIBE_QUEUE=projects/%s/locations/%s/queues/%s%sEDITOR_TRANSCRIBE_WORKER_URL=%s%sEDITOR_TRANSCRIBE_INVOKER_SA=%s' \
+    "$ENV_SEP" "$ENV_SEP" "$GCP_PROJECT" "$GCP_REGION" "$TRANSCRIBE_QUEUE" "$ENV_SEP" "$(service_url "$SERVICE")" "$ENV_SEP" "$TASKS_SA_EMAIL"
 }
 
 # Cloud Run's limit on one request. A whole transcription runs inside one request of the worker route, so the limit has to

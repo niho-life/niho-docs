@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { LoginView } from "@/components/LoginView";
-import { safeReturnTo } from "@/auth/return-to";
+import { loginErrorOf, safeReturnTo } from "@/auth/return-to";
 import { currentSession } from "@/server/session";
 
 export const dynamic = "force-dynamic";
@@ -15,5 +15,5 @@ export default async function LoginPage(props: { searchParams: Promise<SearchPar
   const { next, error } = await props.searchParams;
   const returnTo = safeReturnTo(typeof next === "string" ? next : null);
   if (await currentSession()) redirect(returnTo);
-  return <LoginView next={returnTo === "/" ? null : returnTo} failed={error === "unavailable"} />;
+  return <LoginView next={returnTo === "/" ? null : returnTo} error={loginErrorOf(error)} />;
 }
