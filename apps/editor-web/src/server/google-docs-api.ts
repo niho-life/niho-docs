@@ -3,6 +3,7 @@ import type { AuthProvider, Session } from "../auth/types";
 import { exportMarkdown } from "../export/markdown";
 import {
   checkExportRequest,
+  googleDocTitle,
   GoogleDocsError,
   isExportId,
   type GoogleDocsCredential,
@@ -161,7 +162,8 @@ function exportResponse(result: GoogleDocsExport): Response {
 
 /**
  * ページ 1 つを Google ドキュメントへ書き出す（同じ origin だけ）。本文はここで作る。
- * 本文が空（書き出せるブロックが無い）ときは 413 `invalid_export` ではなく 400（送る前に分かる誤り）。
+ * 本文が空（書き出せるブロックが無い）ときは 400、長すぎるときは 413（どちらも API を呼ばない）。
+ * 題名は API の上限（200）で切る（`googleDocTitle`。ページの題名は 500 文字まで入る）。
  */
 export function exportPageRoute(request: Request, id: string, deps: GoogleDocsApiDeps): Promise<Response> {
   return guarded("POST /api/pages/[id]/export/google-doc", async () => {
@@ -180,9 +182,11 @@ export function exportPageRoute(request: Request, id: string, deps: GoogleDocsAp
     if (!page) return notFoundResponse();
     // `:::note` を知らない読み手へ渡すので、箱は引用にする
     const markdown = exportMarkdown(page.blocks, { boxes: "quote" });
-    const title = page.title.trim() === "" ? "無題" : page.title.trim();
-    const exportRequest = { exportId: input.exportId, title, markdown };
-    if (checkExportRequest(exportRequest) !== "ok") return errorResponse(markdown === "" ? "bad_request" : "payload_too_large");
+    // 書き出せるブロックが無いページは、送る前に断る（API を呼ばない）
+    if (markdown === "") return errorResponse("bad_request");
+    // 題名はページの題名（API の上限で切る。断らない）
+    const exportRequest = { exportId: input.exportId, title: googleDocTitle(page.title), markdown };
+    if (checkExportRequest(exportRequest) !== "ok") return errorResponse("payload_too_large");
     try {
       return exportResponse(await state.gateway.export(state.credential, exportRequest));
     } catch (error) {

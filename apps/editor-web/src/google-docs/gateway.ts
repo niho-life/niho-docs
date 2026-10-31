@@ -101,6 +101,29 @@ function utf16Length(value: string): number {
   return value.length;
 }
 
+/**
+ * ページの題名を、API が受け取れる形にする。
+ *
+ * **ページの題名は 500 文字まで入る**（`src/lib/page-limits.ts` の `MAX_TITLE_CHARS`）のに、API の上限は 200（UTF-16）なので、
+ * 長い題名は**断らずに切る**（書き出せないほうが困る）。切るのは code point の境目で、サロゲートペアを割らない。
+ * 前後の空白は落とし、空（空白だけ）の題名は「無題」にする（画面の無題の表示と同じ）。
+ */
+export function googleDocTitle(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed === "") return UNTITLED;
+  if (utf16Length(trimmed) <= MAX_TITLE_UNITS) return trimmed;
+  let kept = "";
+  for (const character of trimmed) {
+    if (kept.length + character.length > MAX_TITLE_UNITS) break;
+    kept += character;
+  }
+  // 1 文字目が上限を超えることは無いが、後ろの守り
+  return kept.trimEnd() || UNTITLED;
+}
+
+/** 題名の無いページ（画面の表示と同じ言葉）。 */
+export const UNTITLED = "無題";
+
 /** 題名と本文が送れる形か（旧 Mac アプリの `docs_drive_export` と同じ判定）。 */
 export function checkExportRequest(request: GoogleDocsExportRequest): "ok" | "invalid_export" {
   if (!isExportId(request.exportId)) return "invalid_export";

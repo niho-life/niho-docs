@@ -196,11 +196,13 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
         report(target, (current) => ({ ...current, note: PAGE_MENU_TEXT.googleDocPending }));
         return;
       }
+      // 文書はできている。別のページへ移っていても、新しいタブで開く（結果を捨てない。複製と同じ考え）
       (latest.current.openDocument ?? openInNewTab)(result.url);
     } catch (error) {
       const code = error instanceof PageActionError ? error.code : null;
       if (code === "drive_not_connected" || code === "drive_reconnect_required") {
-        (latest.current.goToGoogleDocsConnect ?? visit)(googleDocsConnectPath(next));
+        // 移動は、まだ同じページを開いているときだけ（別のページを見ている人を連れて行かない）
+        if (isCurrent(target)) (latest.current.goToGoogleDocsConnect ?? visit)(googleDocsConnectPath(next));
         return;
       }
       report(target, (current) => ({ ...current, note: googleDocFailureText(error) }));

@@ -205,6 +205,31 @@ describe("書き出し", () => {
     expect(calls[0]).toContain(":無題:");
   });
 
+  /**
+   * ページの題名は 500 文字まで入る（`src/lib/page-limits.ts`）のに、API の上限は 200（UTF-16）。
+   * 長い題名のページを書き出せないのは困るので、断らずに切る。
+   */
+  it("長い題名は断らずに切る（サロゲートペアを割らない）", async () => {
+    const cases = [
+      { title: "あ".repeat(500), units: 200 },
+      // 絵文字は 1 文字で UTF-16 2 つ。201 にならないよう、割らずに 200 で止める
+      { title: "\u{1f600}".repeat(300), units: 200 },
+      // 199 units のあとに絵文字（2 units）が来たら、その絵文字は入れない
+      { title: `${"あ".repeat(199)}\u{1f600}\u{1f600}`, units: 199 },
+    ];
+    for (const { title, units } of cases) {
+      const row = pageRow("person", { title });
+      const { gateway, calls } = fakeGateway();
+      const response = await exportPageRoute(request("POST", "/x", { exportId: EXPORT_ID }), row.id, deps({ store: memoryStore([row]), gateway }));
+      expect(response.status).toBe(200);
+      const sent = calls[0]!.slice(`export:${EXPORT_ID}:`.length, -"## 見出し\n\n> 囲みの中\n".length - 1);
+      expect(sent.length, title.slice(0, 8)).toBe(units);
+      // 片方だけのサロゲートを残さない
+      expect(sent).toBe([...sent].join(""));
+      expect(/[\ud800-\udfff]/.test([...sent].filter((character) => character.length === 1).join(""))).toBe(false);
+    }
+  });
+
   it("書き出せるブロックが無いページは 400（API を呼ばない）", async () => {
     const row = pageRow("person", { blocks: [{ type: "image", attrs: { src: "https://example.test/a.png" } }] as unknown as Block[] });
     const { gateway, calls } = fakeGateway();
