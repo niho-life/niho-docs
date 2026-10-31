@@ -311,6 +311,24 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.equal(await countRuns(pool, pageId), 1);
   });
 
+  it("fails the run it just claimed when the audio lookup fails right after (it is not left running, so a restart is not blocked)", async () => {
+    const pageId = await uploadedRecording(pool);
+    const created = await enqueueTranscription(pool, OWNER, pageId, run());
+    assert.ok(created?.status === "created");
+    // claim の UPDATE は通り、そのあとの音声の問い合わせだけが失敗する
+    const flaky = {
+      query: ((sql: string, values?: unknown[]) =>
+        /JOIN assets AS a ON a\.owner = r\.owner/.test(sql) ? Promise.reject(new Error("synthetic failure")) : pool.query(sql, values)) as typeof pool.query,
+    };
+    await assert.rejects(() => claimRun(flaky, created.run.id), /synthetic failure/);
+    const failed = await latestRun(pool, OWNER, pageId);
+    assert.equal(failed?.status, "failed");
+    assert.equal(failed?.errorCode, "internal");
+    // 終わっているので、もう一度始められる
+    const again = await enqueueTranscription(pool, OWNER, pageId, run());
+    assert.equal(again?.status, "created");
+  });
+
   it("claims a queued run only once, moves the generation, and returns the audio of the page", async () => {
     const pageId = await uploadedRecording(pool);
     const created = await enqueueTranscription(pool, OWNER, pageId, run({ terms: ["合成語"], diarize: false }));

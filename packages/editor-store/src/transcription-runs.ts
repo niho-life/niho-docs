@@ -289,7 +289,15 @@ export async function claimRun(db: Queryable, runId: string): Promise<ClaimedTra
   const row = (await db.query<ClaimRow>(CLAIM_SQL, [runId])).rows[0];
   if (!row) return null;
   const terms = Array.isArray(row.terms) ? row.terms.filter(isTranscriptionTerm) : [];
-  const audio = await audioInfo(db, row.owner, row.page_id);
+  let audio: Awaited<ReturnType<typeof audioInfo>>;
+  try {
+    audio = await audioInfo(db, row.owner, row.page_id);
+  } catch (error) {
+    // claim の UPDATE は済んでいる（running・世代 1 以上）。呼び出し側の「claim できたか分からない」の失敗（世代 0）は当たらないので、
+    // claim した世代でここで失敗にする（running のまま残さない）。この更新も届かなければ、掃除（sweepStaleRuns）が拾う
+    await db.query(FAIL_SQL, [runId, row.generation, "internal"]).catch(() => undefined);
+    throw error;
+  }
   return {
     run: { ...toView(row), owner: row.owner, pageId: row.page_id, diarize: row.diarize, replace: row.replace, terms },
     generation: row.generation,
