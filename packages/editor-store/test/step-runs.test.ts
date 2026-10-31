@@ -15,6 +15,7 @@ import {
   heartbeatAttempt,
   isIdempotencyKey,
   isStepErrorCode,
+  listQueuedAttempts,
   listRun,
   readStepInput,
   refreshStale,
@@ -602,5 +603,111 @@ describe("PostgreSQL step runs", { skip: databaseUrl === undefined }, () => {
       () => pool.query("UPDATE step_attempts SET state = 'running', lease_until = clock_timestamp() WHERE run_id = $1", [run.id]),
       { code: "23505" },
     );
+  });
+});
+
+// 掃除が積み直す queued の一覧。上限と順を他のテストの run に左右されずに確かめるため、空の schema で行う。
+describe("PostgreSQL queued attempts for the sweep", { skip: databaseUrl === undefined }, () => {
+  const schema = `editor_steps_queued_${randomUUID().replaceAll("-", "")}`;
+  let pool: PgPool;
+  let store: EditorStore;
+
+  before(async () => {
+    const { Pool } = await import("pg");
+    pool = new Pool({ connectionString: databaseUrl, max: 5, options: `-c search_path=${schema}` });
+    await pool.query(`CREATE SCHEMA "${schema}"`);
+    const client = await pool.connect();
+    try {
+      await applyMigrations(client);
+    } finally {
+      client.release();
+    }
+    store = new EditorStore(pool);
+  });
+
+  after(async () => {
+    await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await pool.end();
+  });
+
+  async function newRun() {
+    const parent = (await store.createPage(OWNER, { kind: "rec", title: "合成の録音", blocks: TRANSCRIPT })).id;
+    const result = await createRun(pool, OWNER, parent, { recipe: RECIPE });
+    assert.ok(result.status === "created");
+    return { parent, run: result.run };
+  }
+
+  async function claimOk(runId: string, stepIndex: number) {
+    const result = await claimAttempt(pool, runId, stepIndex);
+    assert.ok(result.ok);
+    return result.claim;
+  }
+
+  async function finish(runId: string, stepIndex: number) {
+    const claim = await claimOk(runId, stepIndex);
+    const input = await readStepInput(pool, claim);
+    assert.ok(input);
+    const previous = stepIndex === 0 ? input.parentBlocks : input.previousBlocks;
+    assert.ok(previous);
+    const committed = await commitAttempt(pool, {
+      runId,
+      stepIndex,
+      generation: claim.generation,
+      blocks: paragraph(`合成の結果 ${stepIndex}`),
+      inputBasis: computeBasis(previous, RECIPE.steps[stepIndex]!.instruction),
+    });
+    assert.ok(committed.ok);
+  }
+
+  it("lists queued attempts of runs in progress only, oldest run first, with the generation for the task name and a limit", async () => {
+    assert.deepEqual(await listQueuedAttempts(pool), []);
+
+    // 積んだまま（世代 0）
+    const fresh = await newRun();
+    // 一時的な失敗で積み直した（世代は claim で進んだ 1）
+    const retried = await newRun();
+    const claim = await claimOk(retried.run.id, 0);
+    assert.deepEqual(await failAttempt(pool, { runId: retried.run.id, stepIndex: 0, generation: claim.generation, code: "fake_failure", retryable: true }), {
+      ok: true,
+      outcome: "retry",
+      generation: 1,
+      tries: 1,
+    });
+    // 段階 0 が済み、段階 1 が queued（世代 0）
+    const advanced = await newRun();
+    await finish(advanced.run.id, 0);
+
+    // 含まないもの: 実行中・取消・成功・進行中でない run の queued
+    const running = await newRun();
+    await claimOk(running.run.id, 0);
+    const canceled = await newRun();
+    assert.equal((await cancelRun(pool, OWNER, canceled.parent, canceled.run.id))?.state, "canceled");
+    const succeeded = await newRun();
+    for (let index = 0; index < RECIPE.steps.length; index++) await finish(succeeded.run.id, index);
+    const inactive = await newRun();
+    await pool.query("UPDATE step_runs SET state = 'failed', finished_at = clock_timestamp() WHERE id = $1", [inactive.run.id]);
+    assert.equal((await pool.query("SELECT state FROM step_attempts WHERE run_id = $1 AND step_index = 0", [inactive.run.id])).rows[0]?.state, "queued");
+
+    const expected = [
+      { runId: fresh.run.id, stepIndex: 0, generation: 0 },
+      { runId: retried.run.id, stepIndex: 0, generation: 1 },
+      { runId: advanced.run.id, stepIndex: 1, generation: 0 },
+    ];
+    assert.deepEqual(await listQueuedAttempts(pool), expected);
+    assert.deepEqual(await listQueuedAttempts(pool, { limit: 2 }), expected.slice(0, 2));
+    // 上限は 1〜1000 に丸める
+    assert.deepEqual(await listQueuedAttempts(pool, { limit: 0 }), expected.slice(0, 1));
+    assert.deepEqual(await listQueuedAttempts(pool, { limit: 5000 }), expected);
+    // 続きから（前の回の最後の次）。続きが無ければ空、最後まで読めば終わり
+    assert.deepEqual(await listQueuedAttempts(pool, { limit: 1, after: expected[0]! }), expected.slice(1, 2));
+    assert.deepEqual(await listQueuedAttempts(pool, { after: expected[1]! }), expected.slice(2));
+    assert.deepEqual(await listQueuedAttempts(pool, { after: expected[2]! }), []);
+    // 形の合わない続きは何も返さない
+    assert.deepEqual(await listQueuedAttempts(pool, { after: { runId: expected[0]!.runId, stepIndex: -1 } }), []);
+    assert.deepEqual(await listQueuedAttempts(pool, { after: { runId: "not-a-uuid", stepIndex: 0 } }), []);
+    // 続きの run が消えていれば何も返さない（次の掃除は先頭から読み直す）
+    assert.deepEqual(await listQueuedAttempts(pool, { after: { runId: "00000000-0000-4000-8000-000000000000", stepIndex: 0 } }), []);
+    // 読むだけ（状態を変えない）
+    assert.deepEqual(await listQueuedAttempts(pool), expected);
   });
 });

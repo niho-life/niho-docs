@@ -27,6 +27,13 @@ load_deploy_env() {
   # Both go into --set-env-vars (comma-separated): refuse anything that could add another variable.
   [[ "$AI_MODEL" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || die "AI_MODEL in $DEPLOY_ENV is not a model name"
   [[ "$AI_MONTHLY_LIMIT_USD" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "AI_MONTHLY_LIMIT_USD in $DEPLOY_ENV is not a non-negative number"
+  # Steps (#37): off unless STEPS_MODE=cloud-tasks (docs/ops/editor-deploy.md §11).
+  STEPS_MODE="${STEPS_MODE:-}"
+  [[ -z "$STEPS_MODE" || "$STEPS_MODE" == cloud-tasks ]] || die "STEPS_MODE must be empty or cloud-tasks in $DEPLOY_ENV"
+  TASKS_SA="${TASKS_SA:-niho-editor-tasks}"
+  TASKS_SA_EMAIL="$TASKS_SA@$GCP_PROJECT.iam.gserviceaccount.com"
+  STEPS_QUEUE=niho-editor-steps
+  STEPS_SWEEP_JOB=niho-editor-steps-sweep
   # Every resource that takes labels carries this one: Cloud Billing reports filter on it.
   COST_LABEL="app=niho-editor"
   RUNNER_SA_EMAIL="$RUNNER_SA@$GCP_PROJECT.iam.gserviceaccount.com"
@@ -40,7 +47,8 @@ load_deploy_env() {
   SECRET_ANTHROPIC_KEY=niho-editor-anthropic-key
 }
 
-gcp() { gcloud --project "$GCP_PROJECT" --quiet "$@"; }
+# GCLOUD replaces the binary in the dry-run checks (scripts/editor-deploy/steps-infra.test.sh); the default is gcloud.
+gcp() { "${GCLOUD:-gcloud}" --project "$GCP_PROJECT" --quiet "$@"; }
 
 project_number() { gcp projects describe "$GCP_PROJECT" --format='value(projectNumber)'; }
 cloudsql_connection_name() {
@@ -84,4 +92,12 @@ service_env_vars() {
   if [[ "${1:-0}" == 1 ]]; then
     printf ',EDITOR_AI_MODE=anthropic,EDITOR_AI_MODEL=%s,EDITOR_AI_MONTHLY_LIMIT_USD=%s' "$AI_MODEL" "$AI_MONTHLY_LIMIT_USD"
   fi
+}
+
+# Steps (#37): the worker route is a path of the same service; its run.app URL is also the OIDC audience.
+# Prints the extra env (with a leading comma) only when STEPS_MODE=cloud-tasks; otherwise nothing (the steps stay off).
+steps_env_vars() {
+  [[ "$STEPS_MODE" == cloud-tasks ]] || return 0
+  printf ',EDITOR_STEPS_MODE=cloud-tasks,EDITOR_STEPS_QUEUE=projects/%s/locations/%s/queues/%s,EDITOR_STEPS_WORKER_URL=%s,EDITOR_STEPS_INVOKER_SA=%s' \
+    "$GCP_PROJECT" "$GCP_REGION" "$STEPS_QUEUE" "$(service_url "$SERVICE")" "$TASKS_SA_EMAIL"
 }

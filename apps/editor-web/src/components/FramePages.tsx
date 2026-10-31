@@ -24,9 +24,10 @@ export function HomeRedirect({ lastPageId }: { lastPageId: string | null }) {
 
 /**
  * `/p/{id}`。最後に開いたページとして覚え、題名と保存を一覧へ知らせる。revision は読み込んだときの値（保存の `baseRevision`）、
- * 更新時刻は開いたときに端末の下書きと競合したら帯に出す値。
+ * 更新時刻は開いたときに端末の下書きと競合したら帯に出す値。shared はリンクで共有しているか（サーバーが読んだ値。読めなければ null。
+ * 「…」の「共有中」の印だけに使い、リンクそのものは渡さない）。
  */
-export function OpenPage({ summary, blocks, revision }: { summary: PageSummary; blocks: unknown[]; revision: number }) {
+export function OpenPage({ summary, blocks, revision, shared = null }: { summary: PageSummary; blocks: unknown[]; revision: number; shared?: boolean | null }) {
   const frame = useEditorFrame();
   const { pageOpened } = frame;
   const { id } = summary;
@@ -37,6 +38,7 @@ export function OpenPage({ summary, blocks, revision }: { summary: PageSummary; 
   const editor = (
     <PageEditor
       page={{ id, title: summary.title, blocks, revision, updatedAt: summary.updatedAt, kind: summary.kind, lang: summary.lang }}
+      shared={shared}
       onTitleChange={(value) => frame.pageTitleChanged(id, value)}
       onSaved={() => frame.pageSaved(id)}
       registerSaveNow={frame.registerPageSaver}
@@ -89,6 +91,8 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
   return (
     <PageEditor
       page={{ id: null, title: "", blocks: [], revision: null }}
+      // 作ったばかりのページは共有していない
+      shared={false}
       onTitleChange={(value) => {
         titleRef.current = value;
         if (createdRef.current) frame.pageTitleChanged(createdRef.current, value);

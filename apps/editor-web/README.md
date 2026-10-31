@@ -31,7 +31,10 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | `EDITOR_AI_TIMEOUT_MS` | 任意。モデルの 1 回の呼び出しの時間切れ（ミリ秒）。既定 120,000、1,000〜300,000 に丸める |
 | `EDITOR_AI_MAX_TOKENS` | 任意。1 回の出力の上限（トークン。思考の分を含む）。既定 12,000、256〜32,000 に丸める（提案は送る文字数からこれ以下で決める） |
 | `EDITOR_AI_MONTHLY_LIMIT_USD` | 任意。owner ごとの月の上限（見込みの USD）。未設定は上限なし。0 以上の数でない値は 0（AI を止める） |
-| `EDITOR_STEPS_MODE` | 手順の実行の方式。`inline`（開発・CI だけ）。未設定・`off`・未知の値と、本番（`NODE_ENV=production`）の `inline` では手順の開始は 503 |
+| `EDITOR_STEPS_MODE` | 手順の実行の方式。`inline`（開発・CI だけ）か `cloud-tasks`（本番。下の 3 つが揃い形が正しいときだけ）。未設定・`off`・未知の値、本番（`NODE_ENV=production`）の `inline`、3 つが欠けた `cloud-tasks` では手順の開始は 503 |
+| `EDITOR_STEPS_QUEUE` | `cloud-tasks` のキュー（`projects/<p>/locations/<l>/queues/<q>`） |
+| `EDITOR_STEPS_WORKER_URL` | `cloud-tasks` の worker の基点（`https://<host>`。path なし）。task の宛先と OIDC の audience |
+| `EDITOR_STEPS_INVOKER_SA` | `cloud-tasks` の task と掃除の OIDC トークンの身元（`<name>@<project>.iam.gserviceaccount.com`）。worker の route はこの 1 つだけを通す |
 | `EDITOR_STUB_ROLES` | stub の方式だけ。NIHO の役割の代わり（カンマ区切り）。未設定なら `writer,kamakura`（両方の面に出せる）、空なら役割なし。niho の方式では読まず、役割の契約（#42）まで面には出せない |
 | `EDITOR_DESTINATION_DECLARATIONS` | 任意。面の宣言の取得先 `{"exp": url, "niho": url}`（https だけ）。60 秒だけ持ち ETag で確かめ直す（5 秒・64 KiB まで。redirect は同じ host の https だけ）。未設定なら stub は同梱の dev 用の宣言（`src/publish/dev-declarations.ts`）、niho は「いまは公開できません」。値が読めなければどちらも宣言なし |
 | `EDITOR_ASSET_ORIGIN` | 任意。公開版の写真の URL の origin（https の origin だけ）。写真は `${origin}/assets/${sha256}.${ext}`。未設定・不正なら写真のあるページは公開できない（422。シートでは押せない） |
@@ -81,17 +84,19 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **`/s/{token}`**（`src/app/s/[token]/page.tsx`。`app/(editor)` の外なので、枠・一覧を出さず、未ログインでもログインへ移さない。CSP の nonce は他の画面と同じく `src/proxy.ts` が付ける）: 認証を使わず、題名と本文（最新の保存版）だけを `src/share/render-blocks.tsx` で React の要素にする（HTML を注入しない。リンクは https・http・mailto だけ、`rel="noopener noreferrer nofollow ugc"`）。形の違う・未共有・止めた・作り直す前の token とゴミ箱のページは同じ 404、DB を使えないときは汎用の 500。header は `next.config.ts` の `/s/:token*` の規則で `Cache-Control: private, no-store`・`Referrer-Policy: no-referrer`（全体の規則の後に置き、値は 1 つ）。`next dev` はページの Cache-Control を開発用の値に置き換えるので、本番の値は `test:startup` で確かめる。
 - **表**: migration `0004_page_shares.sql`（共有中のページに 1 行。止める＝行を消す。token は 256 bit の乱数の base64url を平文で持つ）。コードは `packages/editor-store/src/shares.ts`・`duplicate.ts`。
 - **書き出し**（`src/export/markdown.ts`）: niho-experience の Markdown サブセット（`apps/web/src/lib/guide-markdown.ts`）として読める形だけを出す。見出しは `##`/`###`、リストは 1 行 1 項目に平坦化、引用・囲みは `:::note`、リンクは https だけ、画像・区切り線は出さない。本文の記号は `\` で逃がす（日本語は変えない）。parser の受理規則を写した oracle が `src/export/markdown.test.ts` にある。
-- **画面から呼ぶ関数**: `src/lib/page-actions-client.ts`（`getPageShare`・`startPageShare`・`rotatePageShare`・`stopPageShare`・`duplicatePageRequest`（新しい id・題名・種類を返す）・`pageExportUrl`・`deletePageRequest`）。共有の 4 つは次の段で画面に組み込む。
-- **ヘッダーの状態と「…」（#34 第 1 段）**:
+- **画面から呼ぶ関数**: `src/lib/page-actions-client.ts`（`getPageShare`・`startPageShare`・`rotatePageShare`・`stopPageShare`・`duplicatePageRequest`（新しい id・題名・種類を返す）・`pageExportUrl`・`deletePageRequest`・`listPageVersions`・`restorePageVersion`（`baseRevision` 付き。30 秒で打ち切る））。
+- **ヘッダーの状態と「…」（#34 第 1 段・第 2 段）**:
   - **状態の丸**（docs-ui の `StatusDot`）: 公開の状態（公開中・更新あり・限定公開・公開をやめた。公開のシートが読んだもの。#39）＋保存の状態（「公開中 · … · 保存済み」「自分だけ · 保存中」「· オフライン・この端末に保持」など。言葉は `src/lib/save-status.ts` の `headerStatus`）。公開のシートがまだ読めていない間は「自分だけ」。ページの外（`/`・設定・録音から）では出さない。
   - **読み上げ**: 保存の状態を読み上げるのはヘッダーの丸（`aria-live="polite"`）だけ。本文の上の「保存済み」などの表示は見える文字として残し、live region にしない（二重に読み上げない）。
-  - **「…」**: 書き出し（.md）・複製・削除の 3 つ（docs-ui の `shellMoreItems` から選ぶ）。リンクで共有と履歴は次の段、Google ドキュメントへの書き出しは NIHO の API 待ち。まだ作っていないページ（`/p/new`）と、端末の下書きを読み終える前は出さない。開閉と項目の移動は `ShellMenu`（↑↓・Home・End・Esc）で、選んだらフォーカスは「…」へ戻る。
-  - **どの操作も先に保存する**: まだ届いていない変更を今送り、全て届くまで待つ（`Autosave.settle`）。届かなければ（オフライン・ログイン切れ・サーバーの失敗・競合で止めている）操作を止め、「〜の前に変更を保存できませんでした」と出す（編集は捨てない）。同じページの操作は 1 つずつ。
+  - **「…」**: リンクで共有・書き出し（.md）・履歴・複製・削除（docs-ui の `shellMoreItems` の順）。Google ドキュメントへの書き出しは NIHO の API 待ち。まだ作っていないページ（`/p/new`）と、端末の下書きを読み終える前は出さない。開閉と項目の移動は `ShellMenu`（↑↓・Home・End・Esc）で、選んだらフォーカスは「…」へ戻る。リンクで共有の補足「共有中」は、共有していると分かっているときだけ出す（`/p/{id}` の RSC が開くときに真偽だけを読んで渡し、共有のシートで読んだ・変えた値で更新する。読めなければ出さない。リンクそのものは RSC の payload に入れない）。
+  - **どの操作も先に保存する**: まだ届いていない変更を今送り、全て届くまで待つ（`Autosave.settle`）。届かなければ（オフライン・ログイン切れ・サーバーの失敗・競合で止めている）操作を止め、シートも開かずに「〜の前に変更を保存できませんでした」（履歴は「履歴を開く前に…」）と出す（編集は捨てない）。同じページの操作は 1 つずつ。
   - **複製**: `POST …/duplicate` → 一覧の上に足し、`/p/{新しい id}` へ。失敗は「…」の左に短く（`role="alert"`。「複製できませんでした」）。
   - **書き出し**: 同じ origin の `<a href="/api/pages/{id}/export.md" download>` を押す（本文は fetch で読まない。ファイル名はサーバーの Content-Disposition）。
   - **削除**: 確認のダイアログ（docs-ui の `ShellSheet` を `EditorShell` の overlay に。外は inert、Esc・「やめる」で閉じ、フォーカスは「…」へ戻る）→ `DELETE /api/pages/{id}`（204）→ 一覧からそのページと子孫（読み込み済みの分。サーバーは子孫ごとゴミ箱へ入れる）を外し、`/` へ（`editor_last_page` が消したページを指していても、`/` はサーバーで確かめて新しいページへ移す）。409 `published` は「公開中のページは、先に公開をやめてください」、他の失敗は「削除できませんでした」をダイアログの中に出し、閉じない（一覧もページもそのまま）。送っている間は 2 回目を送らず、閉じない（応答は 30 秒で打ち切る）。
-  - **枠とページの橋渡し**: ヘッダーは枠（`EditorFrame`）、保存の状態とエディタはページの中（`PageEditor`）にあるので、`PageEditor` が `useEditorFrame().attachPage({ id, status, flush })` で自分を登録し（保存の状態が変わるたびに登録し直す）、画面を離れたら外す。操作は「…」を開いたページの id に対して行い、終わったときに別のページへ移っていたら（id と flush で見分ける）、その画面には何も出さず移動もしない（複製・削除が済んだことは一覧には反映する）。一覧からは `pageRemoved(id)` で外す。
-  - **まだ**: リンクで共有・履歴（次の段）、情報パネル、写真の zip と Google ドキュメントへの書き出し。検索の結果からは、この画面で削除したページと一覧に読み込んであった子孫だけを外す（読み込んでいない子孫は、次に探すまで結果に残る）。
+  - **リンクで共有**（`src/lib/use-page-share.ts`・`src/components/ShareSheet.tsx`。ShellSheet）: 開くたびに `GET …/share` を読む（その間「読み込み中」を `role="status"`）。共有していなければ「リンクを作る」（`PUT`）、共有中ならリンク（読み取り専用の入力）・「コピー」・「作り直す」・「共有を止める」（`DELETE`）。「作り直す」はその場で「作り直すと、古いリンクは読めなくなります。」と確かめてから `POST …/share/rotate`（やめる・Esc は確かめるのをやめるだけ）。コピーは `navigator.clipboard.writeText`、使えなければ入力を選んで「⌘C でコピー」（Mac 以外は Ctrl+C）。作った・作り直した・止めた・コピーしたは同じ `role="status"` で短く知らせ、失敗はシートの中に短く（閉じない）。操作は同じページで 1 つずつで、送っている間もシートは閉じられる（開き直すと、その結果を待つ。2 つ目は送らない）。リンクは共有中のこのシートにだけ出し、例外・ログには入れない。
+  - **履歴**（`src/lib/use-page-history.ts`・`src/components/HistorySheet.tsx`。ShellSheet）: 開くたびに `GET …/versions`（新しい順）を読み、各行に いつ（一覧と同じ `formatWhen`）・理由（自動保存／AI の提案の前／公開／上書きの前／戻す前）・ブロック数・「この版に戻す」。0 件は「まだ履歴がありません」。「この版に戻す」は同じシートで確かめる（「本文がこの版になります（題名はそのまま）。いまの本文は、戻したあとも履歴から戻せます。」。サーバーは戻す前の本文を版 `restore` に残してから戻し、題名は変えない）。「戻す」でもう一度保存を確かめ、今の revision を `baseRevision` に `POST …/versions/{n}/restore`。409 は「別の画面で保存されました。開き直してからもう一度」、422 は「この版には戻せません」（どちらもシートの中。閉じない）。戻している間は閉じず、2 回目を送らない。戻せたらシートを閉じ、エディタを応答のページ（題名・本文・revision）で開き直し（`PageEditor` が key を替えて作り直す。保存・下書き・Undo の部品も新しく、次の保存はその revision の上に送るので競合にしない。端末の下書きは開いたときと同じく比べ直す）、ヘッダーの `role="status"` で「この版の本文に戻しました」と知らせ、一覧の上へ動かす。下書きを読み直す間に「…」が消えてフォーカスが外れたら、出し直したときに「…」へ戻す。
+  - **枠とページの橋渡し**: ヘッダーは枠（`EditorFrame`）、保存の状態とエディタはページの中（`PageEditor`）にあるので、`PageEditor` が `useEditorFrame().attachPage({ id, status, flush, revision, reopen, shared, setShared })`（`src/lib/attached-page.ts`）で自分を登録し（保存の状態が変わるたびに登録し直す）、画面を離れたら外す。操作は「…」を開いたページの id に対して行い、終わったときに別のページへ移っていたら（id と flush で見分ける。版に戻して開き直した画面も別の画面）、その画面には何も出さず移動も開き直しもしない（複製・削除が済んだことは一覧には反映する）。一覧からは `pageRemoved(id)` で外す。
+  - **まだ**: 版の中身を見る（`GET …/versions/{n}` は使っていない。一覧から戻すだけ）、情報パネル、写真の zip と Google ドキュメントへの書き出し。競合の帯が出ている（自動保存を止めている）間は、共有・履歴も開かない（先に帯で決める）。検索の結果からは、この画面で削除したページと一覧に読み込んであった子孫だけを外す（読み込んでいない子孫は、次に探すまで結果に残る）。
 
 ## 手順（#37）
 
@@ -100,9 +105,13 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **API**: `POST /api/pages/{id}/steps/runs`（`{ recipe, fromStep? }`、任意の `Idempotency-Key`。202。進行中は 409 `run_in_progress`、上流が済んでいない `fromStep` は 400 `invalid_from_step`、方式が無いと 503 `steps_unavailable`）、`GET /api/pages/{id}/steps`（最新の run。返す前に前提変更を再計算）、`POST /api/pages/{id}/steps/runs/{runId}/cancel`（冪等）。作法は `/api/pages` と同じ（401・403・404 は同一・413・noindex）。
 - **状態の正**は `packages/editor-store/src/step-runs.ts`（表は migration `0006_step_runs.sql`）。遷移はすべて世代と状態を条件にした UPDATE で、claim のたびに世代が進み、確定・失敗・生存確認は世代が一致するときだけ通る（取消・lease 切れの後に遅れて返った結果で上書きしない）。確定（サブページの本文と状態・次の段階）は 1 transaction。
 - **サブページの id** は親・recipe・段階から決定的に作る（作り直しても同じページ）。`fromStep` から作り直すと、前の段階の済んだサブページを再利用する。
-- **失敗**: 一時的な失敗は 3 回まで（間隔を空けて積み直す）、超えるか入力の誤りなら失敗。後続は取り消し、上流は残す。lease が切れた段階は `sweepExpiredLeases` が積み直す（定期の呼び出しは後段）。
+- **失敗**: 一時的な失敗は 3 回まで（間隔を空けて積み直す）、超えるか入力の誤りなら失敗。後続は取り消し、上流は残す。lease が切れた段階は `sweepExpiredLeases` が積み直す（下の掃除の route から）。
 - **前提変更**: 前の段階（段階 0 は録音ページ）の本文と指示文の基準が、実行したときの基準と違えば、その段階から後を `stale` にし、戻れば `done` に戻す。
-- **実行**（`src/steps/`）: `runAttempt` が claim → 入力を読む → 生存確認（lease の 1/3 おき）→ 実行器 → 確定 → 次を積む。`inline` は同じプロセスで最後まで進める（要求は待たない）。**Cloud Tasks・内向きの worker の route と OIDC・本物の AI・画面は後段**。
+- **実行**（`src/steps/`）: `runAttempt` が claim → 入力を読む → 生存確認（lease の 1/3 おき）→ 実行器 → 確定 → 次を積む。`inline` は同じプロセスで最後まで進める（要求は待たない）。実行器は `src/server/steps-deps.ts` の 1 か所で選ぶ（今は偽物）。**本物の AI・画面は後段**。
+- **`cloud-tasks`**（本番。配備は [editor-deploy.md](../../docs/ops/editor-deploy.md) §10）: `src/steps/cloud-tasks.ts` が Cloud Tasks の REST に task を積む（名前は `taskName`。同じ名前の 2 度目は `ALREADY_EXISTS` で積み済み。再試行の間隔は `scheduleTime`、1 つの task は最大 30 分。アクセストークンは Cloud Run のメタデータサーバーから）。task は同じサービスの worker の route を呼ぶ:
+  - `POST /api/internal/steps/run`（本文 `{ runId, stepIndex }`・1 KiB まで）: `runAttempt` を呼び、`completed`・`retry`・`failed`・`stale`・`skipped` のどれも 200 `{ status }`。例外は 500（Cloud Tasks が再試行する）。
+  - `POST /api/internal/steps/sweep`（Cloud Scheduler が 5 分おき。本文は読まない）: lease の切れた段階を queued に戻し（`sweepExpiredLeases`）、進行中の run の queued の段階（`listQueuedAttempts`）を全て同じ task の名前で積み直す。200 `{ requeued }`（新しく積んだ数）。
+  - **OIDC で守る**: サービスは誰でも呼べるので、route が Google の ID トークンを検証する（`src/server/google-oidc.ts`。依存なし。RS256 だけ・Google の JWKS・`iss`・`aud` = `EDITOR_STEPS_WORKER_URL`・期限（ずれ 60 秒）・`email` = `EDITOR_STEPS_INVOKER_SA` かつ確認済み）。方式が `cloud-tasks` でなければ 404、トークンが無い・通らなければ本文を読まずに 401、`Origin` が付いていれば 403。応答とログは短い code だけ。
 
 ## 録音と文字起こし（#36 段 1）
 
