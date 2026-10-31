@@ -69,15 +69,20 @@ export function exportFileName(title: string): string {
   return cleaned === "" ? "無題" : cleaned;
 }
 
-/** 同じ名前が 2 つ以上あれば `-2`・`-3` を付ける（比べるのは小文字にした名前。ファイルシステムと同じ）。 */
+/**
+ * 同じ名前が 2 つ以上あれば `-2`・`-3` を付ける。**付けたあとの名前も使用済みとして数える**ので、題名が `a`・`a`・`a-2` なら
+ * `a.md`・`a-2.md`・`a-2-2.md` になる（連番が後の題名とぶつかっても、zip の中で名前が重ならない）。
+ * 比べるのは buildZip と同じ形（NFC にして小文字にした名前。ファイルシステムと同じ）。
+ */
 export function uniqueFileNames(titles: readonly string[]): string[] {
-  const used = new Map<string, number>();
+  const used = new Set<string>();
+  const keyOf = (name: string): string => name.normalize("NFC").toLowerCase();
   return titles.map((title) => {
     const base = exportFileName(title);
-    const key = base.toLowerCase();
-    const seen = used.get(key) ?? 0;
-    used.set(key, seen + 1);
-    return seen === 0 ? `${base}.md` : `${base}-${seen + 1}.md`;
+    let name = `${base}.md`;
+    for (let count = 2; used.has(keyOf(name)); count += 1) name = `${base}-${count}.md`;
+    used.add(keyOf(name));
+    return name;
   });
 }
 

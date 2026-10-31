@@ -8,13 +8,13 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageKind, PageLang, PageSummary, StepStatus } from "@niho/editor-store";
 import { EditorShell, ShellHeader, ShellMobileToolbar, ShellSheet, ShellSidebar, ShellTools, shellAccountItems, type NewPageKind, type ShellToolAction } from "niho-docs-ui/shell";
 import type { PageChromeTools } from "niho-docs-ui/page/PageChrome";
-import { folderExportUrl, movePageOrderRequest, recordPageOpenRequest } from "@/lib/folder-client";
+import { movePageOrderRequest, recordPageOpenRequest } from "@/lib/folder-client";
 import { listPagesRequest, movePageRequest } from "@/lib/pages-client";
 import { headerStatus } from "@/lib/save-status";
 import { useShortcuts } from "@/lib/shortcuts";
 import { arrangeSidebarItems, folderOptions, orderNeighbours, recentRows, reorderedPages, searchRows, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
 import { usePageHistory } from "@/lib/use-page-history";
-import { clickDownload, usePageMenu, type AttachedPage } from "@/lib/use-page-menu";
+import { usePageMenu, type AttachedPage } from "@/lib/use-page-menu";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { useFolderFields } from "@/lib/use-folder-fields";
 import { usePageShare } from "@/lib/use-page-share";
@@ -541,8 +541,18 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
       setOrderNote(null);
       setOrdering(true);
       try {
-        // 並びはサーバーが 1 から振り直すので、読み込んである行も同じ規則で作り直す（読み直さない）
-        if (await movePageOrderRequest(id, move)) setList((current) => ({ ...current, pages: reorderedPages(current.pages, id, move) }));
+        // 並びはサーバーが同じ親の全ての兄弟に 1 から振り直す。一覧は一部しか読み込んでいないことがあるので、持っている行で
+        // 入れ替えず、サーバーが確定した値を行に入れる（読み込んでいない兄弟との並びがずれない）
+        const { moved, orders } = await movePageOrderRequest(id, move);
+        if (moved) {
+          setList((current) => ({
+            ...current,
+            pages:
+              orders.size > 0
+                ? current.pages.map((page) => (orders.has(page.id) ? { ...page, sortOrder: orders.get(page.id)! } : page))
+                : reorderedPages(current.pages, id, move),
+          }));
+        }
       } catch {
         setOrderNote("並びを変えられませんでした");
       } finally {
@@ -693,7 +703,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                     : undefined
                 }
                 fields={railIsFolder ? folderFields : undefined}
-                onExportFolder={railIsFolder ? () => clickDownload(folderExportUrl(railSummary.id)) : undefined}
+                onExportFolder={railIsFolder ? menu.exportFolder : undefined}
                 recordingSec={list.details?.id === railSummary.id ? list.details.recordingSec : null}
                 open={settingsOpen}
                 onToggle={() => setSettingsOpen((open) => !open)}

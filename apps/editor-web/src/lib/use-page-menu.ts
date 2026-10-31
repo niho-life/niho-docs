@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { shellMoreItems, type ShellHeaderProps, type ShellMenuItem } from "niho-docs-ui/shell";
 import { ownerOf, samePage, type AttachedPage, type PageOwner } from "./attached-page";
+import { folderExportUrl } from "./folder-client";
 import { googleDocsConnectPath } from "./google-docs-paths";
 import {
   PageActionError,
@@ -20,6 +21,8 @@ export type { AttachedPage, PageOwner };
 
 /** 「…」の Google ドキュメントの項目の id。 */
 const GOOGLE_DOC_ITEM = "export-google-doc";
+/** 情報パネルの「フォルダを書き出す」（フォルダ＋その中のページの zip）。「…」には出さない。 */
+const FOLDER_EXPORT_ITEM = "export-folder";
 
 /**
  * 「…」の項目: リンクで共有・書き出し（.md）・Google ドキュメントへ・履歴・複製・削除（docs-ui の shellMoreItems の順）。
@@ -99,6 +102,8 @@ export type PageMenu = {
    * フォーカスは押したボタンに残す（削除の確認を閉じたら、押したボタンへ戻る）。「…」を出さないページでは何もしない。
    */
   exportMarkdown: () => void;
+  /** 情報パネルの「フォルダを書き出す」。保存してから zip を始める（保存できなければ止めて理由を出す）。 */
+  exportFolder: () => void;
   askDelete: () => void;
 };
 
@@ -255,6 +260,12 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
       void run(target, "書き出し", async () => {
         (latest.current.download ?? clickDownload)(pageExportUrl(target.id));
       });
+    } else if (item === FOLDER_EXPORT_ITEM) {
+      // フォルダの書き出しも、まだ届いていない本文の変更を先に保存してから始める（保存できなければ止めて理由を出す）。
+      // 保存前に始めると、サーバーが読む古い本文が「背景情報.md」に入る
+      void run(target, "書き出し", async () => {
+        (latest.current.download ?? clickDownload)(folderExportUrl(target.id));
+      });
     } else if (item === GOOGLE_DOC_ITEM) {
       void run(target, "書き出し", async () => exportToGoogleDoc(target));
     } else if (item === "share" || item === "history") {
@@ -313,6 +324,7 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
         }
       : undefined,
     exportMarkdown: () => perform("export", false),
+    exportFolder: () => perform(FOLDER_EXPORT_ITEM, false),
     askDelete: () => perform("delete", false),
     note: view?.note ?? null,
     confirm:

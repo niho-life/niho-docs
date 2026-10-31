@@ -14,10 +14,20 @@ async function send(path: string, method: "POST" | "PATCH", body?: unknown): Pro
   return response.status === 204 ? null : response.json();
 }
 
-/** 手動の並びを 1 つ動かす。もう端なら false（何も変わっていない）。 */
-export async function movePageOrderRequest(id: string, move: "up" | "down"): Promise<boolean> {
-  const data = (await send(`/api/pages/${encodeURIComponent(id)}/order`, "PATCH", { move })) as { moved?: unknown };
-  return data?.moved === true;
+/**
+ * 手動の並びを 1 つ動かす。もう端なら `moved: false`（何も変わっていない）。動かしたときの `orders` は、同じ親の全ての行の
+ * サーバーが確定した並び（行の id → sortOrder。読み込んでいない兄弟も含む）。
+ */
+export async function movePageOrderRequest(id: string, move: "up" | "down"): Promise<{ moved: boolean; orders: Map<string, number> }> {
+  const data = (await send(`/api/pages/${encodeURIComponent(id)}/order`, "PATCH", { move })) as { moved?: unknown; orders?: unknown } | null;
+  const orders = new Map<string, number>();
+  if (Array.isArray(data?.orders)) {
+    for (const item of data.orders as unknown[]) {
+      const { id: rowId, sortOrder } = (item ?? {}) as { id?: unknown; sortOrder?: unknown };
+      if (typeof rowId === "string" && typeof sortOrder === "number" && Number.isSafeInteger(sortOrder)) orders.set(rowId, sortOrder);
+    }
+  }
+  return { moved: data?.moved === true, orders };
 }
 
 /** ページを開いたことを「最近」に記録する（届かなくても画面は止めない）。 */

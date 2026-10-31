@@ -15,7 +15,7 @@ import { exportContentDisposition } from "./share-api";
  * - `GET /api/pages/{id}/export.zip` — フォルダ単位の書き出し（.md ＋写真）。
  */
 
-export type FolderStore = Pick<EditorStore, "getPage" | "movePageOrder" | "listPageChildren" | "listPageTree">;
+export type FolderStore = Pick<EditorStore, "getPage" | "movePageOrder" | "pageSiblingOrders" | "listPageChildren" | "listPageTree">;
 
 export type FolderFieldsStore = {
   get: (owner: OwnerId, pageId: string) => Promise<PageFields>;
@@ -50,7 +50,7 @@ export function parseOrderMove(body: unknown): { ok: true; move: "up" | "down" }
   return { ok: true, move: move as "up" | "down" };
 }
 
-/** PATCH /api/pages/{id}/order — 手動の並びを 1 つ動かす。本文・revision・更新時刻は変わらない。 */
+/** PATCH /api/pages/{id}/order — 手動の並びを 1 つ動かす（200 `{ moved, orders }`。`orders` は動かしたときの兄弟全員の確定した並び）。本文・revision・更新時刻は変わらない。 */
 export function movePageOrder(request: Request, id: string, deps: FolderApiDeps): Promise<Response> {
   return guarded("PATCH /api/pages/[id]/order", async () => {
     const session = await deps.auth().getSession(request);
@@ -65,7 +65,10 @@ export function movePageOrder(request: Request, id: string, deps: FolderApiDeps)
     if (!input.ok) return errorResponse("bad_request");
     const result = await store.movePageOrder(session.userId, id, input.move);
     if (!result) return notFoundResponse();
-    return jsonResponse(200, { moved: result === "moved" });
+    // 動かしたときは、同じ親の全ての行の確定した並び（画面は一覧を一部しか読み込んでいないことがあり、持っている行だけで
+    // 入れ替えると読み込んでいない兄弟との並びがずれる）
+    const orders = result === "moved" ? await store.pageSiblingOrders(session.userId, id) : [];
+    return jsonResponse(200, { moved: result === "moved", orders });
   });
 }
 

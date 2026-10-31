@@ -2096,7 +2096,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     useEffect(() => pageOpened(summary), [pageOpened, summary]);
     return <p>合成の本文</p>;
   }
-  function fakePage(id: string | null): AttachedPage {
+  function fakePage(id: string | null, over: Partial<AttachedPage> = {}): AttachedPage {
     return {
       id,
       status: "saved",
@@ -2109,6 +2109,7 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
       setLang: vi.fn(),
       langNote: null,
       text: { read: () => "", subscribe: () => () => undefined },
+      ...over,
     };
   }
   async function until(condition: () => boolean) {
@@ -2188,6 +2189,36 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     await until(() => railButton("1 つ上へ")?.getAttribute("aria-disabled") === "true");
   });
 
+  it("一覧を一部しか読み込んでいなくても、並びはサーバーが確定した値で入れ替える（読み込んでいない兄弟とずれない）", async () => {
+    // 保存の順は A（1）・B（2、まだ読み込んでいない）・C（3）。画面には A と C だけがある
+    const A = FOLDER;
+    const C = OTHER;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/order")) {
+          // A を 1 つ下へ: サーバーでは B と入れ替わる（B・A・C）。画面の持っていない B も含めて確定した値を返す
+          return new Response(JSON.stringify({ moved: true, orders: [{ id: "unloaded-B", sortOrder: 1 }, { id: A, sortOrder: 2 }, { id: C, sortOrder: 3 }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+    nav.pathname = `/p/${A}`;
+    await mount({ pages: [{ ...page(A, "A の記事"), sortOrder: 1 }, { ...page(C, "C の記事"), sortOrder: 3 }] }, <FakePage page={fakePage(A)} />);
+    expect(rows()).toEqual(["A の記事", "C の記事"]);
+    await click('.es-dt button[aria-label="このページの設定と AI"]');
+
+    await act(async () => railButton("1 つ下へ")!.click());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // 持っている行だけで入れ替えると C・A になってしまう。サーバーでは A は B の後ろに行っただけで、C の前のまま
+    expect(rows()).toEqual(["A の記事", "C の記事"]);
+  });
+
   it("「このフォルダの背景」はフォルダのページでだけ出し、登場人物と固有名詞を保存する", async () => {
     const calls: { method: string; url: string; body: unknown }[] = [];
     vi.stubGlobal(
@@ -2219,6 +2250,39 @@ describe("EditorFrame: 「最近」・手動の並び・フォルダの背景・
     nav.pathname = `/p/${INSIDE}`;
     await rerender(<FakePage page={fakePage(INSIDE)} />);
     expect(container!.querySelector(".es-psfields")).toBeNull();
+  });
+
+  it("フォルダの書き出しは、まだ届いていない本文の変更を保存してから始める（保存できなければ始めない）", async () => {
+    const clicked: string[] = [];
+    const click_ = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      clicked.push(this.getAttribute("href") ?? "");
+    };
+    try {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ fields: { entities: [], terms: [] } }), { status: 200, headers: { "content-type": "application/json" } })));
+      nav.pathname = `/p/${FOLDER}`;
+      let finishSave: (saved: boolean) => void = () => undefined;
+      const flush = vi.fn(() => new Promise<boolean>((resolve) => { finishSave = resolve; }));
+      await mount({ pages: [page(FOLDER, "鎌倉の記事"), inside(FOLDER, INSIDE, "取材メモ")] }, <FakePage page={fakePage(FOLDER, { flush })} />);
+      await click('.es-dt button[aria-label="このページの設定と AI"]');
+      const exportButton = () => [...container!.querySelectorAll<HTMLButtonElement>(".es-rail button")].find((item) => item.textContent?.includes("このフォルダの中をまとめて"))!;
+
+      // 保存を待っているあいだは、ダウンロードを始めない
+      await act(async () => exportButton().click());
+      expect(flush).toHaveBeenCalledTimes(1);
+      expect(clicked).toEqual([]);
+      // 保存できたら始める
+      await act(async () => finishSave(true));
+      expect(clicked).toEqual([`/api/pages/${FOLDER}/export.zip`]);
+
+      // 保存できなければ始めず、理由を出す
+      await act(async () => exportButton().click());
+      await act(async () => finishSave(false));
+      expect(clicked).toHaveLength(1);
+      expect(container!.textContent).toContain("書き出しの前に変更を保存できませんでした");
+    } finally {
+      HTMLAnchorElement.prototype.click = click_;
+    }
   });
 
   it("フォルダの書き出しは zip の URL を押す（フォルダでないページには出さない）", async () => {

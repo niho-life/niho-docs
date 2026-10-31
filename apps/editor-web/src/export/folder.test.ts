@@ -31,6 +31,18 @@ describe("exportFileName / uniqueFileNames", () => {
     expect(uniqueFileNames(["a", "a", "b", "A"])).toEqual(["a.md", "a-2.md", "b.md", "A-3.md"]);
     expect(uniqueFileNames(["", ""])).toEqual(["無題.md", "無題-2.md"]);
   });
+
+  it("counts the numbered names it made as used: a, a, a-2 never produces a-2.md twice (zip refuses the whole export)", () => {
+    expect(uniqueFileNames(["a", "a", "a-2"])).toEqual(["a.md", "a-2.md", "a-2-2.md"]);
+    expect(uniqueFileNames(["a-2", "a", "a"])).toEqual(["a-2.md", "a.md", "a-3.md"]);
+    expect(uniqueFileNames(["a", "A", "a-2", "A-2"])).toEqual(["a.md", "A-2.md", "a-2-2.md", "A-2-3.md"]);
+    // 比べるのは zip と同じ形（NFC・小文字）。濁点を合成した字と分けた字は同じ名前
+    const names = uniqueFileNames(["\u30ac", "\u30ab\u3099"]);
+    expect(names[0]).toBe("\u30ac.md");
+    expect(names[1]).toBe("\u30ab\u3099-2.md");
+    const all = uniqueFileNames(Array.from({ length: 30 }, (_, index) => (index % 3 === 0 ? "x" : index % 3 === 1 ? "x-2" : "X-3")));
+    expect(new Set(all.map((name) => name.normalize("NFC").toLowerCase())).size).toBe(all.length);
+  });
 });
 
 describe("photoAssetIds", () => {

@@ -59,6 +59,8 @@ function memoryDeps(options: { userId?: string | null; rows?: Page[]; fields?: P
               orders.push({ id, move });
               return id === FOLDER ? "edge" : "moved";
             },
+            // 動かしたあとの、同じ親の全ての行の確定した並び（読み込んでいない兄弟も含む）
+            pageSiblingOrders: async (owner, id) => (owner === OWNER && rows.some((row) => row.id === id) ? [{ id: INSIDE, sortOrder: 2 }, { id: "unloaded-sibling", sortOrder: 1 }] : []),
             listPageChildren: async (owner, parent) => (owner === OWNER ? rows.filter((row) => row.parent === parent).map(summaryOf) : []),
             listPageTree: async (owner, rootId) => {
               if (owner !== OWNER) return [];
@@ -114,12 +116,13 @@ describe("PATCH /api/pages/{id}/order", () => {
     const { deps, orders } = memoryDeps();
     const response = await move(INSIDE, { move: "up" }, deps);
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ moved: true });
+    // 動かしたときは、同じ親の全ての兄弟の確定した並びも返す（画面が読み込んでいない兄弟を含む）
+    expect(await response.json()).toEqual({ moved: true, orders: [{ id: INSIDE, sortOrder: 2 }, { id: "unloaded-sibling", sortOrder: 1 }] });
     expect(orders).toEqual([{ id: INSIDE, move: "up" }]);
 
     const edge = await move(FOLDER, { move: "up" }, deps);
     expect(edge.status).toBe(200);
-    expect(await edge.json()).toEqual({ moved: false });
+    expect(await edge.json()).toEqual({ moved: false, orders: [] });
   });
 
   it("answers 401 without a session, 403 from another origin, 503 without a database and 400 for a body the screen could not send", async () => {

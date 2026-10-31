@@ -463,6 +463,25 @@ export class EditorStore {
   }
 
   /**
+   * そのページと同じ親の全ての行の、いまの `sort_order`（並びの順）。並べ替えのあと、画面が**サーバーが確定した値**で行を更新するための読み取り。
+   * 画面は一覧を一部だけ読み込んでいることがあり、自分の持っている行だけで入れ替えると、読み込んでいない兄弟との並びがずれる。
+   * ページが無い・別の人のものなら空。
+   */
+  async pageSiblingOrders(owner: OwnerId, id: string): Promise<{ id: string; sortOrder: number }[]> {
+    assertOwner(owner);
+    if (!isPageId(id)) return [];
+    const result = await this.#db.query<{ id: string; sort_order: number }>(
+      `SELECT s.id, s.sort_order
+         FROM pages AS me
+         JOIN pages AS s ON s.owner = me.owner AND s.deleted_at IS NULL AND s.parent IS NOT DISTINCT FROM me.parent
+        WHERE me.owner = $1 AND me.id = $2 AND me.deleted_at IS NULL
+        ORDER BY s.id`,
+      [owner, id],
+    );
+    return result.rows.map((row) => ({ id: row.id, sortOrder: row.sort_order }));
+  }
+
+  /**
    * そのページの中の行（同じ親の並びの順）。フォルダの子を列挙する口（自動参考ページ・書き出し・画面が使う）。
    * `parent` に null を渡すと上の段。ページが無い・別の人のものなら空（親が本人のものかは呼ぶ側が先に確かめる）。
    */
