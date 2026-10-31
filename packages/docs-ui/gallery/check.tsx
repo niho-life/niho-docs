@@ -31,6 +31,10 @@ const VARIANTS: { id: string; widths: readonly number[] }[] = [
   { id: "page:rec2?rail=1", widths: [390, 375, 320] },
   { id: "page:j1030?rail=1", widths: [390, 375, 320] },
   { id: "page:rec?rail=0", widths: [1440, 390, 375, 320] },
+  // 録音の文字起こし（話者 3 人・直している最中／6 人で色が出そろう・長い名前／時刻なしで再生なし）
+  { id: "page:rec?speakers=3&edit=1&rail=0", widths: [1440, 390, 375, 320] },
+  { id: "page:rec?speakers=6&rail=0", widths: [1440, 390, 375, 320] },
+  { id: "page:rec?time=0&play=0&rail=0", widths: [1440, 390, 375, 320] },
   // フェーズ2: 公開のシート（発信先を選んだ後の足りないもの・条件がそろった・未接続・公開中の更新）
   { id: "sheet:publish?pick=exp", widths: [1440, 390, 375, 320] },
   { id: "sheet:publish?pick=niho", widths: [1440, 390, 375, 320] },

@@ -3,10 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import type { PageSummary } from "@niho/editor-store";
-import { RecordingStart, ShellSettingsPage, type RecordingHow, type RecordingNext } from "niho-docs-ui/shell";
+import { ShellSettingsPage } from "niho-docs-ui/shell";
 import { rememberLastPage } from "@/lib/last-page";
 import { isNarrowNow, useEditorFrame } from "./EditorFrame";
 import { PageEditor } from "./PageEditor";
+import { RecordingTranscript } from "./RecordingTranscript";
+
+export { RecordingStartScreen } from "./RecordingStartScreen";
 
 /** `/`。デスクトップでは最後に開いたページ（無ければ新しいページ）へ移る。狭い画面では一覧がこの画面なので何もしない。 */
 export function HomeRedirect({ lastPageId }: { lastPageId: string | null }) {
@@ -31,12 +34,20 @@ export function OpenPage({ summary, blocks, revision }: { summary: PageSummary; 
     rememberLastPage(summary.id);
     pageOpened(summary);
   }, [summary, pageOpened]);
-  return (
+  const editor = (
     <PageEditor
       page={{ id, title: summary.title, blocks, revision, updatedAt: summary.updatedAt, kind: summary.kind, lang: summary.lang }}
       onTitleChange={(value) => frame.pageTitleChanged(id, value)}
       onSaved={() => frame.pageSaved(id)}
     />
+  );
+  // 録音ページは、文字起こしの録音ブロックが本文の上に入る（設計 §7.1）
+  if (summary.kind !== "rec") return editor;
+  return (
+    <>
+      <RecordingTranscript pageId={id} />
+      {editor}
+    </>
   );
 }
 
@@ -93,27 +104,6 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
       onSaved={() => {
         if (createdRef.current) frame.pageSaved(createdRef.current);
       }}
-    />
-  );
-}
-
-/** `/p/new?from=recording`。開始の画面だけ（状態はこの画面の中だけ）。 */
-export function RecordingStartScreen() {
-  const [how, setHow] = useState<RecordingHow>("mic");
-  const [background, setBackground] = useState("");
-  const [next, setNext] = useState<RecordingNext>("article");
-  return (
-    <RecordingStart
-      how={how}
-      onHow={setHow}
-      background={background}
-      onBackground={setBackground}
-      people={[]}
-      terms=""
-      next={next}
-      onNext={setNext}
-      // 開始は #36
-      onStart={() => undefined}
     />
   );
 }
