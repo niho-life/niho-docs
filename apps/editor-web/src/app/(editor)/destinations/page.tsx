@@ -16,7 +16,8 @@ export const metadata: Metadata = { title: "発信先" };
 export default async function DestinationsPage() {
   const session = await requireSession("/destinations");
   const wiring = connectionsDeps.ports(session);
-  if (!wiring) return <StoreUnavailable />;
-  const destinations = await destinationsFor(wiring, session.userId);
+  const counts = connectionsDeps.counts();
+  if (!wiring || !counts) return <StoreUnavailable />;
+  const destinations = await destinationsFor(wiring, session.userId, counts);
   return <DestinationsView initial={destinations} />;
 }

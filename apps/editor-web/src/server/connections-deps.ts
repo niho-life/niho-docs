@@ -1,4 +1,5 @@
 import "server-only";
+import { countLivePublishedByHandle } from "@niho/editor-store";
 import { getStorage } from "../storage/runtime";
 import { storageAssetBytes } from "../publish/export-assets";
 import { pgDraftFingerprints, pgPublishStore } from "../publish/pg-store";
@@ -17,6 +18,10 @@ export const connectionsDeps: ConnectionsApiDeps = {
   ports: (session) => {
     const pool = getPool();
     return pool ? wirePublishPorts(pgPublishStore(pool), session, { drafts: pgDraftFingerprints(pool) }) : null;
+  },
+  counts: () => {
+    const pool = getPool();
+    return pool ? (owner, handles) => countLivePublishedByHandle(pool, owner, handles) : null;
   },
   exportAssets: () => {
     const storage = getStorage(process.env);

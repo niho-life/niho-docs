@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { PublishService, connectionSource, siteDeclarationSource } from "@niho/editor-publish";
 import { ManualClock, MemoryAuthors, MemoryDeclarations, MemoryFacts, MemoryRoles, memoryAssetUrls } from "@niho/editor-publish/test-support";
+import { countLivePublishedByHandle } from "@niho/editor-store";
 import { applyMigrations } from "@niho/editor-store/migrate";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -10,7 +11,7 @@ import { pgPublicApiSource } from "../public-api/pg-source";
 import { servePublicApi } from "../public-api/http";
 import { createFixedWindowLimiter } from "../public-api/rate-limit";
 import { NO_FACE_CREDENTIALS } from "../public-api/source";
-import { createDestination, disconnectDestination, readDestination, rotateDestinationKey, type ConnectionsApiDeps, type IssuedKeyDto, type SiteDestinationDto, type SiteDetailDto } from "./connections-api";
+import { createDestination, disconnectDestination, listDestinations, readDestination, rotateDestinationKey, type ConnectionsApiDeps, type IssuedKeyDto, type SiteDestinationDto, type SiteDetailDto } from "./connections-api";
 
 /**
  * 受入（#41）を、実 PostgreSQL と**公開 API v1 の本物の handler**まで通して確かめる。
@@ -22,6 +23,20 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 
 const ORIGIN = "http://editor.test";
 const ACTOR = "synthetic-owner-a";
+const OTHER = "synthetic-owner-b";
+
+/** 全員で共有する面の宣言（条件なし。面の handle が owner をまたぐことを確かめるために要る）。 */
+const FACE_EXP = {
+  schemaVersion: 1,
+  id: "exp",
+  label: "NIHO Experience",
+  host: "exp.example.com",
+  path: "guides",
+  ranges: ["live", "unlisted"],
+  extras: [],
+  accepts: { blocks: ["paragraph", "heading"], marks: ["bold"] },
+  requires: [],
+};
 /** handle は誰にも渡らない（解除したあとも使えない）ので、テストごとに別の handle を使う。 */
 const site = (handle: string) => ({ handle, mode: "api" as const, siteUrl: "https://mika-sato.example", urlShape: { host: "mika-sato.example", path: "posts" } });
 
@@ -29,13 +44,15 @@ const notUsed = async (): Promise<Response> => {
   throw new Error("the destinations API never calls the login routes");
 };
 
-const auth: AuthProvider = {
-  mode: "stub",
-  getSession: async () => ({ userId: ACTOR, mode: "stub", profile: { name: "Example Writer" } }),
-  beginLogin: notUsed,
-  completeLogin: notUsed,
-  logout: notUsed,
-};
+function authAs(userId: string): AuthProvider {
+  return {
+    mode: "stub",
+    getSession: async () => ({ userId, mode: "stub", profile: { name: "Example Writer" } }),
+    beginLogin: notUsed,
+    completeLogin: notUsed,
+    logout: notUsed,
+  };
+}
 
 function request(method: string, path: string, body?: unknown): Request {
   const init: RequestInit = { method, headers: { host: "editor.test", ...(method === "GET" ? {} : { origin: ORIGIN, "content-type": "application/json" }) } };
@@ -62,14 +79,18 @@ describe.skipIf(databaseUrl === undefined)("発信先の設定の route を Post
     const store = pgPublishStore(pool);
     const roles = new MemoryRoles();
     roles.set(ACTOR, ["writer", "kamakura"]);
+    roles.set(OTHER, ["writer", "kamakura"]);
     const authors = new MemoryAuthors();
     authors.set(ACTOR, { name: "Example Writer", handle: null, url: null });
+    authors.set(OTHER, { name: "Another Writer", handle: null, url: null });
+    const faces = new MemoryDeclarations();
+    faces.set("exp", FACE_EXP);
     const ports = {
       store,
       roles,
       storage: { read: async () => "CLOUD" as const },
       connections: connectionSource(store),
-      declarations: siteDeclarationSource(store, new MemoryDeclarations()),
+      declarations: siteDeclarationSource(store, faces),
       authors,
       facts: new MemoryFacts(),
       assetUrls: memoryAssetUrls(),
@@ -77,8 +98,10 @@ describe.skipIf(databaseUrl === undefined)("発信先の設定の route を Post
     };
     publisher = new PublishService(ports);
     deps = {
-      auth: () => auth,
+      auth: () => authAs(ACTOR),
       ports: () => ({ publish: ports, connections: { store, clock, drafts: pgDraftFingerprints(pool), assetBytes: { read: async () => null } }, photosReady: false }),
+      // 本物の数え方（owner で絞る SQL）をそのまま使う
+      counts: () => (owner, handles) => countLivePublishedByHandle(pool, owner, handles),
       exportAssets: () => null,
     };
   });
@@ -99,11 +122,11 @@ describe.skipIf(databaseUrl === undefined)("発信先の設定の route を Post
   }
 
   /** 公開できる下書き（題名ごとに slug が変わる）。 */
-  async function readyPage(): Promise<string> {
+  async function readyPage(owner: string = ACTOR): Promise<string> {
     const title = `Coastal walk ${randomUUID().slice(0, 8)}`;
     const created = await pool.query<{ id: string }>(
       "INSERT INTO pages (owner, title, lang, lead, blocks) VALUES ($1, $2, 'en', $3, $4::jsonb) RETURNING id",
-      [ACTOR, title, "Start early and follow the shoreline.", JSON.stringify([{ type: "paragraph", content: [{ type: "text", text: "Meet at the station at 7:00." }] }])],
+      [owner, title, "Start early and follow the shoreline.", JSON.stringify([{ type: "paragraph", content: [{ type: "text", text: "Meet at the station at 7:00." }] }])],
     );
     return created.rows[0]!.id;
   }
@@ -114,15 +137,59 @@ describe.skipIf(databaseUrl === undefined)("発信先の設定の route を Post
     return (await response.json()) as { site: SiteDestinationDto; key: IssuedKeyDto };
   }
 
-  async function publish(pageId: string, handle: string): Promise<void> {
+  async function publish(pageId: string, handle: string, actorId: string = ACTOR): Promise<void> {
     const result = await publisher.publish({
-      actorId: ACTOR,
+      actorId,
       pageId,
       target: { dest: "site", handle },
       settings: { range: "live", extras: { app: false, news: false, xp: false }, category: null, related: [] },
     });
     if (!result.ok) throw new Error(JSON.stringify(result));
   }
+
+  it("公開中の件数は本人のページだけを数える（全員で共有する面に別のアカウントが公開していても足されない）", async () => {
+    // 別のアカウントが exp（全員で共有する面）へ 2 ページ公開する
+    for (let i = 0; i < 2; i += 1) {
+      const result = await publisher.publish({
+        actorId: OTHER,
+        pageId: await readyPage(OTHER),
+        target: { dest: "exp" },
+        settings: { range: "live", extras: { app: false, news: false, xp: false }, category: null, related: [] },
+      });
+      if (!result.ok) throw new Error(JSON.stringify(result));
+    }
+
+    // DB には exp の公開が 2 件ある（handle だけで数えると 2 件に見える）
+    const all = await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM publications WHERE handle = 'exp' AND stopped_at IS NULL");
+    expect(Number(all.rows[0]?.n)).toBe(2);
+
+    // 1 件も公開していない本人には 0 件しか見えない
+    const mine = (await (await listDestinations(request("GET", "/api/destinations"), deps)).json()) as { destinations: { faces: { handle: string; published: number }[] } };
+    expect(mine.destinations.faces.map((face) => [face.handle, face.published])).toEqual([
+      ["exp", 0],
+      ["niho", 0],
+    ]);
+
+    // 本人が 1 件公開すると、自分の 1 件だけが数に入る
+    const own = await publisher.publish({
+      actorId: ACTOR,
+      pageId: await readyPage(),
+      target: { dest: "exp" },
+      settings: { range: "live", extras: { app: false, news: false, xp: false }, category: null, related: [] },
+    });
+    if (!own.ok) throw new Error(JSON.stringify(own));
+    const after = (await (await listDestinations(request("GET", "/api/destinations"), deps)).json()) as { destinations: { faces: { handle: string; published: number }[] } };
+    expect(after.destinations.faces.find((face) => face.handle === "exp")?.published).toBe(1);
+
+    // 別のアカウントから見ても自分の 2 件だけ
+    const theirs = (await (await listDestinations(request("GET", "/api/destinations"), { ...deps, auth: () => authAs(OTHER) }).then((response) => response.json())) as { destinations: { faces: { handle: string; published: number }[] } });
+    expect(theirs.destinations.faces.find((face) => face.handle === "exp")?.published).toBe(2);
+
+    // 数える SQL そのものも owner ごとに分かれている
+    expect((await countLivePublishedByHandle(pool, ACTOR, ["exp", "niho"])).get("exp")).toBe(1);
+    expect((await countLivePublishedByHandle(pool, OTHER, ["exp", "niho"])).get("exp")).toBe(2);
+    expect((await countLivePublishedByHandle(pool, "synthetic-owner-c", ["exp"])).get("exp")).toBe(0);
+  });
 
   it("鍵を再発行すると、公開 API は旧鍵を 401 にし、新しい鍵だけを通す", async () => {
     const handle = "mika-rotate";

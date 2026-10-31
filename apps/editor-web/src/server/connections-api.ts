@@ -38,10 +38,19 @@ import { errorResponse, guarded, isSameOriginRequest, jsonResponse, notFoundResp
  * WordPress・Ghost は v1 では入口だけ（`mode` を保存できるが送信は動かない。`pushEnabled` は常に false）。
  */
 
+/**
+ * 本人の公開中のページを handle ごとに数える（`countLivePublishedByHandle`）。
+ * `publications` の行は handle だけでは本人のものに絞れない（NIHO の面の handle は全員で共有する）ので、
+ * **数える側に認証した本人を渡し**、その人のページの公開版だけを数える。
+ */
+export type LivePublishedCounter = (owner: string, handles: readonly string[]) => Promise<Map<string, number>>;
+
 export type ConnectionsApiDeps = {
   auth: () => AuthProvider;
   /** 本人ごとの公開のポート（src/publish/ports.ts）。DB が使えないときは null（503）。 */
   ports: (session: Session) => PublishWiring | null;
+  /** 本人の公開中のページの数。DB が使えないときは null（503）。 */
+  counts: () => LivePublishedCounter | null;
   /** 書き出しの写真の読み出し（保存先）。使えないときは null（書き出しは 503）。要求ごとに 1 つ作る（予算を数えるため）。 */
   exportAssets: () => ExportAssetReader | null;
   env?: Readonly<Record<string, string | undefined>>;
@@ -152,20 +161,6 @@ function issuedKeyDto(key: { id: string; plaintext: string; masked: string; crea
   return { id: key.id, plaintext: key.plaintext, masked: key.masked, createdAt: key.createdAt };
 }
 
-/** handle ごとの公開中（やめていない）ページの数。1 つのトランザクションで読む。 */
-async function liveCounts(wiring: PublishWiring, handles: readonly string[]): Promise<Map<string, number>> {
-  const unique = [...new Set(handles)];
-  if (unique.length === 0) return new Map();
-  return wiring.connections.store.transaction(async (tx) => {
-    const counts = new Map<string, number>();
-    for (const handle of unique) {
-      const rows = await tx.listPublicationsByHandle(handle);
-      counts.set(handle, rows.filter((row) => row.stoppedAt === null).length);
-    }
-    return counts;
-  });
-}
-
 /** 役割と宣言から、NIHO の面の行を作る。役割の無い面の宣言は読まない。 */
 async function faceRows(wiring: PublishWiring, actorId: string, counts: Map<string, number>): Promise<FaceDestinationDto[]> {
   const roles = await wiring.publish.roles.read(actorId);
@@ -221,7 +216,7 @@ function parseUpdateBody(body: unknown): { ok: true; value: UpdateInput } | { ok
   return { ok: true, value };
 }
 
-type Ready = { ok: true; wiring: PublishWiring; actorId: string } | { ok: false; response: Response };
+type Ready = { ok: true; wiring: PublishWiring; actorId: string; counts: LivePublishedCounter } | { ok: false; response: Response };
 
 /** 本人・origin・DB の検査（本文を読む前）。 */
 async function ready(request: Request, deps: ConnectionsApiDeps, mutating: boolean): Promise<Ready> {
@@ -229,8 +224,9 @@ async function ready(request: Request, deps: ConnectionsApiDeps, mutating: boole
   if (!session) return { ok: false, response: errorResponse("unauthorized") };
   if (mutating && !isSameOriginRequest(request, deps.env)) return { ok: false, response: errorResponse("forbidden") };
   const wiring = deps.ports(session);
-  if (!wiring) return { ok: false, response: errorResponse("unavailable") };
-  return { ok: true, wiring, actorId: session.userId };
+  const counts = deps.counts();
+  if (!wiring || !counts) return { ok: false, response: errorResponse("unavailable") };
+  return { ok: true, wiring, actorId: session.userId, counts };
 }
 
 /** `ConnectionService` の断りを応答にする。`not_found` と `failed` は共通の応答。 */
@@ -244,11 +240,12 @@ function refusal(reason: string): Response {
  * 役割で出せる面と、本人のサイトの接続（解除したものは出さない）。
  * route（GET /api/destinations）と、画面の最初の値を読む server component（app/(editor)/destinations/page.tsx）の両方が使う。
  */
-export async function destinationsFor(wiring: PublishWiring, actorId: string): Promise<DestinationsDto> {
+export async function destinationsFor(wiring: PublishWiring, actorId: string, countLive: LivePublishedCounter): Promise<DestinationsDto> {
   const listed = await new ConnectionService(wiring.connections).listConnections({ actorId });
   if (!listed.ok) throw new Error(`connections are not available: ${listed.reason}`);
   const live = listed.connections.filter((connection) => connection.removedAt === null);
-  const counts = await liveCounts(wiring, [...FACE_DESTS, ...live.map((connection) => connection.handle)]);
+  // 数えるのは本人のページの公開版だけ（面の handle は全員で共有するので、owner を必ず渡す）
+  const counts = await countLive(actorId, [...FACE_DESTS, ...live.map((connection) => connection.handle)]);
   return {
     faces: await faceRows(wiring, actorId, counts),
     sites: live.map((connection) => siteDto(connection, counts.get(connection.handle) ?? 0)),
@@ -275,7 +272,7 @@ export function listDestinations(request: Request, deps: ConnectionsApiDeps): Pr
   return guarded("GET /api/destinations", async () => {
     const checked = await ready(request, deps, false);
     if (!checked.ok) return checked.response;
-    return jsonResponse(200, { destinations: await destinationsFor(checked.wiring, checked.actorId) });
+    return jsonResponse(200, { destinations: await destinationsFor(checked.wiring, checked.actorId, checked.counts) });
   });
 }
 

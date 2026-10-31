@@ -26,6 +26,7 @@ import {
   updateDestination,
   type ConnectionsApiDeps,
   type DestinationsDto,
+  type LivePublishedCounter,
   type IssuedKeyDto,
   type SiteDestinationDto,
   type SiteDetailDto,
@@ -88,19 +89,24 @@ function page(id: string, owner: string, photo = false): DraftPage {
   };
 }
 
+const OTHER_PAGE_ID = "33333333-4444-4555-8666-777777777777";
+
 function world({ photo = false }: { photo?: boolean } = {}) {
   const store = new MemoryPublishStore();
   store.putPage(page(PAGE_ID, ACTOR, photo));
+  store.putPage(page(OTHER_PAGE_ID, OTHER));
   if (photo) {
     store.putAsset(PAGE_ID, { id: PHOTO_ID, kind: "image", bytes: 12, sha256: PHOTO_SHA, contentType: "image/jpeg", alt: "Fishing boats in the harbor", credit: null, consent: true });
   }
   const clock = new ManualClock("2026-10-01T09:00:00.000Z", 60);
   const roles = new MemoryRoles();
   roles.set(ACTOR, ["writer"]);
+  roles.set(OTHER, ["writer"]);
   const faces = new MemoryDeclarations();
   faces.set("exp", FACE_EXP);
   const authors = new MemoryAuthors();
   authors.set(ACTOR, { name: "Example Writer", handle: null, url: null });
+  authors.set(OTHER, { name: "Another Writer", handle: null, url: null });
   const storage = new MemoryStorageMode();
   const wiring: PublishWiring = {
     publish: {
@@ -119,9 +125,25 @@ function world({ photo = false }: { photo?: boolean } = {}) {
   };
   const service = new ConnectionService(wiring.connections);
   const publisher = new PublishService(wiring.publish);
+  /**
+   * 本物の `countLivePublishedByHandle` と同じ決まり: handle だけでなく**ページの owner でも絞る**
+   * （面の handle は全員で共有するので、handle だけで数えると他の人の公開が見える）。
+   */
+  const counts: LivePublishedCounter = async (owner, handles) => {
+    const state = store.snapshotState();
+    const wanted = [...new Set(handles)];
+    const result = new Map<string, number>(wanted.map((handle) => [handle, 0]));
+    for (const [pageId, publication] of Object.entries(state.publications)) {
+      if (publication.stoppedAt !== null || !result.has(publication.handle)) continue;
+      if (state.pages[pageId]?.ownerId !== owner) continue;
+      result.set(publication.handle, (result.get(publication.handle) ?? 0) + 1);
+    }
+    return result;
+  };
   const deps: ConnectionsApiDeps = {
     auth: () => authAs(ACTOR),
     ports: () => wiring,
+    counts: () => counts,
     exportAssets: () => ({ port: new MemoryAssetBytes(), exceeded: () => false }),
   };
   return { store, wiring, service, publisher, deps, faces, roles };
@@ -205,6 +227,60 @@ describe("GET /api/destinations", () => {
     expect((await disconnect(site.id, deps)).status).toBe(200);
     const after = (await (await list(deps)).json()) as { destinations: DestinationsDto };
     expect(after.destinations.sites).toEqual([]);
+  });
+
+  it("counts only the owner's own pages: another account's publication on a shared face never shows up", async () => {
+    const { deps, publisher } = world();
+    // 別のアカウントが、全員で共有する面（exp）へ 1 ページ公開する
+    const other = await publisher.publish({
+      actorId: OTHER,
+      pageId: OTHER_PAGE_ID,
+      target: { dest: "exp" },
+      settings: { range: "live", extras: { app: false, news: false, xp: false }, category: null, related: [] },
+      slug: "another-account-walk",
+    });
+    if (!other.ok) throw new Error(JSON.stringify(other));
+
+    // 1 件も公開していない本人には 0 件しか見えない
+    const mine = (await (await list(deps)).json()) as { destinations: DestinationsDto };
+    expect(mine.destinations.faces.map((face) => [face.handle, face.published])).toEqual([
+      ["exp", 0],
+      ["niho", 0],
+    ]);
+
+    // 本人が公開すると、自分の 1 件だけが数に入る（別のアカウントの 1 件は足されない）
+    const own = await publisher.publish({
+      actorId: ACTOR,
+      pageId: PAGE_ID,
+      target: { dest: "exp" },
+      settings: { range: "live", extras: { app: false, news: false, xp: false }, category: null, related: [] },
+      slug: "my-walk",
+    });
+    if (!own.ok) throw new Error(JSON.stringify(own));
+    const after = (await (await list(deps)).json()) as { destinations: DestinationsDto };
+    expect(after.destinations.faces.find((face) => face.handle === "exp")?.published).toBe(1);
+  });
+
+  it("counts 0 for a face the roles do not allow, even when someone else published there", async () => {
+    const { deps, publisher } = world();
+    const other = await publisher.publish({
+      actorId: OTHER,
+      pageId: OTHER_PAGE_ID,
+      target: { dest: "exp" },
+      settings: { range: "live", extras: { app: false, news: false, xp: false }, category: null, related: [] },
+      slug: "another-account-walk",
+    });
+    if (!other.ok) throw new Error(JSON.stringify(other));
+    const body = (await (await list({ ...deps, auth: () => authAs("synthetic-owner-c") })).json()) as { destinations: DestinationsDto };
+    expect(body.destinations.faces.map((face) => [face.handle, face.reason, face.published])).toEqual([
+      ["exp", "role", 0],
+      ["niho", "role", 0],
+    ]);
+  });
+
+  it("answers 503 when the counts cannot be read", async () => {
+    const { deps } = world();
+    expect((await list({ ...deps, counts: () => null })).status).toBe(503);
   });
 
   it("never lists another person's connection", async () => {
