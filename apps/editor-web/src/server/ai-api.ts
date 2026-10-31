@@ -13,16 +13,18 @@ import {
   type AiUsageSource,
   type AiUsageTotals,
   type EditorSettings,
+  type Block,
   type EditorStore,
   type OwnerId,
   type ReferencePage,
 } from "@niho/editor-store";
 import { AnthropicError } from "../ai/anthropic";
 import type { AiBackend } from "../ai/config";
-import { applyAdoptions, buildProposal, buildRequest, type Adoptions, type AiRun, type AiScope, type Proposal } from "../ai/engine";
+import { applyAdoptions, blockText, buildProposal, buildRequest, type Adoptions, type AiRun, type AiScope, type Proposal, type ProposalChange, type ProposalInsert, type ProposalResult } from "../ai/engine";
+import { diffWords } from "../ai/diff";
 import { referencesFrom } from "../ai/references";
 import type { AiInsertKind, AiUsageReport } from "../ai/model";
-import { intentLabel, parseIntent, type AiIntent } from "../ai/presets";
+import { MAX_INTENT_TEXT_CHARS, intentLabel, parseIntent, type AiIntent } from "../ai/presets";
 import type { AuthProvider } from "../auth/types";
 import { conflictResponse, errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 import { parseBlocks } from "./page-input";
@@ -362,6 +364,121 @@ export function adoptAiProposal(request: Request, id: string, deps: AiApiDeps): 
     }
     return jsonResponse(200, { page: result.page, adopted });
   });
+}
+
+/** この Mac の CLI が作った提案（`POST …/ai/proposals/device`）。モデルはサーバーで呼ばない。 */
+type DeviceProposalInput = {
+  conversationId: string | null;
+  baseRevision: number;
+  input: string;
+  reply: string;
+  engine: string;
+  label: string;
+  changes: { index: number; text: string }[];
+  inserts: ProposalInsert[];
+};
+
+/** エンジンの短い id（鍵・端末の情報を入れない）。chat-api.ts と同じ形。 */
+const ENGINE_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,95}$/;
+
+function parseDeviceProposalBody(body: unknown): InputResult<DeviceProposalInput> {
+  if (!isPlainObject(body) || !hasOnlyKeys(body, ["conversationId", "baseRevision", "input", "reply", "engine", "label", "changes", "inserts"])) return { ok: false };
+  if (!isPositiveInteger(body.baseRevision)) return { ok: false };
+  if (typeof body.engine !== "string" || !ENGINE_PATTERN.test(body.engine)) return { ok: false };
+  if (body.conversationId !== undefined && body.conversationId !== null && typeof body.conversationId !== "string") return { ok: false };
+  if (typeof body.input !== "string") return { ok: false };
+  const input = body.input.trim();
+  if (Array.from(input).length === 0 || Array.from(input).length > MAX_INTENT_TEXT_CHARS || input.includes("\u0000")) return { ok: false };
+  if (body.reply !== undefined && typeof body.reply !== "string") return { ok: false };
+  if (body.label !== undefined && typeof body.label !== "string") return { ok: false };
+  const adoptions = parseAdoptionBody({ baseRevision: body.baseRevision, changes: body.changes ?? [], inserts: body.inserts ?? [] });
+  if (!adoptions.ok) return { ok: false };
+  return {
+    ok: true,
+    value: {
+      conversationId: typeof body.conversationId === "string" ? body.conversationId : null,
+      baseRevision: body.baseRevision,
+      input,
+      reply: typeof body.reply === "string" ? body.reply.trim() : "",
+      engine: body.engine,
+      label: typeof body.label === "string" && body.label.trim() !== "" ? body.label.trim().slice(0, 200) : input,
+      changes: adoptions.value.changes,
+      inserts: adoptions.value.inserts,
+    },
+  };
+}
+
+/**
+ * POST /api/pages/{id}/ai/proposals/device — **この Mac の CLI が作った提案**を受ける（設計 §6.1 の Mac の往復）。
+ * サーバーはモデルを呼ばず、**差分は今の本文から自分で作る**（送られてきた差分は信用しない）。ページは変わらず、
+ * 採用（`POST …/ai/adoptions`）のときだけ版に残して保存する＝ブラウザの提案とまったく同じ扱い。
+ *
+ * **月の上限には数えない**（利用者のサブスクで従量が出ないため）。使用量は `device` の行に回数だけ残る。
+ * `baseRevision` が今の revision と違えば 409 と今のページ。未認証は 401、他人のページ・無いページ・他人の会話は同じ 404。
+ */
+export function recordDeviceProposal(request: Request, id: string, deps: AiApiDeps): Promise<Response> {
+  const route = "POST /api/pages/[id]/ai/proposals/device";
+  return guarded(route, async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const store = deps.store();
+    const usage = deps.usage();
+    const chats = deps.conversations();
+    if (!store || !usage || !chats) return errorResponse("unavailable");
+    const body = await readJsonBody(request);
+    if (!body.ok) return body.response;
+    const input = parseDeviceProposalBody(body.value);
+    if (!input.ok) return errorResponse("bad_request");
+
+    const owner = session.userId;
+    const page = await store.getPage(owner, id);
+    if (!page) return notFoundResponse();
+    if (page.revision !== input.value.baseRevision) return conflictResponse(page);
+    const conversationId = input.value.conversationId;
+    if (conversationId !== null && !(await chats.get(owner, id, conversationId))) return notFoundResponse();
+
+    // 差分はサーバーが今の本文から作る（Mac から来た「前の文」は使わない）
+    const built = deviceProposal(page.blocks, input.value);
+    if (!built.ok) return errorResponse("bad_request");
+
+    const turn = await chats.append(owner, {
+      pageId: id,
+      conversationId,
+      request: { text: input.value.input },
+      result: { text: input.value.reply || resultText(built.proposal), proposal: built.proposal },
+      author: { route: "device", engine: input.value.engine },
+    });
+    if (!turn) console.error("editor-web: ai turn not recorded", { route });
+    // 回数だけ数える（サブスクなので金額は 0。月の上限では止めない）
+    const month = currentMonth(deps);
+    await usage.record(owner, month, { requests: 1, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 }, "device");
+    return jsonResponse(200, {
+      proposal: built.proposal,
+      conversation: turn ? { id: turn.conversation.id, messageId: turn.result.id } : null,
+    });
+  });
+}
+
+/** 外で作った提案を、今の本文と突き合わせて組み直す（変わらない変更は落とし、差分はここで作る）。 */
+function deviceProposal(blocks: readonly Block[], input: DeviceProposalInput): ProposalResult {
+  const changes: ProposalChange[] = [];
+  const seen = new Set<number>();
+  for (const change of input.changes) {
+    const block = blocks[change.index];
+    if (!block || (block.type !== "paragraph" && block.type !== "heading")) return { ok: false, reason: "index is not an editable paragraph" };
+    if (seen.has(change.index)) return { ok: false, reason: "duplicate index" };
+    seen.add(change.index);
+    const before = blockText(block);
+    if (before === change.text) continue;
+    changes.push({ index: change.index, before, after: change.text, parts: diffWords(before, change.text) });
+  }
+  for (const insert of input.inserts) {
+    if (insert.afterIndex < -1 || insert.afterIndex >= blocks.length) return { ok: false, reason: "afterIndex out of range" };
+  }
+  changes.sort((a, b) => a.index - b.index);
+  const inserts = [...input.inserts].sort((a, b) => a.afterIndex - b.afterIndex);
+  return { ok: true, proposal: { label: input.label, baseRevision: input.baseRevision, changes, inserts, unchanged: input.changes.length - changes.length } };
 }
 
 /**

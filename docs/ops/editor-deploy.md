@@ -133,6 +133,8 @@ AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messa
 
 会話（AI チャット）はページごとに DB（`ai_conversations`・`ai_messages`・`ai_message_changes`。migration 0022・0025）に残る。残すのは頼んだことと提案の中身・作業の要約（道具とページの名前と成否）・採用や書き換えで残った版の番号だけで、**鍵・プロンプト・モデルへ送った文は残さない**。ページを消せば会話も消える。GCP の追加の資源は無い。
 
+**Mac アプリ（この Mac の CLI）がサーバーへ返す口は 2 つ**（設計 §6.1）。`POST /api/pages/{id}/ai/proposals/device` は**提案として返す**（ページは変わらず、採用のときだけ版に残して保存する＝ブラウザの提案と同じ扱い。差分はサーバーが今の本文から作り、Mac から来た差分は信用しない）。`POST /api/pages/{id}/ai/chat/turns` は**直接書き換える**（チャットと同じ道：作業場の確認 → 版を残す → 保存 → 会話に記録）。どちらもモデルをサーバーで呼ばず、**月の上限には数えない**。
+
 **使用量は経路ごとに分けて数える**（`ai_usage` は owner・月・経路ごとに 1 行）。**月の上限（USD）で止めるのは
 `server`（サーバーの API）だけ**で、`device`（Mac アプリがこの Mac の CLI で作ったもの。`POST /api/pages/{id}/ai/chat/turns`
 で書き戻す）は回数だけ記録し、止めない（利用者のサブスクで従量が出ないため）。`GET /api/ai/usage` の `usage` は
