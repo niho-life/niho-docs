@@ -7,6 +7,7 @@ import type { AuthProvider } from "../auth/types";
 import { CLOUD_TASKS_ORIGIN, CloudTasksQueue, METADATA_TOKEN_URL, WORKER_RUN_PATH, type CloudTasksConfig } from "../steps/cloud-tasks";
 import { fakeExecutor } from "../steps/executor";
 import { taskName } from "../steps/queue";
+import { DEFAULT_RECIPES } from "../steps/recipes";
 import { pgStepRunStore, pgStepSweepStore } from "../steps/store";
 import type { OidcVerifyResult } from "./google-oidc";
 import { createStepRun, type StepsApiDeps } from "./steps-api";
@@ -98,7 +99,7 @@ describe.skipIf(databaseUrl === undefined)("Cloud Tasks worker with PostgreSQL",
   function wire() {
     const tasks = fakeCloudTasks();
     const queue = new CloudTasksQueue(CONFIG, { fetch: tasks.fetch });
-    const api: StepsApiDeps = { auth: () => authAs(OWNER), steps: () => pgStepRunStore(pool), queue: () => queue, env: ENV };
+    const api: StepsApiDeps = { auth: () => authAs(OWNER), steps: () => pgStepRunStore(pool), recipes: () => async () => DEFAULT_RECIPES, queue: () => queue, env: ENV };
     // 検証器は偽物（トークンの検証そのものは google-oidc.test.ts）。期待値が設定のとおりかだけを見る
     const verify = async (token: string, expected: { audience: string; allowedEmail: string }): Promise<OidcVerifyResult> =>
       token === OIDC && expected.audience === CONFIG.workerUrl && expected.allowedEmail === CONFIG.invokerServiceAccount ? { ok: true } : { ok: false, code: "bad_signature" };
@@ -106,6 +107,7 @@ describe.skipIf(databaseUrl === undefined)("Cloud Tasks worker with PostgreSQL",
       config: () => CONFIG,
       verify,
       steps: () => ({ ...pgStepRunStore(pool), ...pgStepSweepStore(pool) }),
+      recipes: () => async () => DEFAULT_RECIPES,
       queue: () => queue,
       executor: () => fakeExecutor,
     };

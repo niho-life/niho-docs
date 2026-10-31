@@ -2,11 +2,16 @@ import { DEFAULT_LEASE_SECONDS, computeBasis, isStepErrorCode, type AttemptRef }
 import { parseBlocks } from "../server/page-input";
 import { StepError, type StepExecutor } from "./executor";
 import { taskName, type TaskQueue } from "./queue";
-import { findRecipe } from "./recipes";
+import { findRecipeIn, type RecipeReader } from "./recipes";
 import type { StepRunStore } from "./store";
 
 export type RunnerDeps = {
   store: Pick<StepRunStore, "claimAttempt" | "heartbeatAttempt" | "readStepInput" | "commitAttempt" | "failAttempt">;
+  /**
+   * run を持っている人の手順（設定で変えたもの・足したものを含む。#108）。claim で分かった owner で読む
+   * （要求の値からは決めない）。読めなければ `unknown_recipe` で終わる。
+   */
+  recipes: RecipeReader;
   executor: StepExecutor;
   queue: TaskQueue;
   /** lease の長さ（秒）。生存確認はその 1/3 おき。 */
@@ -74,7 +79,7 @@ export async function runAttempt(deps: RunnerDeps, task: { runId: string; stepIn
   const { claim } = claimed;
   const ref: AttemptRef = { runId: claim.runId, stepIndex: claim.stepIndex, generation: claim.generation };
 
-  const recipe = findRecipe(claim.recipe);
+  const recipe = findRecipeIn(await deps.recipes(claim.owner), claim.recipe);
   const step = recipe?.steps[claim.stepIndex];
   if (!recipe || !step) return recordFailure(deps, ref, new StepError("unknown_recipe", false));
   const input = await deps.store.readStepInput(claim);

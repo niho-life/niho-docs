@@ -1,5 +1,5 @@
 import "server-only";
-import { getAiUsage, recordAiUsage } from "@niho/editor-store";
+import { getAiUsage, getEditorSettings, recordAiUsage } from "@niho/editor-store";
 import { monthlyLimitUsd, resolveAiBackend } from "../ai/config";
 import { getAuthProvider } from "../auth";
 import type { AiApiDeps } from "./ai-api";
@@ -20,6 +20,10 @@ export const aiDeps: AiApiDeps = {
           record: (owner, month, delta) => recordAiUsage(pool, owner, month, delta),
         }
       : null;
+  },
+  settings: () => {
+    const pool = getPool();
+    return pool ? (owner) => getEditorSettings(pool, owner) : null;
   },
   ai: () => resolveAiBackend(process.env),
   limitUsd: () => monthlyLimitUsd(process.env),

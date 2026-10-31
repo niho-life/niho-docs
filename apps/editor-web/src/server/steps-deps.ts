@@ -1,9 +1,11 @@
 import "server-only";
+import { getEditorSettings } from "@niho/editor-store";
 import { getAuthProvider } from "../auth";
 import { CloudTasksQueue, resolveCloudTasksConfig, type CloudTasksConfig } from "../steps/cloud-tasks";
 import { fakeExecutor, type StepExecutor } from "../steps/executor";
 import { createInlineQueue, resolveStepsMode } from "../steps/inline";
 import type { TaskQueue } from "../steps/queue";
+import { recipesOf, type RecipeReader } from "../steps/recipes";
 import { pgStepRunStore, pgStepSweepStore } from "../steps/store";
 import { getPool } from "./db";
 import { verifyGoogleOidc } from "./google-oidc";
@@ -13,6 +15,13 @@ import type { StepsWorkerDeps } from "./steps-worker-api";
 /** 段階の実行器。今は偽物（AI を呼ばない）。本物（#38 の AiModel を包んだもの）に替えるのはここだけ。 */
 function stepExecutor(): StepExecutor {
   return fakeExecutor;
+}
+
+/** その人の手順（設定で変えたもの・足したものを既定にかぶせたもの。#108）。DB が無ければ null。 */
+function ownerRecipes(): RecipeReader | null {
+  const pool = getPool();
+  if (!pool) return null;
+  return async (owner) => recipesOf((await getEditorSettings(pool, owner)).recipes);
 }
 
 // inline のキューは Pool ごとに 1 つ（積んだ名前の重複の除去を要求の間で共有する）
@@ -33,6 +42,7 @@ export const stepsDeps: StepsApiDeps = {
     const pool = getPool();
     return pool ? pgStepRunStore(pool) : null;
   },
+  recipes: ownerRecipes,
   queue: () => {
     const mode = resolveStepsMode(process.env);
     if (mode === "cloud-tasks") {
@@ -42,7 +52,9 @@ export const stepsDeps: StepsApiDeps = {
     if (mode !== "inline") return null;
     const pool = getPool();
     if (!pool) return null;
-    if (inline?.pool !== pool) inline = { pool, queue: createInlineQueue({ store: pgStepRunStore(pool), executor: stepExecutor() }) };
+    if (inline?.pool !== pool) {
+      inline = { pool, queue: createInlineQueue({ store: pgStepRunStore(pool), recipes: async (owner) => recipesOf((await getEditorSettings(pool, owner)).recipes), executor: stepExecutor() }) };
+    }
     return inline.queue;
   },
 };
@@ -55,6 +67,7 @@ export const stepsWorkerDeps: StepsWorkerDeps = {
     const pool = getPool();
     return pool ? { ...pgStepRunStore(pool), ...pgStepSweepStore(pool) } : null;
   },
+  recipes: ownerRecipes,
   queue: (config) => cloudTasksQueue(config),
   executor: stepExecutor,
 };

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { parseBlocks } from "../server/page-input";
 import { StepError, createFakeExecutor, fakeExecutor } from "./executor";
-import { findRecipe } from "./recipes";
+import { DEFAULT_RECIPES, findRecipeIn } from "./recipes";
 
-const recipe = findRecipe("tpl-1")!;
+const recipe = findRecipeIn(DEFAULT_RECIPES, "tpl-1")!;
 const transcript = [{ type: "paragraph", content: [{ type: "text", text: "合成の文字起こしの冒頭です。ここから三十文字を超えるまで続く合成の本文。" }] }];
 
 describe("fakeExecutor", () => {

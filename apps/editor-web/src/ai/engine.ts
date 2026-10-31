@@ -1,3 +1,4 @@
+import type { GlossaryEntry } from "@niho/docs-core";
 import type { Block, Page } from "@niho/editor-store";
 import { validateBlocks, type AstResult } from "../ast/blocks";
 import { diffWords, type DiffPart } from "./diff";
@@ -100,12 +101,21 @@ export function blockText(block: Block): string {
 
 export type RequestPlan = { ok: true; requests: AiRequest[] } | { ok: false; error: "bad_scope" | "too_large" };
 
+/** 設定（#108）から来る、要求ごとに同じ値。`glossary` は固有名詞と誤りやすい表記、`lang` は提案の言語（無ければ本文の言語）。 */
+export type AiPreferences = { glossary?: readonly GlossaryEntry[]; lang?: AiRequest["lang"] };
+
 /**
  * ページ（または選択した範囲。`toIndex` を含む）からモデルへの要求を作る。編集できる段落は空でも送り、文脈のブロックは文字のあるものだけ送る。
  * 段落の切れ目で 1 回あたり約 MAX_REQUEST_CHARS 文字に分ける（1 つの段落がそれより長いときは、その段落だけで 1 回）。
  * 送る文字の合計が MAX_PAGE_CHARS を超えたら `too_large`。範囲が本文の外なら `bad_scope`。
+ * 固有名詞と提案の言語は設定から（`preferences`。渡さなければ語彙なし・本文の言語のまま）。
  */
-export function buildRequest(page: Pick<Page, "blocks" | "lang">, intent: AiIntent, scope?: AiScope): RequestPlan {
+export function buildRequest(
+  page: Pick<Page, "blocks" | "lang">,
+  intent: AiIntent,
+  scope?: AiScope,
+  preferences: AiPreferences = {},
+): RequestPlan {
   const blocks = page.blocks;
   let from = 0;
   let to = blocks.length - 1;
@@ -127,10 +137,12 @@ export function buildRequest(page: Pick<Page, "blocks" | "lang">, intent: AiInte
     paragraphs.push({ index, kind, text });
   }
   const requests: AiRequest[] = [];
+  // 語彙は要求をまたいで同じ配列を渡さない（モデルの呼び出し側が書き換えても他の要求に影響しない）
+  const glossary = (preferences.glossary ?? []).map((entry) => ({ ...entry, variants: [...entry.variants] }));
   let current: AiParagraph[] = [];
   let size = 0;
   const flush = () => {
-    if (current.length > 0) requests.push({ intent, paragraphs: current, glossary: [], lang: page.lang });
+    if (current.length > 0) requests.push({ intent, paragraphs: current, glossary, lang: preferences.lang ?? page.lang });
     current = [];
     size = 0;
   };

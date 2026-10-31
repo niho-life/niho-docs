@@ -1,5 +1,5 @@
 import { estimateTokenCostUsd } from "@niho/docs-core";
-import { isPositiveInteger, monthKeyJst, type AiUsageDelta, type AiUsageTotals, type EditorStore, type OwnerId } from "@niho/editor-store";
+import { DEFAULT_EDITOR_SETTINGS, isPositiveInteger, monthKeyJst, type AiUsageDelta, type AiUsageTotals, type EditorSettings, type EditorStore, type OwnerId } from "@niho/editor-store";
 import { AnthropicError } from "../ai/anthropic";
 import type { AiBackend } from "../ai/config";
 import { applyAdoptions, buildProposal, buildRequest, type Adoptions, type AiRun, type AiScope } from "../ai/engine";
@@ -33,6 +33,8 @@ export type AiApiDeps = {
   /** DB が使えないときは null（503）。 */
   store: () => AiPagesStore | null;
   usage: () => AiUsageStore | null;
+  /** 設定（固有名詞と提案の言語。#108）。渡さない・読めないときは既定値（語彙なし・本文の言語のまま）。 */
+  settings?: () => ((owner: OwnerId) => Promise<EditorSettings>) | null;
   /** 使えるモデル。無効のときは null（503 `ai_unavailable`）。 */
   ai: () => AiBackend | null;
   /** 月の上限（USD）。null は上限なし。 */
@@ -209,7 +211,12 @@ export function createAiProposal(request: Request, id: string, deps: AiApiDeps):
     const page = await store.getPage(owner, id);
     if (!page) return notFoundResponse();
     if (page.revision !== input.value.baseRevision) return conflictResponse(page);
-    const plan = buildRequest(page, input.value.intent, input.value.scope);
+    const settings = (await deps.settings?.()?.(owner)) ?? DEFAULT_EDITOR_SETTINGS;
+    const plan = buildRequest(page, input.value.intent, input.value.scope, {
+      glossary: settings.glossary,
+      // 「書いた言語のまま」は本文の言語（buildRequest の既定）
+      lang: settings.aiLang === "same" ? undefined : settings.aiLang,
+    });
     if (!plan.ok) return plan.error === "too_large" ? aiErrorResponse("too_large") : errorResponse("bad_request");
 
     const month = currentMonth(deps);

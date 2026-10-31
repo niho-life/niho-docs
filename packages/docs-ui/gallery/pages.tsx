@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import {
   AccountPage,
   DestinationsPage,
+  EditorSettingsPage,
   EditorShell,
   LoginScreen,
   PublishPreview,
@@ -10,6 +11,9 @@ import {
   ShellHeader,
   SitePage,
   type AccountLink,
+  type EditorSettingsAiLang,
+  type EditorSettingsRecipe,
+  type EditorSettingsTerm,
   type SettingsAiLang,
   type SettingsEngine,
   type SettingsSaveTo,
@@ -140,6 +144,78 @@ export function AccountDemo({ forced }: { forced: PagesForced }) {
         links={links}
         onAccept={() => setPending(false)}
         onDecline={() => setPending(false)}
+      />
+    </SettingsFrame>
+  );
+}
+
+/** 既定の 3 つの手順（editor-web の DEFAULT_RECIPES と同じ並び。中身は短い合成の値）。 */
+const WEB_RECIPES: EditorSettingsRecipe[] = [
+  { id: "tpl-1", name: "記事制作", guide: "## 構成\n見出しを 4〜6 本。", steps: [
+    { id: "k7m2q9xa", name: "文字起こし修正", instruction: "読みやすい文字起こし修正版に整える。" },
+    { id: "r4t8wz3c", name: "記事方針", instruction: "論点ごとの見出しを立てる。" },
+    { id: "h2n6v5pe", name: "記事本文", instruction: "方針のとおりに本文を書く。" },
+  ], isDefault: true, modified: false },
+  { id: "tpl-2", name: "議事録", guide: "", steps: [
+    { id: "d9c3x7mf", name: "議事録", instruction: "決まったことと宿題を並べる。" },
+    { id: "w5q1j8ks", name: "共有用の要約", instruction: "3 行にまとめる。" },
+  ], isDefault: true, modified: true },
+  { id: "tpl-3", name: "インサイト整理", guide: "", steps: [{ id: "u3e7z6rh", name: "インサイト", instruction: "気づきを並べる。" }], isDefault: true, modified: false },
+  { id: "r-talk", name: "対談", guide: "二人の声を残す。", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。" }], isDefault: false, modified: false },
+];
+
+const WEB_TERMS: EditorSettingsTerm[] = [
+  { term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "駅名は「北鎌倉」" },
+  { term: "円覚寺", reading: "えんがくじ", variants: [], note: "" },
+];
+
+/** editor-web の設定（#108）。開いている編集は `?terms=1` / `?recipe=tpl-1` で決める。 */
+export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: boolean; recipe?: string } }) {
+  const [aiLang, setAiLang] = useState<EditorSettingsAiLang>("same");
+  const [glossary, setGlossary] = useState(WEB_TERMS);
+  const [recipes, setRecipes] = useState(WEB_RECIPES);
+  const [termsDraft, setTermsDraft] = useState<EditorSettingsTerm[] | null>(forced.terms ? WEB_TERMS : null);
+  const opened = forced.recipe ? (WEB_RECIPES.find((recipe) => recipe.id === forced.recipe) ?? null) : null;
+  const [recipeDraft, setRecipeDraft] = useState<EditorSettingsRecipe | null>(opened);
+  let serial = 0;
+  return (
+    <SettingsFrame current="settings" title="設定" sidebar={forced.sidebar} pendingInvites={1}>
+      <EditorSettingsPage
+        status=""
+        busy={false}
+        aiLang={aiLang}
+        onAiLang={setAiLang}
+        glossary={glossary}
+        termsDraft={termsDraft}
+        onEditTerms={() => setTermsDraft(glossary.map((entry) => ({ ...entry, variants: [...entry.variants] })))}
+        onTermsDraft={setTermsDraft}
+        onCancelTerms={() => setTermsDraft(null)}
+        onSaveTerms={() => {
+          if (termsDraft) setGlossary(termsDraft);
+          setTermsDraft(null);
+        }}
+        recipes={recipes}
+        recipeDraft={recipeDraft}
+        onEditRecipe={(id) => setRecipeDraft(recipes.find((recipe) => recipe.id === id) ?? null)}
+        onRecipeDraft={setRecipeDraft}
+        onCancelRecipe={() => setRecipeDraft(null)}
+        onSaveRecipe={() => {
+          if (recipeDraft) setRecipes(recipes.map((recipe) => (recipe.id === recipeDraft.id ? { ...recipeDraft, modified: recipe.isDefault } : recipe)));
+          setRecipeDraft(null);
+        }}
+        onDuplicateRecipe={(id) => {
+          const base = recipes.find((recipe) => recipe.id === id);
+          if (base) setRecipes([...recipes, { ...base, id: `r-copy-${recipes.length}`, name: `${base.name}のコピー`, isDefault: false, modified: false }]);
+        }}
+        onResetRecipe={(id) => setRecipes(recipes.map((recipe) => (recipe.id === id ? { ...recipe, modified: false } : recipe)))}
+        onRemoveRecipe={(id) => setRecipes(recipes.filter((recipe) => recipe.id !== id))}
+        onAddRecipe={() => setRecipes([...recipes, { id: `r-new-${recipes.length}`, name: "新しい手順", guide: "", steps: [{ id: "s-new", name: "まとめ", instruction: "" }], isDefault: false, modified: false }])}
+        newStepId={() => `s-${(serial += 1)}`}
+        usage={{ month: "2026-10", inputTokens: 128_400, outputTokens: 12_900, costUsd: 4.21, limitUsd: 5, nearLimit: true }}
+        usageNote={null}
+        transcription={{ engine: "deepgram", timeoutSec: 1200, maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30, extensions: ["m4a", "mp3", "wav", "aac", "ogg", "flac"] }}
+        storage="CLOUD"
+        limits={{ glossary: 200, recipes: 20, steps: 12 }}
       />
     </SettingsFrame>
   );

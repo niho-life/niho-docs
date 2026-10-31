@@ -2,7 +2,7 @@ import { isIdempotencyKey, type AttemptState, type RunState, type StepRunView, t
 import type { AuthProvider } from "../auth/types";
 import { resolveStepsMode } from "../steps/inline";
 import { taskName, type TaskQueue } from "../steps/queue";
-import { findRecipe, isRecipeId, type RecipeDef } from "../steps/recipes";
+import { findRecipeIn, isRecipeKey, type RecipeDef, type RecipeReader } from "../steps/recipes";
 import type { StepRunStore } from "../steps/store";
 import { errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 
@@ -11,6 +11,8 @@ export type StepsApiDeps = {
   auth: () => AuthProvider;
   /** DB が使えないときは null（503）。 */
   steps: () => StepRunStore | null;
+  /** その人の手順（設定で変えたものを既定にかぶせたもの。#108）。DB が使えないときは null（503）。 */
+  recipes: () => RecipeReader | null;
   /** 実行の方式（`EDITOR_STEPS_MODE`）に応じたキュー。使えないときは null（run の作成は 503 `steps_unavailable`）。 */
   queue: () => TaskQueue | null;
   env?: Readonly<Record<string, string | undefined>>;
@@ -57,8 +59,8 @@ async function guarded(route: string, handler: () => Promise<Response>): Promise
   }
 }
 
-function toRunView(run: StepRunView): RunView {
-  const recipe = findRecipe(run.recipe);
+function toRunView(run: StepRunView, recipes: readonly RecipeDef[]): RunView {
+  const recipe = findRecipeIn(recipes, run.recipe);
   return {
     id: run.id,
     recipe: run.recipe,
@@ -79,13 +81,13 @@ function toRunView(run: StepRunView): RunView {
 
 type RunInput = { ok: true; recipe: RecipeDef; fromStep: number } | { ok: false };
 
-/** `{ recipe, fromStep? }` だけを受ける（他の key・範囲外の段階は 400）。 */
-function parseRunInput(body: unknown): RunInput {
+/** `{ recipe, fromStep? }` だけを受ける（他の key・知らない手順・範囲外の段階は 400）。 */
+function parseRunInput(body: unknown, recipes: readonly RecipeDef[]): RunInput {
   if (typeof body !== "object" || body === null || Array.isArray(body)) return { ok: false };
   const record = body as Record<string, unknown>;
   if (!Object.keys(record).every((key) => key === "recipe" || key === "fromStep")) return { ok: false };
-  if (!isRecipeId(record.recipe)) return { ok: false };
-  const recipe = findRecipe(record.recipe);
+  if (!isRecipeKey(record.recipe)) return { ok: false };
+  const recipe = findRecipeIn(recipes, record.recipe);
   if (!recipe) return { ok: false };
   const fromStep = record.fromStep ?? 0;
   if (typeof fromStep !== "number" || !Number.isInteger(fromStep) || fromStep < 0 || fromStep >= recipe.steps.length) return { ok: false };
@@ -98,15 +100,17 @@ export function getSteps(request: Request, id: string, deps: StepsApiDeps): Prom
     const session = await deps.auth().getSession(request);
     if (!session) return errorResponse("unauthorized");
     const steps = deps.steps();
-    if (!steps) return errorResponse("unavailable");
+    const readRecipes = deps.recipes();
+    if (!steps || !readRecipes) return errorResponse("unavailable");
     const listed = await steps.listRun(session.userId, id);
     if (!listed) return notFoundResponse();
     let run = listed.run;
-    const recipe = run ? findRecipe(run.recipe) : undefined;
+    const recipes = await readRecipes(session.userId);
+    const recipe = run ? findRecipeIn(recipes, run.recipe) : undefined;
     if (run && recipe && (await steps.refreshStale(session.userId, id, recipe)) > 0) {
       run = (await steps.listRun(session.userId, id))?.run ?? null;
     }
-    return jsonResponse(200, { run: run ? toRunView(run) : null });
+    return jsonResponse(200, { run: run ? toRunView(run, recipes) : null });
   });
 }
 
@@ -117,11 +121,13 @@ export function createStepRun(request: Request, id: string, deps: StepsApiDeps):
     if (!session) return errorResponse("unauthorized");
     if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
     const steps = deps.steps();
-    if (!steps) return errorResponse("unavailable");
+    const readRecipes = deps.recipes();
+    if (!steps || !readRecipes) return errorResponse("unavailable");
     // 本文の検査は id の有無より先（どの id でも同じ順に判定し、存在を漏らさない）
     const body = await readJsonBody(request);
     if (!body.ok) return body.response;
-    const input = parseRunInput(body.value);
+    const recipes = await readRecipes(session.userId);
+    const input = parseRunInput(body.value, recipes);
     if (!input.ok) return errorResponse("bad_request");
     const key = request.headers.get("idempotency-key");
     if (key !== null && !isIdempotencyKey(key)) return errorResponse("bad_request");
@@ -140,7 +146,7 @@ export function createStepRun(request: Request, id: string, deps: StepsApiDeps):
         return stepsError(result.status);
       case "existing":
         // 同じ要求の再送。積むのは最初の要求だけ
-        return jsonResponse(202, { run: toRunView(result.run) });
+        return jsonResponse(202, { run: toRunView(result.run, recipes) });
       case "created":
         break;
     }
@@ -152,7 +158,7 @@ export function createStepRun(request: Request, id: string, deps: StepsApiDeps):
       await steps.cancelRun(owner, id, run.id);
       throw error;
     }
-    return jsonResponse(202, { run: toRunView(run) });
+    return jsonResponse(202, { run: toRunView(run, recipes) });
   });
 }
 
@@ -163,8 +169,9 @@ export function cancelStepRun(request: Request, id: string, runId: string, deps:
     if (!session) return errorResponse("unauthorized");
     if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
     const steps = deps.steps();
-    if (!steps) return errorResponse("unavailable");
+    const readRecipes = deps.recipes();
+    if (!steps || !readRecipes) return errorResponse("unavailable");
     const run = await steps.cancelRun(session.userId, id, runId);
-    return run ? jsonResponse(200, { run: toRunView(run) }) : notFoundResponse();
+    return run ? jsonResponse(200, { run: toRunView(run, await readRecipes(session.userId)) }) : notFoundResponse();
   });
 }

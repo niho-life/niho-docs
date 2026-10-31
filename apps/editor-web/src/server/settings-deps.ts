@@ -1,0 +1,21 @@
+import "server-only";
+import { getEditorSettings, saveEditorSettings } from "@niho/editor-store";
+import { getAuthProvider } from "../auth";
+import { getPool } from "./db";
+import type { SettingsApiDeps } from "./settings-api";
+
+/**
+ * 設定の route（`/api/settings`。#108）の実行時の依存（DB の接続は要求のたびに遅延して決める。Pool は getStore と共有）。
+ * deps.ts と並行して触らないよう、ここに置いている（ai-deps.ts・steps-deps.ts と同じ作り）。
+ */
+export const settingsDeps: SettingsApiDeps = {
+  auth: () => getAuthProvider(),
+  settings: () => {
+    const pool = getPool();
+    if (!pool) return null;
+    return {
+      get: (owner) => getEditorSettings(pool, owner),
+      save: (owner, patch) => saveEditorSettings(pool, owner, patch),
+    };
+  },
+};

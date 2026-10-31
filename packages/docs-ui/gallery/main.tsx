@@ -5,7 +5,7 @@ import "./gallery.css";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Check } from "./check";
-import { AccountDemo, DestDemo, LoginDemo, PreviewDemo, SettingsDemo, SiteDemo } from "./pages";
+import { AccountDemo, DestDemo, LoginDemo, PreviewDemo, SettingsDemo, SiteDemo, WebSettingsDemo } from "./pages";
 import type { ShellDest } from "../src/shell";
 import { Screen, type ScreenForced } from "./screen";
 import { SCREENS, findScreen, parseHash } from "./screens";
@@ -50,6 +50,7 @@ function Body({ id, forced }: { id: string; forced: ScreenForced }) {
   if (name === "site") return <SiteDemo forced={forced} />;
   if (name === "account") return <AccountDemo forced={forced} />;
   if (name === "settings") return <SettingsDemo forced={forced} />;
+  if (name === "settings-web") return <WebSettingsDemo forced={forced} />;
   if (name === "sheet" && arg === "addDest") return <DestDemo forced={forced} addDest />;
   return <Screen id={id} forced={forced} />;
 }
@@ -74,6 +75,9 @@ function App() {
     play: params.has("play") ? params.get("play") === "1" : undefined,
     web: params.get("web") === "1",
     note: params.get("note") === "1",
+    // 設定（editor-web）の、開いている編集
+    terms: params.get("terms") === "1",
+    recipe: params.get("recipe") ?? undefined,
   };
   // 画面を替えたら状態を作り直す（モックの render と同じ）
   return (
