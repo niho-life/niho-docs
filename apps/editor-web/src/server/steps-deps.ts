@@ -1,8 +1,10 @@
 import "server-only";
-import { getEditorSettings } from "@niho/editor-store";
+import { getAiUsage, getEditorSettings, recordAiUsage } from "@niho/editor-store";
+import { monthlyLimitUsd, resolveAiCompose } from "../ai/config";
 import { getAuthProvider } from "../auth";
+import { createAiStepExecutor } from "../steps/ai-executor";
 import { CloudTasksQueue, resolveCloudTasksConfig, type CloudTasksConfig } from "../steps/cloud-tasks";
-import { fakeExecutor, type StepExecutor } from "../steps/executor";
+import type { StepExecutor } from "../steps/executor";
 import { createInlineQueue, resolveStepsMode } from "../steps/inline";
 import type { TaskQueue } from "../steps/queue";
 import { recipesOf, type RecipeReader } from "../steps/recipes";
@@ -12,9 +14,31 @@ import { verifyGoogleOidc } from "./google-oidc";
 import type { StepsApiDeps } from "./steps-api";
 import type { StepsWorkerDeps } from "./steps-worker-api";
 
-/** 段階の実行器。今は偽物（AI を呼ばない）。本物（#38 の AiModel を包んだもの）に替えるのはここだけ。 */
+/**
+ * 段階の実行器（本物。#38 の AI を包んだ ai-executor.ts）。AI・DB・上限は要求のたびに遅延して読む
+ * （`EDITOR_AI_MODE` が無効なら段階は `ai_unavailable`、DB が無ければ `usage_unavailable` で失敗する）。
+ * 開発と CI の `EDITOR_AI_MODE=fake` では偽物の 1 往復（`[fake]` の印が付く）。
+ */
+const aiStepExecutor: StepExecutor = createAiStepExecutor({
+  compose: () => resolveAiCompose(process.env),
+  usage: () => {
+    const pool = getPool();
+    return pool
+      ? {
+          get: (owner, month) => getAiUsage(pool, owner, month),
+          record: (owner, month, delta) => recordAiUsage(pool, owner, month, delta),
+        }
+      : null;
+  },
+  limitUsd: () => monthlyLimitUsd(process.env),
+  settings: () => {
+    const pool = getPool();
+    return pool ? (owner) => getEditorSettings(pool, owner) : null;
+  },
+});
+
 function stepExecutor(): StepExecutor {
-  return fakeExecutor;
+  return aiStepExecutor;
 }
 
 /** その人の手順（設定で変えたもの・足したものを既定にかぶせたもの。#108）。DB が無ければ null。 */

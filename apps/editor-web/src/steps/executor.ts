@@ -1,9 +1,14 @@
-import type { Block } from "@niho/editor-store";
+import type { Block, OwnerId } from "@niho/editor-store";
 import type { RecipeDef } from "./recipes";
 
 export type StepExecutorInput = {
   recipe: RecipeDef;
   stepIndex: number;
+  /**
+   * run を持っている人（runner が claim で分かった値を渡す。要求の値からは決めない）。
+   * 本物の実行器（ai-executor.ts）が月の上限と使用量の記録に使う。偽物の実行器は見ない。
+   */
+  owner?: OwnerId;
   /** 録音ページの本文。 */
   parentBlocks: Block[];
   /** 前の段階のサブページの本文（段階 0 は null）。 */
