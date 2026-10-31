@@ -8,7 +8,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { validateBlocks } from "@/ast/blocks";
 import { addButtonVisible, BLOCK_CHOICES, type BlockChoiceId } from "@/editor/block-types";
 import { buildPageExtensions } from "@/editor/page-extensions";
-import { AI_NOTICE_MS, AI_NOTICE_TEXT, PageChrome } from "./PageChrome";
+import { PageChrome } from "./PageChrome";
 import { PageEditor } from "./PageEditor";
 
 beforeAll(() => {
@@ -49,7 +49,7 @@ const MADE: Record<BlockChoiceId, JSONContent> = {
 };
 
 /** PageEditor と同じ並び（`.be` の中に本文と PageChrome）だけを描く。 */
-function Harness({ content }: { content: Doc }) {
+function Harness({ content, onAi }: { content: Doc; onAi?: () => void }) {
   const editor = useEditor({
     extensions: buildPageExtensions(),
     content,
@@ -60,7 +60,7 @@ function Harness({ content }: { content: Doc }) {
     <div data-docs-app-root="" data-docs-shared-ui="">
       <div className="be">
         <EditorContent editor={editor} />
-        <PageChrome editor={editor} />
+        <PageChrome editor={editor} onAi={onAi} />
       </div>
     </div>
   );
@@ -85,7 +85,7 @@ function fakeTimersWithFrames() {
   vi.stubGlobal("cancelAnimationFrame", (handle: number) => clearTimeout(handle));
 }
 
-async function renderHarness(content: Doc, options: { strict?: boolean } = {}): Promise<Editor> {
+async function renderHarness(content: Doc, options: { strict?: boolean; onAi?: () => void } = {}): Promise<Editor> {
   fakeTimersWithFrames();
   container = document.createElement("div");
   document.body.append(container);
@@ -94,10 +94,10 @@ async function renderHarness(content: Doc, options: { strict?: boolean } = {}): 
     root!.render(
       options.strict ? (
         <StrictMode>
-          <Harness content={content} />
+          <Harness content={content} onAi={options.onAi} />
         </StrictMode>
       ) : (
-        <Harness content={content} />
+        <Harness content={content} onAi={options.onAi} />
       ),
     );
   });
@@ -374,17 +374,18 @@ describe("the link field of the format bar", () => {
 });
 
 describe("the AI button of the format bar", () => {
-  it("says AI suggestions are not available yet, for a few seconds, without touching the text", async () => {
-    const editor = await renderHarness(doc(paragraph("合成の本文")));
+  it("asks the page to open the AI box, keeping the selection and the text as they are", async () => {
+    const onAi = vi.fn();
+    const editor = await renderHarness(doc(paragraph("合成の本文")), { onAi });
     await select(editor, 1, 3);
     const before = JSON.stringify(editor.getJSON());
-    const notice = chrome().querySelector('[role="status"][data-ai-notice]')!;
-    expect(notice.textContent).toBe("");
     await click(labelled("AI に頼む")!);
-    expect(notice.textContent).toBe(AI_NOTICE_TEXT);
+    expect(onAi).toHaveBeenCalledTimes(1);
+    // 箱を開く側が、このときの選択から範囲を読む（src/components/AiBox.test.tsx）
+    expect([editor.state.selection.from, editor.state.selection.to]).toEqual([1, 3]);
     expect(JSON.stringify(editor.getJSON())).toBe(before);
-    await advance(AI_NOTICE_MS);
-    expect(notice.textContent).toBe("");
+    // 「まだ使えません」の通知はもう出さない
+    expect(chrome().querySelector("[data-ai-notice]")).toBeNull();
   });
 });
 
@@ -644,6 +645,84 @@ describe("the 「＋」 next to an empty paragraph", () => {
   });
 });
 
+describe("⌘/ (Ctrl+/ off a Mac): the block list from the keyboard (design §11)", () => {
+  const heading2: JSONContent = { type: "heading", attrs: { level: 2 } };
+  /** 本文で ⌘/ を押す（jsdom の platform は Mac ではないので Ctrl）。 */
+  async function blockShortcut(editor: Editor) {
+    const event = new KeyboardEvent("keydown", { key: "/", code: "Slash", ctrlKey: true, bubbles: true, cancelable: true });
+    await act(async () => {
+      editor.view.dom.dispatchEvent(event);
+    });
+    await advance(20);
+    return event;
+  }
+
+  it("in an empty line, opens the same list as 「＋」 with focus on it, and ↑↓ and Enter turn that line into the block", async () => {
+    const editor = await renderHarness(doc(paragraph("前"), paragraph(), paragraph("後")));
+    await cursorAt(editor, 4);
+    const event = await blockShortcut(editor);
+    expect(event.defaultPrevented).toBe(true);
+    const list = menu("ブロックを足す")!;
+    expect(itemNames(list)).toEqual(BLOCK_CHOICES.map((choice) => choice.label));
+    expect(document.activeElement).toBe(menuItem(list, "テキスト"));
+    await press(document.activeElement as HTMLElement, "ArrowDown");
+    expect(document.activeElement).toBe(menuItem(list, "見出し 2"));
+    // Enter はボタンの click になる（jsdom はキーから click を起こさないので、フォーカスのある項目を押す）
+    await click(document.activeElement as HTMLElement);
+    expect(menu("ブロックを足す")).toBeNull();
+    expect(savedBlocks(editor)).toEqual([paragraph("前"), heading2, paragraph("後")]);
+    expect(document.activeElement).toBe(editor.view.dom);
+  });
+
+  it("in a line with text, keeps that line and makes the picked block on a new line below it, undone in one step", async () => {
+    const editor = await renderHarness(doc(paragraph("前"), paragraph("後")));
+    await cursorAt(editor, 2);
+    await blockShortcut(editor);
+    // 選ぶまでは何も足さない
+    expect(savedBlocks(editor)).toEqual([paragraph("前"), paragraph("後")]);
+    await click(menuItem(menu("ブロックを足す"), "箇条書き"));
+    expect(savedBlocks(editor)).toEqual([paragraph("前"), MADE.bullet, paragraph("後")]);
+    expect(document.activeElement).toBe(editor.view.dom);
+    expect(editor.state.selection.$anchor.parent.type.name).toBe("paragraph");
+    expect(editor.state.selection.$anchor.node(1).type.name).toBe("bulletList");
+    await act(async () => {
+      editor.commands.undo();
+    });
+    expect(savedBlocks(editor)).toEqual([paragraph("前"), paragraph("後")]);
+  });
+
+  it("adds below the whole list when the cursor is in a list item", async () => {
+    const list: JSONContent = { type: "bulletList", content: [{ type: "listItem", content: [paragraph("項目")] }] };
+    const editor = await renderHarness(doc(list, paragraph("後")));
+    await cursorAt(editor, 4);
+    await blockShortcut(editor);
+    await click(menuItem(menu("ブロックを足す"), "区切り線"));
+    expect(savedBlocks(editor)).toEqual([list, MADE.hr, paragraph("後")]);
+  });
+
+  it("closes on Esc back to where the cursor was, adding nothing", async () => {
+    const editor = await renderHarness(doc(paragraph("前"), paragraph("後")));
+    await cursorAt(editor, 2);
+    await blockShortcut(editor);
+    await press(document.activeElement as HTMLElement, "Escape");
+    expect(menu("ブロックを足す")).toBeNull();
+    expect(document.activeElement).toBe(editor.view.dom);
+    expect(editor.state.selection.from).toBe(2);
+    expect(savedBlocks(editor)).toEqual([paragraph("前"), paragraph("後")]);
+  });
+
+  it("leaves the key to the browser when the body does not have focus", async () => {
+    const editor = await renderHarness(doc(paragraph("前")));
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    await act(async () => outside.focus());
+    const event = await blockShortcut(editor);
+    expect(event.defaultPrevented).toBe(false);
+    expect(menu("ブロックを足す")).toBeNull();
+    outside.remove();
+  });
+});
+
 describe("PageEditor with the chrome", () => {
   it("puts the chrome in the body's .be and saves what the 「/」 list makes", async () => {
     fakeTimersWithFrames();
@@ -666,8 +745,9 @@ describe("PageEditor with the chrome", () => {
     });
     await flush();
     expect(container.querySelector(".be > [data-page-chrome].es-root")).not.toBeNull();
-    // 保存状態の読み上げは今まで通り、ページの先頭の role="status"
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("保存済み");
+    // 保存状態の表示は今まで通りページの先頭（読み上げはヘッダーの状態の丸が持つので、ここは live region ではない）
+    expect(container.querySelector("[data-save-state]")?.textContent).toBe("保存済み");
+    expect(container.querySelector("[data-save-state]")?.getAttribute("role")).toBeNull();
 
     const editor = bodyEditor();
     await cursorAt(editor, 1);

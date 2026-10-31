@@ -48,6 +48,22 @@ export function toShareState(state: PageShareState, origin: string | null): Docs
   };
 }
 
+/**
+ * ページを開くとき（`/p/{id}` の RSC）に、「…」の「共有中」の印のためだけに共有しているかを読む。リンク（token）は返さない
+ * （共有のシートを開いたときに API で読む）。ページが無い・DB を使えない・読めなかったときは null（印を出さない。ページは開く）。
+ */
+export async function readShareFlag(store: Pick<PageActionsStore, "getShare"> | null, owner: OwnerId, pageId: string): Promise<boolean | null> {
+  if (!store) return null;
+  try {
+    const state = await store.getShare(owner, pageId);
+    return state ? state.shared : null;
+  } catch (error) {
+    // 値（token・SQL）は出さない
+    console.error("editor-web: share state read failed", { name: error instanceof Error ? error.name : "unknown" });
+    return null;
+  }
+}
+
 type ShareOperation = "getShare" | "enableShare" | "rotateShare" | "stopShare";
 
 function shareRoute(route: string, operation: ShareOperation, write: boolean) {

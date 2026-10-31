@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
-import { arrangeSidebarItems, formatWhen, searchPages } from "./sidebar-items";
+import type { SearchHit } from "./search-client";
+import { arrangeSidebarItems, formatWhen, searchRows, withoutPageTree } from "./sidebar-items";
 
 /** 2026-10-31 12:00（東京）＝ 03:00 UTC。 */
 const NOW = Date.parse("2026-10-31T03:00:00.000Z");
 
 function page(id: string, over: Partial<PageSummary> = {}): PageSummary {
-  return { id, kind: "note", title: id, lang: "ja", parent: null, stepStatus: null, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", ...over };
+  return { id, kind: "note", title: id, lang: "ja", parent: null, stepStatus: null, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", publication: null, ...over };
 }
 
 describe("formatWhen", () => {
@@ -85,15 +86,62 @@ describe("arrangeSidebarItems", () => {
     ]);
   });
 
-  it("filters by title (NFKC, case-insensitive) and lists matches flat", () => {
-    const pages = [page("rec", { title: "ＮＩＨＯ Kamakura 録音" }), page("child", { parent: "rec", title: "niho の手順" }), page("other", { title: "日記" })];
-    const items = arrangeSidebarItems(pages, { now: NOW, query: " niho " });
-    expect(items.map((item) => [item.id, item.child ?? false])).toEqual([
-      ["rec", false],
-      ["child", false],
+  it("shows search hits flat, in the server's order, with the matched sentence as the second line", () => {
+    const hits: SearchHit[] = [
+      { id: "b", kind: "note", title: "鎌倉の朝", snippet: "…江ノ電の音で目が覚めた…", updatedAt: "2026-10-31T02:30:00.000Z" },
+      { id: "a", kind: "rec", title: "", snippet: "  ", updatedAt: "2026-10-30T02:00:00.000Z" },
+    ];
+    expect(searchRows(hits, NOW)).toEqual([
+      { id: "b", title: "鎌倉の朝", when: "30分前", sub: { text: "…江ノ電の音で目が覚めた…" } },
+      { id: "a", title: "", when: "昨日" },
     ]);
-    expect(arrangeSidebarItems(pages, { now: NOW, query: "   " })).toHaveLength(3);
-    expect(searchPages(pages, "ｶﾏｸﾗ")).toEqual([]);
-    expect(searchPages(pages, "KAMAKURA").map((item) => item.id)).toEqual(["rec"]);
+  });
+});
+
+describe("arrangeSidebarItems: 2 行目の公開先（#39）", () => {
+  const live = { dest: "exp", handle: "exp", range: "live", stopped: false } as const;
+
+  it("公開中は発信先の名前と印。限定公開も同じ。本人のサイトは「自分のサイト」", () => {
+    const rows = arrangeSidebarItems(
+      [
+        { ...page("a"), publication: live },
+        { ...page("b"), publication: { dest: "niho", handle: "niho", range: "unlisted", stopped: false } },
+        { ...page("c"), publication: { dest: "site", handle: "field-notes", range: "live", stopped: false } },
+      ],
+      { now: NOW },
+    );
+    expect(rows.map((row) => row.sub)).toEqual([
+      { text: "NIHO Experience", dest: "exp" },
+      { text: "NIHO", dest: "niho" },
+      { text: "自分のサイト", dest: "site" },
+    ]);
+  });
+
+  it("公開をやめたページは「公開をやめた」（印なし）。公開の無いページは今までどおり", () => {
+    const rows = arrangeSidebarItems(
+      [{ ...page("a"), publication: { ...live, stopped: true } }, { ...page("b", { kind: "rec" }), publication: null }, page("c")],
+      { now: NOW },
+    );
+    expect(rows.map((row) => row.sub)).toEqual([{ text: "公開をやめた" }, { text: "録音" }, undefined]);
+  });
+
+  it("公開中は録音・作成中より先に出す（モック v6 の順）", () => {
+    const rec = { ...page("rec", { kind: "rec", title: "鎌倉の録音" }), publication: live };
+    expect(arrangeSidebarItems([rec], { now: NOW })[0]!.sub).toEqual({ text: "NIHO Experience", dest: "exp" });
+  });
+});
+
+describe("withoutPageTree", () => {
+  it("drops the deleted page and every loaded descendant (in any order), and keeps the rest in order", () => {
+    // 更新順なので、孫が親より先に来ることもある
+    const pages = [page("g", { parent: "c" }), page("a"), page("c", { parent: "p" }), page("p"), page("o", { parent: "a" }), page("c2", { parent: "p" })];
+    expect(withoutPageTree(pages, "p").map((item) => item.id)).toEqual(["a", "o"]);
+    expect(withoutPageTree(pages, "c").map((item) => item.id)).toEqual(["a", "p", "o", "c2"]);
+    expect(withoutPageTree(pages, "missing")).toEqual(pages);
+  });
+
+  it("stops on a parent cycle", () => {
+    const pages = [page("x", { parent: "y" }), page("y", { parent: "x" }), page("z")];
+    expect(withoutPageTree(pages, "x").map((item) => item.id)).toEqual(["z"]);
   });
 });

@@ -134,6 +134,8 @@ describe("0007 on a database that has 0001 to 0006", { skip: databaseUrl === und
 
       assert.deepEqual((await pool.query("SELECT * FROM pages WHERE id = $1", [page])).rows[0], before, "existing rows are unchanged");
       assert.equal((await pool.query("SELECT count(*)::int AS n FROM page_recordings")).rows[0].n, 0, "nothing is recorded by the migration");
+      // 今のコードは後の migration（0008 の音声の列など）も前提にするので、残りも入れてから読む
+      await applyMigrations(client);
       assert.equal(await getRecording(pool, OWNER, page), null, "a page without a recording has none");
       const created = await createRecordingPage(pool, OWNER, input());
       assert.equal((await getRecording(pool, OWNER, created.page.id))?.revision, 1);

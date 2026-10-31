@@ -1,5 +1,12 @@
-import type { PageSummary } from "@niho/editor-store";
-import type { ShellListItem } from "niho-docs-ui/shell";
+import type { PagePublicationSummary, PageSummary } from "@niho/editor-store";
+import type { ShellDest, ShellListItem } from "niho-docs-ui/shell";
+import type { SearchHit } from "./search-client";
+
+/** 2 行目の公開先に要るもの（#39）。一覧の行（listPageChunk の PageSummary.publication）と同じ形。 */
+export type SidebarPublication = PagePublicationSummary;
+
+/** 2 行目の発信先の名前（モック v6 の DEST と同じ）。本人のサイトは「自分のサイト」。 */
+const DEST_NAMES: Readonly<Record<ShellDest, string>> = { exp: "NIHO Experience", niho: "NIHO", site: "自分のサイト" };
 
 /** 東京の日付で数える（日本は夏時間が無いので、UTC に 9 時間を足した日付）。 */
 const TOKYO_OFFSET_MS = 9 * 60 * 60 * 1000;
@@ -30,18 +37,33 @@ export function formatWhen(iso: string, now: number): string {
   return date.getUTCFullYear() === new Date(now + TOKYO_OFFSET_MS).getUTCFullYear() ? monthDay : `${date.getUTCFullYear()}年${monthDay}`;
 }
 
-/** 題名での絞り込み（読み込んだ行だけ。題名と本文の検索は #35 でこれを差し替える）。 */
-export function searchPages(pages: readonly PageSummary[], query: string): PageSummary[] {
-  const needle = query.normalize("NFKC").toLowerCase().trim();
-  return pages.filter((page) => page.title.normalize("NFKC").toLowerCase().includes(needle));
+/** 検索の結果の行。サーバーが並べた順（更新順）のまま、当たった所の一文を 2 行目に添える。入れ子にしない。 */
+export function searchRows(hits: readonly SearchHit[], now: number): ShellListItem[] {
+  return hits.map((hit) => {
+    const item: ShellListItem = { id: hit.id, title: hit.title, when: formatWhen(hit.updatedAt, now) };
+    if (hit.snippet.trim() !== "") item.sub = { text: hit.snippet };
+    return item;
+  });
+}
+
+/**
+ * 2 行目（モック v6 の sidebar の sub と同じ順）: 公開中（限定公開を含む）は発信先の名前と印、公開をやめたページは「公開をやめた」、
+ * 録音は「録音」、手順が動いているページは「作成中…」。それ以外は出さない。
+ */
+function subOf(page: PageSummary): ShellListItem["sub"] {
+  const publication = page.publication;
+  if (publication && !publication.stopped) return { text: DEST_NAMES[publication.dest], dest: publication.dest };
+  if (publication?.stopped) return { text: "公開をやめた" };
+  if (page.kind === "rec") return { text: "録音" };
+  if (page.stepStatus === "run") return { text: "作成中…" };
+  return undefined;
 }
 
 function rowOf(page: PageSummary, now: number, child: boolean): ShellListItem {
   const item: ShellListItem = { id: page.id, title: page.title, when: formatWhen(page.updatedAt, now) };
   if (child) item.child = true;
-  // 2 行目の公開先は #39
-  if (page.kind === "rec") item.sub = { text: "録音" };
-  else if (page.stepStatus === "run") item.sub = { text: "作成中…" };
+  const sub = subOf(page);
+  if (sub) item.sub = sub;
   return item;
 }
 
@@ -59,6 +81,25 @@ function topAncestor(page: PageSummary, byId: ReadonlyMap<string, PageSummary>):
   return top;
 }
 
+/**
+ * 削除したページと、その子孫（読み込んである分。親を辿って届くもの）を除いた一覧。順は変えない。
+ * サーバーは子孫ごとゴミ箱へ入れる（`DELETE /api/pages/{id}`）ので、一覧からも一緒に外す。
+ */
+export function withoutPageTree(pages: readonly PageSummary[], id: string): PageSummary[] {
+  const removed = new Set([id]);
+  // 親が先に外れていれば子も外す（並びは更新順で親子の順ではないので、外すものが増えなくなるまで繰り返す）
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const page of pages) {
+      if (page.parent !== null && removed.has(page.parent) && !removed.has(page.id)) {
+        removed.add(page.id);
+        grew = true;
+      }
+    }
+  }
+  return pages.filter((page) => !removed.has(page.id));
+}
+
 /** 作った順（手順の順）。ISO 8601 の UTC の文字列は文字の順が時刻の順。 */
 function byCreated(a: PageSummary, b: PageSummary): number {
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
@@ -67,11 +108,10 @@ function byCreated(a: PageSummary, b: PageSummary): number {
 
 /**
  * サイドバーの行。上の段は渡した順（更新順）。親（か祖先）を読み込んである行は、いちばん上の祖先の直後に作った順で少し下げて並べる。
- * 親を読み込んでいない行は上の段に出す。query があるときは題名で絞り、入れ子にせずに並べる。
+ * 親を読み込んでいない行は上の段に出す。検索の結果は `searchRows`（サーバーの検索）で出す。
  */
-export function arrangeSidebarItems(pages: readonly PageSummary[], options: { now: number; query?: string }): ShellListItem[] {
+export function arrangeSidebarItems(pages: readonly PageSummary[], options: { now: number }): ShellListItem[] {
   const { now } = options;
-  if (options.query?.trim()) return searchPages(pages, options.query).map((page) => rowOf(page, now, false));
   const byId = new Map(pages.map((page) => [page.id, page]));
   const children = new Map<string, PageSummary[]>();
   const tops: PageSummary[] = [];

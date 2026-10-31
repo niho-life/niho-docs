@@ -430,15 +430,23 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.ok(!(await (await fetch(`${base}/api/trash`)).json()).pages.some((item) => item.id === page.id));
     assert.equal((await fetch(`${base}/api/trash/${page.id}/restore`, { method: "POST", headers: { origin: base } })).status, 404, "not in the trash any more");
 
-    // 公開中のページは削除しない
-    await pool.query("INSERT INTO page_versions (page_id, version, blocks, reason) VALUES ($1, 1, '[]', 'publish')", [page.id]);
-    await pool.query("INSERT INTO publications (page_id, dest, slug, range, published_version) VALUES ($1, 'synthetic', $2, 'live', 1)", [page.id, `e2e-${page.id}`]);
+    // 公開中のページは削除しない（0009 の形: NIHO への公開版 1 と、それを指す公開）
+    await pool.query(
+      "INSERT INTO publication_versions (page_id, version, handle, snapshot) VALUES ($1, 1, 'niho', jsonb_build_object('id', $2::text, 'version', 1, 'dest', 'niho'))",
+      [page.id, page.id],
+    );
+    await pool.query(
+      `INSERT INTO publications (page_id, dest, handle, slug, range, extras_app, extras_news, extras_xp, version, published_at, updated_at)
+       VALUES ($1, 'niho', 'niho', $2, 'live', false, false, false, 1, clock_timestamp(), clock_timestamp())`,
+      [page.id, `e2e-${page.id}`],
+    );
     try {
       const refused = await fetch(`${base}/api/pages/${page.id}`, { method: "DELETE", headers: { origin: base } });
       assert.equal(refused.status, 409);
       assert.equal(await refused.text(), '{"error":"published"}');
       assert.ok((await listIds()).includes(page.id));
     } finally {
+      // 公開の行を消せば、after のページの削除で公開版も一緒に消える（公開版だけを消すことはできない）
       await pool.query("DELETE FROM publications WHERE page_id = $1", [page.id]);
     }
   });
@@ -769,6 +777,109 @@ describe("editor-web e2e (stub, next dev)", () => {
     const untouched = await pool.query("SELECT revision, speaker_names FROM page_recordings WHERE page_id = $1", [otherId]);
     assert.deepEqual(untouched.rows[0], { revision: 1, speaker_names: { 1: "他人の話し手" } });
   });
+
+  it("uploads an audio file through the fake storage: limits, start, PUT, complete, and the same 404 for others (#36 段 2a)", async () => {
+    // EDITOR_STORAGE は未設定（next dev なので fake）。合成の名前・小さなバイト列・ダミーのハッシュだけを使う
+    const limits = await fetch(`${base}/api/recordings/audio/limits`);
+    assert.equal(limits.status, 200);
+    const limitsBody = await limits.json();
+    assert.equal(limitsBody.maxBytes, 2 * 1024 * 1024 * 1024);
+    assert.equal(limitsBody.maxDurationSec, 6 * 60 * 60);
+    assert.equal(limitsBody.retentionDays, 30);
+    assert.ok(limitsBody.extensions.includes("m4a") && !limitsBody.extensions.includes("vtt"));
+
+    const sha256 = "f".repeat(64);
+    const key = randomUUID();
+    const started = await write("POST", "/api/recordings/audio/start", { name: "合成の音声 e2e.m4a", contentType: "audio/mp4", sizeBytes: 4, sha256 }, { "idempotency-key": key });
+    assert.equal(started.status, 201);
+    assert.equal(started.headers.get("cache-control"), "private, no-store");
+    const { page, recording, upload } = await started.json();
+    createdIds.push(page.id);
+    assert.equal(page.kind, "rec");
+    assert.equal(page.title, "合成の音声 e2e");
+    assert.equal(recording.source, "audio");
+    assert.deepEqual(recording.segments, []);
+    assert.equal(recording.audio.status, "uploading");
+    assert.equal(recording.audio.bytes, 4);
+    assert.equal(Date.parse(recording.audio.expiresAt) - Date.parse(recording.createdAt), 30 * 24 * 60 * 60 * 1000);
+    assert.match(upload.url, /^\/api\/dev\/fake-storage\/[A-Za-z0-9_-]{43}$/);
+    assert.equal(upload.method, "PUT");
+    assert.equal(upload.maxBytes, 4);
+
+    // ブラウザの PUT の代わり（偽の保存先の受け口）
+    const put = await fetch(new URL(upload.url, base), { method: "PUT", headers: upload.headers, body: new Uint8Array([1, 2, 3, 4]) });
+    assert.equal(put.status, 200);
+
+    const done = await write("POST", `/api/pages/${page.id}/recording/audio/complete`);
+    assert.equal(done.status, 200);
+    const doneBody = await done.json();
+    assert.equal(doneBody.recording.audio.status, "uploaded");
+    assert.deepEqual(doneBody.speakers, []);
+    const again = await write("POST", `/api/pages/${page.id}/recording/audio/complete`);
+    assert.equal(again.status, 200, "completing twice is fine");
+    assert.deepEqual((await again.json()).recording.audio, doneBody.recording.audio);
+    const replay = await write("POST", "/api/recordings/audio/start", { name: "合成の音声 e2e.m4a", contentType: "audio/mp4", sizeBytes: 4, sha256 }, { "idempotency-key": key });
+    assert.equal(replay.status, 200);
+    const replayBody = await replay.json();
+    assert.equal(replayBody.page.id, page.id);
+    assert.equal(replayBody.upload, null);
+
+    // 大きさの違う別のページ: 4 バイトと申告して 3 バイトを置く
+    const other = await write("POST", "/api/recordings/audio/start", { name: "合成の別の音声.mp3", contentType: "audio/mpeg", sizeBytes: 4, sha256 });
+    assert.equal(other.status, 201);
+    const otherBody = await other.json();
+    createdIds.push(otherBody.page.id);
+    assert.equal((await fetch(new URL(otherBody.upload.url, base), { method: "PUT", headers: otherBody.upload.headers, body: new Uint8Array([1, 2, 3]) })).status, 200);
+    const mismatch = await write("POST", `/api/pages/${otherBody.page.id}/recording/audio/complete`);
+    assert.equal(mismatch.status, 409);
+    assert.equal(await mismatch.text(), '{"error":"incomplete","reason":"size_mismatch"}');
+    // 上限を超えたら保存の前に断る
+    const pagesBefore = (await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1", [STUB_OWNER])).rows[0].n;
+    const tooLarge = await write("POST", "/api/recordings/audio/start", { name: "合成.m4a", contentType: "audio/mp4", sizeBytes: 2 * 1024 * 1024 * 1024 + 1, sha256 });
+    assert.equal(await tooLarge.text(), '{"error":"bad_request","reason":"too_large"}');
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1", [STUB_OWNER])).rows[0].n, pagesBefore);
+
+    // 別の owner の音声のページは、存在しない id と同じ 404
+    const theirs = await pool.query("INSERT INTO pages (owner, kind, title) VALUES ($1, 'rec', 'synthetic other audio') RETURNING id", [OTHER_OWNER]);
+    const theirId = theirs.rows[0].id;
+    createdIds.push(theirId);
+    const assetId = randomUUID();
+    await pool.query(
+      `INSERT INTO assets (id, owner, page_id, kind, bucket_path, bytes, sha256, content_type) VALUES ($1, $2, $3, 'audio', $4, 4, $5, 'audio/mp4')`,
+      [assetId, OTHER_OWNER, theirId, `audio/${assetId}`, sha256],
+    );
+    await pool.query(
+      `INSERT INTO page_recordings (page_id, owner, source, language, segments, audio_asset, audio_status) VALUES ($1, $2, 'audio', 'ja', '[]', $3, 'uploading')`,
+      [theirId, OTHER_OWNER, assetId],
+    );
+    const snapshot = async (response) => ({
+      status: response.status,
+      headers: [...response.headers.entries()].filter(([name]) => name !== "date").sort(),
+      body: await response.text(),
+    });
+    const theirResult = await snapshot(await write("POST", `/api/pages/${theirId}/recording/audio/complete`));
+    const unknownResult = await snapshot(await write("POST", `/api/pages/${randomUUID()}/recording/audio/complete`));
+    assert.equal(theirResult.status, 404);
+    assert.equal(theirResult.body, '{"error":"not_found"}');
+    assert.deepEqual(unknownResult, theirResult);
+    assert.equal((await pool.query("SELECT audio_status FROM page_recordings WHERE page_id = $1", [theirId])).rows[0].audio_status, "uploading");
+
+    // 読み直しても音声がある。表は録音ページ（kind = 'rec'）と、audio/ の下の資産
+    const read = await fetch(`${base}/api/pages/${page.id}/recording`);
+    assert.equal(read.status, 200);
+    assert.deepEqual((await read.json()).recording.audio, doneBody.recording.audio);
+    const stored = await pool.query(
+      `SELECT p.kind, r.audio_status, a.bucket_path, a.bytes::int AS bytes, a.kind AS asset_kind
+         FROM pages p JOIN page_recordings r ON r.page_id = p.id JOIN assets a ON a.owner = r.owner AND a.id = r.audio_asset
+        WHERE p.id = $1`,
+      [page.id],
+    );
+    assert.equal(stored.rows[0].kind, "rec");
+    assert.equal(stored.rows[0].audio_status, "uploaded");
+    assert.match(stored.rows[0].bucket_path, /^audio\/[0-9a-f-]{36}$/);
+    assert.equal(stored.rows[0].bytes, 4);
+    assert.equal(stored.rows[0].asset_kind, "audio");
+  });
 });
 
 describe("editor-web e2e (niho until #19459, next dev)", () => {
@@ -886,5 +997,158 @@ describe("editor-web e2e (niho until #19459, next dev)", () => {
     assert.match(html, /role="alert"[^>]*>ログインできませんでした。もう一度お試しください。/);
     assert.match(html, /<meta name="robots" content="noindex, nofollow"\/>/);
     assert.doesNotMatch(html, /data-auth-mode="stub"/);
+  });
+});
+
+// 公開のシート（#39）: stub の役割（writer,kamakura）と同梱の dev 用の宣言で、実 DB の公開・更新・やめる・再公開を確かめる。
+describe("editor-web e2e (stub, next dev): 公開のシート (#39)", () => {
+  let base;
+  let dev;
+  const pool = new pg.Pool({ connectionString: databaseUrl, max: 2 });
+  const createdIds = [];
+  const suffix = randomUUID().slice(0, 8);
+  const READY = [
+    { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "Getting there" }] },
+    { type: "paragraph", content: [{ type: "text", text: "Meet at the station at 7:00." }] },
+  ];
+  const NONE = { app: false, news: false, xp: false };
+
+  const write = (method, path, body, headers = {}) =>
+    fetch(`${base}${path}`, {
+      method,
+      headers: { "content-type": "application/json", origin: base, ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const sheetOf = async (id, query = "") => {
+    const response = await fetch(`${base}/api/pages/${id}/publish${query}`);
+    assert.equal(response.status, 200);
+    return (await response.json()).sheet;
+  };
+  const listRow = async (id) => (await (await fetch(`${base}/api/pages`)).json()).pages.find((page) => page.id === id);
+
+  /** ページを作って題名と本文を保存する。返すのは id と今の revision。 */
+  async function createPage(title, blocks) {
+    const created = await write("POST", "/api/pages", {});
+    assert.equal(created.status, 201);
+    const { page } = await created.json();
+    createdIds.push(page.id);
+    const saved = await write("PATCH", `/api/pages/${page.id}`, { title, blocks, baseRevision: page.revision });
+    assert.equal(saved.status, 200);
+    return { id: page.id, revision: (await saved.json()).page.revision };
+  }
+
+  before(async () => {
+    dev = await startDev("stub", 200);
+    base = dev.base;
+  });
+
+  after(async () => {
+    if (createdIds.length > 0) {
+      // 公開の行はページの削除を止める（ON DELETE RESTRICT）ので先に消す。公開版と転送はページと一緒に消える
+      await pool.query("DELETE FROM publications WHERE page_id = ANY($1::uuid[])", [createdIds]);
+      await pool.query("DELETE FROM pages WHERE id = ANY($1::uuid[])", [createdIds]);
+    }
+    await pool.end();
+    await dev?.stop();
+  });
+
+  it("publishes, shows updated after an edit, publishes the update, stops, and publishes again at the same URL", async () => {
+    const title = `Morning walk e2e ${suffix}`;
+    const slug = `morning-walk-e2e-${suffix}`;
+    const url = `https://niho.life/article/${slug}`;
+    const page = await createPage(title, READY);
+
+    const first = await sheetOf(page.id);
+    assert.equal(first.status, "private");
+    assert.deepEqual(first.destinations.map((entry) => [entry.handle, entry.available]), [["exp", true], ["niho", true]]);
+    const plan = await sheetOf(page.id, "?handle=niho&range=live&extras=");
+    assert.equal(plan.primary, "publish");
+    assert.equal(plan.url, url);
+    assert.deepEqual(plan.slug, { value: slug, editable: true, error: null });
+
+    const published = await write("POST", `/api/pages/${page.id}/publish`, { handle: "niho", range: "live", extras: NONE });
+    assert.equal(published.status, 200);
+    assert.deepEqual(await published.json(), { published: { status: "published", operation: "publish", url, version: 1, notices: [] } });
+    assert.equal((await sheetOf(page.id)).status, "published");
+    assert.deepEqual((await listRow(page.id)).publication, { dest: "niho", handle: "niho", range: "live", stopped: false });
+
+    // 本文を直すと「更新あり」→ 更新を公開（同じ URL、版が進む）
+    const edited = await write("PATCH", `/api/pages/${page.id}`, {
+      blocks: [...READY, { type: "paragraph", content: [{ type: "text", text: "Added after publishing." }] }],
+      baseRevision: page.revision,
+    });
+    assert.equal(edited.status, 200);
+    const updated = await sheetOf(page.id);
+    assert.equal(updated.status, "updated");
+    assert.equal(updated.primary, "update");
+    const update = await write("POST", `/api/pages/${page.id}/publish`, { handle: "niho", range: "live", extras: NONE });
+    assert.equal(update.status, 200);
+    assert.deepEqual((await update.json()).published, { status: "published", operation: "update", url, version: 2, notices: [] });
+    assert.equal((await sheetOf(page.id)).status, "published");
+
+    // 公開をやめる（NIHO の面は URL を一覧へ転送）。もう一度呼んでも同じ
+    for (let round = 0; round < 2; round += 1) {
+      const stopped = await write("POST", `/api/pages/${page.id}/publish/stop`);
+      assert.equal(stopped.status, 200);
+      assert.deepEqual(await stopped.json(), { stopped: { status: "stopped" } });
+    }
+    const afterStop = await sheetOf(page.id);
+    assert.equal(afterStop.status, "stopped");
+    assert.equal(afterStop.canStop, false);
+    assert.equal(afterStop.primary, "publish");
+    assert.deepEqual((await listRow(page.id)).publication, { dest: "niho", handle: "niho", range: "live", stopped: true });
+    const redirects = () => pool.query("SELECT from_handle, from_slug, to_handle, to_slug FROM publication_redirects WHERE page_id = $1", [page.id]);
+    assert.deepEqual((await redirects()).rows, [{ from_handle: "niho", from_slug: slug, to_handle: null, to_slug: null }], "the old URL goes to the list");
+
+    // 再公開は同じ URL
+    const again = await write("POST", `/api/pages/${page.id}/publish`, { handle: "niho", range: "live", extras: NONE });
+    assert.equal(again.status, 200);
+    assert.deepEqual((await again.json()).published, { status: "published", operation: "publish", url, version: 3, notices: [] });
+    assert.deepEqual((await listRow(page.id)).publication, { dest: "niho", handle: "niho", range: "live", stopped: false });
+    assert.deepEqual((await redirects()).rows, [], "the URL is live again");
+  });
+
+  it("refuses a body that misses the destination's conditions with 409 not_ready, and writes nothing", async () => {
+    const page = await createPage(`No headings e2e ${suffix}`, [{ type: "paragraph", content: [{ type: "text", text: "Only a paragraph." }] }]);
+    const plan = await sheetOf(page.id, "?handle=exp&range=live&extras=");
+    assert.deepEqual(plan.problems.map((problem) => problem.id), ["headings"]);
+    assert.equal(plan.primary, null);
+    const refused = await write("POST", `/api/pages/${page.id}/publish`, { handle: "exp", range: "live", extras: NONE });
+    assert.equal(refused.status, 409);
+    const body = await refused.json();
+    assert.equal(body.error, "not_ready");
+    assert.deepEqual(body.problems.map((problem) => problem.id), ["headings"]);
+    assert.equal(body.message, "公開の前に直すところがあります");
+    assert.equal((await listRow(page.id)).publication, null);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM publication_versions WHERE page_id = $1", [page.id])).rows[0].n, 0);
+  });
+
+  it("answers the same 404 for another owner's page and an unknown id, and refuses cross-origin writes with 403", async () => {
+    const other = await pool.query("INSERT INTO pages (owner, title, blocks) VALUES ($1, 'synthetic other publish', $2::jsonb) RETURNING id", [OTHER_OWNER, JSON.stringify(READY)]);
+    const otherId = other.rows[0].id;
+    createdIds.push(otherId);
+    const unknown = randomUUID();
+    const snapshot = async (response) => ({ status: response.status, body: await response.text() });
+    for (const [label, call] of [
+      ["GET", (id) => fetch(`${base}/api/pages/${id}/publish`)],
+      ["POST publish", (id) => write("POST", `/api/pages/${id}/publish`, { handle: "niho", range: "live", extras: NONE })],
+      ["POST stop", (id) => write("POST", `/api/pages/${id}/publish/stop`)],
+    ]) {
+      const theirs = await snapshot(await call(otherId));
+      assert.equal(theirs.status, 404, label);
+      assert.deepEqual(await snapshot(await call(unknown)), theirs, label);
+    }
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM publications WHERE page_id = $1", [otherId])).rows[0].n, 0);
+
+    const mine = await createPage(`Cross origin e2e ${suffix}`, READY);
+    for (const [path, body] of [
+      [`/api/pages/${mine.id}/publish`, { handle: "niho", range: "live", extras: NONE }],
+      [`/api/pages/${mine.id}/publish/stop`, undefined],
+    ]) {
+      const response = await write("POST", path, body, { origin: "https://evil.example" });
+      assert.equal(response.status, 403, path);
+      assert.equal(await response.text(), '{"error":"forbidden"}');
+    }
+    assert.equal((await listRow(mine.id)).publication, null);
   });
 });

@@ -13,12 +13,15 @@ vi.mock("@/lib/last-page", () => ({ rememberLastPage: vi.fn() }));
 vi.mock("./PageEditor", () => ({
   PageEditor: (props: EditorProps) => {
     editors.push(props);
-    return null;
+    return <div data-editor="" />;
   },
+}));
+vi.mock("./RecordingTranscript", () => ({
+  RecordingTranscript: ({ pageId }: { pageId: string }) => <div data-transcript={pageId} />,
 }));
 
 import { rememberLastPage } from "@/lib/last-page";
-import { NewPage } from "./FramePages";
+import { NewPage, OpenPage } from "./FramePages";
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -65,5 +68,32 @@ describe("NewPage: the creation redirect belongs to the draft that made the page
     expect(rememberLastPage).not.toHaveBeenCalled();
     // ページは作られているので、一覧には載せる
     expect(frame.pageCreated).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222", "");
+  });
+});
+
+describe("OpenPage: a recording page shows the transcript above the title and body", () => {
+  const PAGE = "33333333-3333-4333-8333-333333333333";
+  const summary = (kind: "note" | "rec") => ({ id: PAGE, kind, title: "録音", lang: "ja" as const, parent: null, stepStatus: null, publication: null, createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z" });
+
+  async function open(kind: "note" | "rec") {
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<OpenPage summary={summary(kind)} blocks={[]} revision={1} />);
+    });
+    return container;
+  }
+
+  it("puts the transcript (kind=rec) before the page editor", async () => {
+    const host = await open("rec");
+    expect([...host.children].map((node) => node.getAttribute("data-transcript") ?? "editor")).toEqual([PAGE, "editor"]);
+    expect(frame.pageOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows only the editor for an ordinary page", async () => {
+    const host = await open("note");
+    expect([...host.children].map((node) => node.hasAttribute("data-editor"))).toEqual([true]);
+    expect(host.querySelector("[data-transcript]")).toBeNull();
   });
 });

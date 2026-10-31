@@ -1,5 +1,7 @@
 import "server-only";
 import {
+  audioInfo,
+  completeAudioUpload,
   createRecordingPage,
   duplicatePage,
   enableShare,
@@ -7,12 +9,18 @@ import {
   getShare,
   rotateShare,
   searchPages,
+  startAudioRecording,
   stopShare,
   updateRecording,
 } from "@niho/editor-store";
 import { getAuthProvider } from "../auth";
+import { pgDraftFingerprints, pgPublishStore } from "../publish/pg-store";
+import { wirePublishPorts } from "../publish/ports";
+import { getStorage } from "../storage/runtime";
+import type { AudioApiDeps } from "./audio-api";
 import { getPool, getStore } from "./db";
 import type { PagesApiDeps } from "./pages-api";
+import type { PublishApiDeps } from "./publish-api";
 import type { RecordingsApiDeps } from "./recordings-api";
 import type { SearchApiDeps } from "./search-api";
 import type { ShareApiDeps } from "./share-api";
@@ -63,4 +71,29 @@ export const recordingDeps: RecordingsApiDeps = {
       updateRecording: (owner, pageId, baseRevision, mutate) => updateRecording(pool, owner, pageId, baseRevision, mutate),
     };
   },
+};
+
+/** 公開のシート（#39）の実行時の依存（DB の接続は要求のたびに遅延して決める。Pool は getStore と共有）。 */
+export const publishDeps: PublishApiDeps = {
+  auth: () => getAuthProvider(),
+  ports: (session) => {
+    const pool = getPool();
+    return pool ? wirePublishPorts(pgPublishStore(pool), session, { drafts: pgDraftFingerprints(pool) }) : null;
+  },
+};
+
+/** 録音の音声のアップロード（#36 段 2a）の実行時の依存（DB・保存先は要求のたびに遅延して決める。Pool は getStore と共有）。 */
+export const audioDeps: AudioApiDeps = {
+  auth: () => getAuthProvider(),
+  store: () => {
+    const pool = getPool();
+    if (!pool) return null;
+    return {
+      startAudioRecording: (owner, input) => startAudioRecording(pool, owner, input),
+      completeAudioUpload: (owner, pageId, stored) => completeAudioUpload(pool, owner, pageId, stored),
+      audioInfo: (owner, pageId) => audioInfo(pool, owner, pageId),
+      getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
+    };
+  },
+  storage: () => getStorage(process.env),
 };

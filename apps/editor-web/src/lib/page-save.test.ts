@@ -172,6 +172,22 @@ describe("createPageSaver", () => {
     expect(server.calls.at(-1)?.options).toEqual({ baseRevision: 3, overwrite: false, keepalive: false });
   });
 
+  it("rebases onto a page the server now holds (an AI adoption): the next save goes on that revision, and a lost response there is still its own save", async () => {
+    const server = fakeServer({ title: "題", blocks: paragraph("前"), revision: 1 });
+    const saver = createPageSaver({ pageId: PAGE_ID, revision: 1, content: { title: "題", blocks: paragraph("前") }, request: server.request });
+    // 採用でサーバーが revision 2 の本文を持った（この画面の保存ではない）
+    server.elsewhere("題", paragraph("採用した本文"));
+    saver.rebase(2, { title: "題", blocks: paragraph("採用した本文") });
+    expect(saver.revision).toBe(2);
+    // 題名だけの保存の応答を落とし、送り直すと 409。中身は「採用した本文＋新しい題名」で、自分の保存として受け取る
+    server.dropNextResponse();
+    await expect(saver.save({ title: "新しい題" }, NO_KEEPALIVE)).rejects.toBeInstanceOf(TypeError);
+    await saver.save({ title: "新しい題" }, NO_KEEPALIVE);
+    expect(server.calls.map((call) => call.options.baseRevision)).toEqual([2, 2]);
+    expect(saver.revision).toBe(3);
+    expect(server.page).toMatchObject({ title: "新しい題", blocks: paragraph("採用した本文"), revision: 3 });
+  });
+
   it("creates a new page with the first save (POST), then PATCHes that page on the revision it was created with", async () => {
     const server = fakeServer({ title: "", blocks: [], revision: 1 });
     const create = vi.fn(async (body: PageBody = {}, options: { keepalive?: boolean } = {}) => {

@@ -2,11 +2,13 @@
 # One-time creation of the GCP resources of editor.niho.life (docs/ops/editor-deploy.md §3). Idempotent: what exists is kept.
 #
 #   scripts/editor-deploy/gcp-bootstrap.sh resources   # APIs, service accounts, Cloud SQL database and roles,
-#                                                      # secrets, Artifact Registry, assets bucket  (before the first deploy)
+#                                                      # secrets (the AI key's without a version), Artifact Registry,
+#                                                      # assets bucket  (before the first deploy)
 #   scripts/editor-deploy/deploy.sh                    # first build, migration and deploy
 #   scripts/editor-deploy/gcp-bootstrap.sh domain      # custom domain mapping + the DNS record to add (after the first deploy)
 #
-# Secret values are generated here; they are never written to a file or printed.
+# Secret values are generated here; they are never written to a file or printed. The AI key is not: the owner adds it
+# with scripts/editor-deploy/set-ai-key.sh.
 # Needs scripts/editor-deploy/deploy.env (see deploy.env.example) and a gcloud login with project access.
 # shellcheck source=scripts/editor-deploy/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -22,9 +24,6 @@ ensure_secret() {
   gcp secrets describe "$1" > /dev/null 2>&1 \
     || gcp secrets create "$1" --replication-policy automatic --labels "$COST_LABEL"
   gcp secrets update "$1" --update-labels "$COST_LABEL" > /dev/null
-}
-secret_has_version() {
-  [[ -n "$(gcp secrets versions list "$1" --filter='state:ENABLED' --format='value(name)' --limit 1)" ]]
 }
 ensure_service_account() {
   local email="$1" name="$2"
@@ -88,6 +87,12 @@ resources() {
   gcp secrets add-iam-policy-binding "$SECRET_MIGRATE_DATABASE_URL" \
     --member "serviceAccount:$MIGRATE_SA_EMAIL" --role roles/secretmanager.secretAccessor > /dev/null
 
+  log "AI key secret (#38): created without a version; the owner adds the key with set-ai-key.sh (no version = AI stays off)"
+  ensure_secret "$SECRET_ANTHROPIC_KEY"
+  # Only the web service reads it (the migration job does not).
+  gcp secrets add-iam-policy-binding "$SECRET_ANTHROPIC_KEY" \
+    --member "serviceAccount:$RUNNER_SA_EMAIL" --role roles/secretmanager.secretAccessor > /dev/null
+
   log "Cloud Build: the build runs as the compute default service account; it reads the source tarball"
   gcp storage buckets add-iam-policy-binding "gs://${GCP_PROJECT}_cloudbuild" \
     --member "serviceAccount:$number-compute@developer.gserviceaccount.com" \
@@ -119,6 +124,7 @@ resources() {
     gcp storage buckets add-iam-policy-binding "gs://$ASSETS_BUCKET" \
       --member "serviceAccount:$RUNNER_SA_EMAIL" --role "$role" > /dev/null
   done
+  "$SCRIPT_DIR/steps-infra.sh"
   log "resources: done. Next: scripts/editor-deploy/deploy.sh"
 }
 

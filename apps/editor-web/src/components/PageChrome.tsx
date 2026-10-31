@@ -24,7 +24,9 @@ import {
   BLOCK_CHOICES,
   LINE_TYPE_CHOICES,
   addButtonVisible,
+  blankLineAfterCursor,
   fillBlankLine,
+  insertBlankLine,
   isEmptyParagraphAt,
   lineTypeOf,
   setLineType,
@@ -34,12 +36,11 @@ import {
 } from "@/editor/block-types";
 import { checkLinkInput } from "@/editor/link-href";
 import { slashMenuStore, type SlashMenuSnapshot } from "@/editor/slash-menu";
+import { useShortcuts } from "@/lib/shortcuts";
 
 /** docs-ui の ShellBubbleMenu の plugin key（packages/docs-ui/src/shell/bubble.tsx）。 */
 const FORMAT_BAR_KEY = "shellFormatBar";
 const ADD_BUTTON_KEY = "pageAddButton";
-/** 「AI の提案はまだ使えません」を出しておく長さ。 */
-export const AI_NOTICE_MS = 4000;
 /** 開いているメニューのボタンをもう一度押したら閉じたままにする（外のクリックで閉じた直後のクリック）。 */
 const TOGGLE_WINDOW_MS = 400;
 /** 浮かぶ部品と画面の端の間。 */
@@ -49,14 +50,13 @@ const BAR_MAX_WIDTH = "calc(100vw - 36px)";
 /** 「/」の一覧などを上に出すときの、選んだ文字との間（.es-menu--flow の top: 6px に合わせる）。 */
 const ABOVE_GAP = 6;
 
-export const AI_NOTICE_TEXT = "AI の提案はまだ使えません";
-
 type Anchor = { left: number; top: number; bottom: number };
 
 type Panel =
   | { kind: "lineType"; anchor: Anchor | null; current: LineTypeId | null }
   | { kind: "link"; anchor: Anchor | null; range: { from: number; to: number }; href: string; linked: boolean }
-  | { kind: "add"; anchor: Anchor | null; at: number };
+  /** insert: ⌘/ で、文字のある行の下に足す（選んだときに at へ空の段落を足してから変える）。 */
+  | { kind: "add"; anchor: Anchor | null; at: number; insert?: boolean };
 
 const BLOCK_IDS: ReadonlySet<string> = new Set(BLOCK_CHOICES.map((choice) => choice.id));
 
@@ -337,10 +337,9 @@ function FormatBarRoute({ editor, root }: { editor: Editor; root: HTMLElement })
   return null;
 }
 
-function Chrome({ editor }: { editor: Editor }) {
+function Chrome({ editor, onAi }: { editor: Editor; onAi?: () => void }) {
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const [panel, setPanel] = useState<Panel | null>(null);
-  const [aiNotice, setAiNotice] = useState<{ anchor: Anchor | null } | null>(null);
   const escaped = useRef(false);
   const lastDismiss = useRef<{ kind: Panel["kind"]; at: number } | null>(null);
   const addButton = useRef<HTMLButtonElement | null>(null);
@@ -357,12 +356,6 @@ function Chrome({ editor }: { editor: Editor }) {
       if (addMenu.current) addMenu.current.tabIndex = -1;
     },
   }));
-
-  useEffect(() => {
-    if (!aiNotice) return;
-    const timer = window.setTimeout(() => setAiNotice(null), AI_NOTICE_MS);
-    return () => window.clearTimeout(timer);
-  }, [aiNotice]);
 
   /** 外のクリックで閉じた直後に、同じメニューを開くボタンが押されたか（＝閉じたいだけ）。 */
   const recentlyDismissed = (kind: Panel["kind"]) => {
@@ -406,11 +399,6 @@ function Chrome({ editor }: { editor: Editor }) {
     setPanel({ kind: "link", anchor: selectionAnchor(editor), range: { from, to }, href, linked });
   };
 
-  const showAiNotice = () => {
-    // AI の提案（#36）はまだ無い。本文は変えずに知らせるだけ
-    setAiNotice({ anchor: selectionAnchor(editor) });
-  };
-
   const openAdd = () => {
     if (recentlyDismissed("add")) return;
     const { $anchor } = editor.state.selection;
@@ -420,13 +408,28 @@ function Chrome({ editor }: { editor: Editor }) {
     setPanel({ kind: "add", at: $anchor.before(), anchor: rect ? { left: rect.left, top: rect.top, bottom: rect.bottom } : selectionAnchor(editor) });
   };
 
+  // ⌘/（設計 §11）: 本文にフォーカスがあるとき、「＋」と同じブロックの一覧を開く。いまの行が空ならその行を、
+  // 文字があればその下に足す行を、選んだブロックにする。Esc で閉じると本文の元の位置へ戻る（何も足さない）
+  useShortcuts({
+    blockMenu: () => {
+      if (!editor.isEditable || !editor.view.hasFocus()) return false;
+      const below = blankLineAfterCursor(editor.state);
+      escaped.current = false;
+      setPanel(
+        below === null
+          ? { kind: "add", at: editor.state.selection.$anchor.before(), anchor: selectionAnchor(editor) }
+          : { kind: "add", at: below, anchor: selectionAnchor(editor), insert: true },
+      );
+    },
+  });
+
   const linkRange = panel?.kind === "link" ? panel.range : null;
 
   return (
     <div ref={setRoot} className="es-root" data-page-chrome="">
       {root && (
         <>
-          <ShellBubbleMenu editor={editor} onTextType={openLineType} onLink={openLink} onAi={showAiNotice} textType={currentLineTypeName(editor)} />
+          <ShellBubbleMenu editor={editor} onTextType={openLineType} onLink={openLink} onAi={onAi} textType={currentLineTypeName(editor)} />
           <FloatingMenu ref={addMenu} editor={editor} pluginKey={ADD_BUTTON_KEY} appendTo={root} shouldShow={shouldShowAddButton} options={addButtonOptions}>
             <button
               ref={addButton}
@@ -468,7 +471,8 @@ function Chrome({ editor }: { editor: Editor }) {
             items={blockMenuItems(BLOCK_CHOICES)}
             onSelect={(id) => {
               setPanel(null);
-              if (isBlockChoiceId(id)) fillBlankLine(editor, id, { at: panel.at });
+              if (!isBlockChoiceId(id) || (panel.insert && !insertBlankLine(editor, panel.at))) return;
+              fillBlankLine(editor, id, { at: panel.at });
             }}
             onClose={() => dismiss("add")}
           />
@@ -495,9 +499,6 @@ function Chrome({ editor }: { editor: Editor }) {
           />
         </Floating>
       )}
-      <Floating anchor={aiNotice?.anchor ?? null} role="status" aria-live="polite" data-ai-notice="">
-        {aiNotice && <p className="es-card">{AI_NOTICE_TEXT}</p>}
-      </Floating>
     </div>
   );
 }
@@ -505,7 +506,7 @@ function Chrome({ editor }: { editor: Editor }) {
 /**
  * 本文のエディタに付ける操作の部品（モック v6 の shell の部品で描く。見た目は niho-docs-ui/styles/shell.css）。
  * - 選んだ文字の上の書式の帯（ShellBubbleMenu）: 太字・斜体・見出し・箇条書きは帯が editor のコマンドへ、
- *   行の種類（ShellMenu）・リンク（帯の下の小さな入力）・AI（まだ使えないと知らせる）はここが持つ。
+ *   行の種類（ShellMenu）・リンク（帯の下の小さな入力）はここが持つ。AI は呼ぶ側の onAi（AI の箱を開く。src/components/AiBox.tsx）。
  * - 空の行の「/」（src/editor/slash-menu.ts）と、空の段落の左の「＋」のブロックの一覧。
  * 作れるのは限定 AST の範囲だけ（src/editor/block-types.ts）。常設の書式の帯（ShellTools）はヘッダーの側が持つ。
  *
@@ -513,7 +514,7 @@ function Chrome({ editor }: { editor: Editor }) {
  * 本文の見た目（リストの印・リンクの下線など）が shell の reset で変わるので、.es-root はこの部品の入れ物だけにし、
  * 浮かぶ部品（帯・＋・一覧・入力）はすべてこの中に付ける。`.be`（position: relative）の中に置く。
  */
-export function PageChrome({ editor }: { editor: Editor | null }) {
+export function PageChrome({ editor, onAi }: { editor: Editor | null; onAi?: () => void }) {
   if (!editor) return null;
-  return <Chrome editor={editor} />;
+  return <Chrome editor={editor} onAi={onAi} />;
 }
