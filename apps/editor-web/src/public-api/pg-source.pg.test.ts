@@ -195,6 +195,7 @@ function ports(store: ConnectionStore, clock: ManualClock, drafts: DraftFingerpr
   const publisher = new PublishService({
     store,
     roles,
+    storage: { read: async () => "CLOUD" },
     connections: connectionSource(store),
     declarations: siteDeclarationSource(store, faces),
     authors,
