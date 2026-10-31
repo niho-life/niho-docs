@@ -1,11 +1,12 @@
 import { randomBytes } from "node:crypto";
-import { StorageError, isObjectPath, type ObjectStorage, type OpenedObject, type StartUploadInput, type StoredObject, type UploadTicket } from "./types";
+import { StorageError, isObjectPath, type ObjectStorage, type ReadObject, type StartUploadInput, type StoredObject, type UploadTicket } from "./types";
 
 /**
  * メモリの中だけの偽の保存先（開発と CI だけ。本番では src/storage/config.ts が受け付けない）。
  * ticket の url は `/api/dev/fake-storage/{token}`（同じ origin の dev 用の受け口。src/app/api/dev/fake-storage/[token]/route.ts）で、
  * そこへの PUT が putFakeObject を呼ぶ。GCS と同じく、同じ場所に object が既にあれば上書きしない。
  * 偽物は PUT の大きさを申告と照らさない（完了の時の大きさの照合をサーバーの側で試せるように）。
+ * 読み取り（readObject）は置いてあるバイト列を流す（画像の中継を開発でも試せるように）。
  */
 
 /** 偽の受け口の path の接頭辞。 */
@@ -58,19 +59,19 @@ export function createFakeStorage(options: { state?: FakeStorageState; now?: () 
       const object = state.objects.get(objectPath);
       return object ? { sizeBytes: object.bytes.byteLength, contentType: object.contentType } : null;
     },
-    async open(objectPath: string): Promise<OpenedObject | null> {
+    async readObject(objectPath: string): Promise<ReadObject | null> {
       if (!isObjectPath(objectPath)) throw new StorageError("rejected");
       const object = state.objects.get(objectPath);
       if (!object) return null;
-      // 置いたときの複製をさらに複製して流す（読み手が中身を書き換えても、偽物の保存先は変わらない）
+      // 置いてあるバイト列の写しを 1 つの chunk で流す（読む側が持っている間に置き換わらない）
       const bytes = object.bytes.slice();
-      const stream = new ReadableStream<Uint8Array>({
+      const body = new ReadableStream<Uint8Array>({
         start(controller) {
-          if (bytes.byteLength > 0) controller.enqueue(bytes);
+          controller.enqueue(bytes);
           controller.close();
         },
       });
-      return { stream, sizeBytes: bytes.byteLength, contentType: object.contentType };
+      return { body, contentType: object.contentType, sizeBytes: bytes.byteLength };
     },
     putFakeObject(token: string, bytes: Uint8Array, contentType: string | null): FakePutResult {
       if (!FAKE_TOKEN_PATTERN.test(token)) return "not_found";

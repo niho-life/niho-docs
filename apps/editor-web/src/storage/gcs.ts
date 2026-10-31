@@ -1,4 +1,4 @@
-import { StorageError, isObjectPath, type ObjectStorage, type OpenedObject, type StartUploadInput, type StoredObject, type UploadTicket } from "./types";
+import { StorageError, isObjectPath, type ObjectStorage, type ReadObject, type StartUploadInput, type StoredObject, type UploadTicket } from "./types";
 
 /**
  * Google Cloud Storage の保存先（`EDITOR_STORAGE=gcs`）。依存を足さず、fetch と Cloud Run のメタデータサーバーの token だけで呼ぶ。
@@ -16,13 +16,13 @@ import { StorageError, isObjectPath, type ObjectStorage, type OpenedObject, type
  * - CORS: 開始の要求の `Origin` header が、そのセッション URI へのブラウザからの要求に返す origin になる
  *   （https://cloud.google.com/storage/docs/cross-origin）。bucket の CORS の設定もあわせて要る（README の「bucket に要求する設定」）。
  * - 確認: `GET https://storage.googleapis.com/storage/v1/b/{bucket}/o/{object（URL エンコード）}` の `size`（10 進の文字列）・`contentType`。
- * - 読み出し（文字起こし。#36 段 2b）: 同じ URL に `alt=media` を付けた GET の本文が object の中身
- *   （https://cloud.google.com/storage/docs/json_api/v1/objects/get）。`Accept-Encoding: identity`（中身をそのまま・`Content-Length` 付きで受ける）。
- *   大きさは `Content-Length`（無ければ `x-goog-stored-content-length`）。時間切れは header が届くまでだけで、本文の読み取りには時間制限をかけない
- *   （長い音声をエンジンへ流し終えるまでの時間は、呼び出し側の時間切れが決める）。
+ * - 読み取り（画像の中継 #33・文字起こし #36 段 2b）: 同じ URL に `?alt=media` を付けた `GET`（同じ token の道）。応答の本文がそのまま
+ *   object の中身で、`Content-Type` が種類、大きさは `Content-Length`（無ければ `x-goog-stored-content-length`）。`Accept-Encoding: identity`
+ *   （中身をそのまま・`Content-Length` 付きで受ける）。時間切れは header が届くまでだけで、本文の読み取りには時間切れをかけない
+ *   （長い音声をエンジンへ流し終えるまでの時間は、呼び出し側の時間切れが決める）。署名付き URL は作らない（実行 ID に署名の権限が無い前提）。
  * - token: メタデータサーバー `GET {METADATA_TOKEN_URL}`（header `Metadata-Flavor: Google`）の `access_token`・`expires_in`（秒）。
  *
- * 失敗の写し方: 届かない・時間切れ（30 秒）・401・403・408・429・5xx は unavailable、それ以外の 4xx は rejected、確認と読み出しの 404 は null。
+ * 失敗の写し方: 届かない・時間切れ（30 秒）・401・403・408・429・5xx は unavailable、それ以外の 4xx は rejected、確認の 404 は null。
  * token・セッション URI・bucket 名・object の場所は、ログにもエラーにも出さない（このファイルはログを書かない）。
  * リダイレクトは辿らない（Authorization を別の場所へ送らない）。
  */
@@ -202,7 +202,7 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
       if (!Number.isSafeInteger(sizeBytes)) throw new StorageError("unavailable");
       return { sizeBytes, contentType: typeof contentType === "string" ? contentType : null };
     },
-    async open(objectPath: string): Promise<OpenedObject | null> {
+    async readObject(objectPath: string): Promise<ReadObject | null> {
       if (!isObjectPath(objectPath)) throw new StorageError("rejected");
       const url = `${GCS_JSON_BASE}${bucket}/o/${encodeURIComponent(objectPath)}?alt=media`;
       const headers = { Authorization: await authorization(), "Accept-Encoding": "identity" };
@@ -232,7 +232,7 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
         await discard(response);
         throw new StorageError("unavailable");
       }
-      return { stream: response.body, sizeBytes, contentType: response.headers.get("content-type") };
+      return { body: response.body, contentType: response.headers.get("content-type"), sizeBytes };
     },
   };
 }

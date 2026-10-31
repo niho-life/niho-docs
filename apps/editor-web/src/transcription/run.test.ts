@@ -162,7 +162,7 @@ describe("executeRun", () => {
 
   it("treats a storage failure as internal, not as missing audio", async () => {
     const storage = await storageWithAudio();
-    storage.open = async () => {
+    storage.readObject = async () => {
       throw new StorageError("unavailable");
     };
     const { store, failed } = memoryStore(claimOf());
@@ -263,8 +263,8 @@ describe("executeRun", () => {
   it("closes the audio stream when the engine did not read it", async () => {
     let cancelled = false;
     const storage = await storageWithAudio();
-    storage.open = async () => ({
-      stream: new ReadableStream<Uint8Array>({
+    storage.readObject = async () => ({
+      body: new ReadableStream<Uint8Array>({
         cancel() {
           cancelled = true;
         },

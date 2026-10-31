@@ -13,6 +13,9 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = () => undefined;
 });
 
+/** 合成の資産の id（実在の資産ではない）。 */
+const ASSET_ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+
 let editor: Editor | null = null;
 
 function makeEditor(content?: unknown): Editor {
@@ -58,11 +61,23 @@ describe("the page editor schema matches the limited AST", () => {
     expect(Object.keys(current.schema.marks).filter((name) => !MARK_NAMES.includes(name))).toEqual([]);
   });
 
-  it("differs from the AST only by what has no way to be created yet (callout, image, recording)", () => {
+  it("differs from the AST only by what has no way to be created yet (callout, recording)", () => {
     const current = makeEditor();
     const missing = [...BLOCK_NODE_NAMES, ...INLINE_NODE_NAMES, "listItem"].filter((name) => !(name in current.schema.nodes));
-    expect(missing.sort()).toEqual(["callout", "image", "recording"]);
+    // 画像（#33）は入れ方があるので schema にある。囲み・録音はまだ作る手段が無い
+    expect(missing.sort()).toEqual(["callout", "recording"]);
     expect(MARK_NAMES.filter((name) => !(name in current.schema.marks))).toEqual([]);
+  });
+
+  it("keeps a saved image through the editor with only the four attributes of the AST", () => {
+    const current = makeEditor();
+    const image = { type: "image", attrs: { assetId: ASSET_ID, alt: "合成の写真", credit: "合成の提供元", consent: true } };
+    current.chain().setContent({ type: "doc", content: [image, { type: "paragraph" }] }).run();
+    const blocks = savedBlocks(current);
+    expect(blocks[0]).toEqual(image);
+    // 本文に URL・外の src は入らない（描くときに中継の path を組む）
+    expect(flatten(blocks)).not.toContain("http");
+    expect(flatten(blocks)).not.toContain("src");
   });
 
   it("produces a body the server accepts for every block the editor can make", () => {
@@ -212,5 +227,40 @@ describe("normalizePastedHtml", () => {
     expect(html).not.toContain("color");
     expect(html).toContain("font-weight: bold");
     expect(html).toContain(">t<");
+  });
+
+  describe("images", () => {
+    const ID = "6f0c2a4e-1b3d-4c5e-8f70-9a1b2c3d4e5f";
+
+    it("keeps an image the editor itself wrote (copy or cut in the editor) with only its asset id, alt, credit and consent", () => {
+      const html = normalizePastedHtml(
+        `<p>a</p><img data-doc-asset="" data-asset-id="${ID}" alt="朝の海" data-credit="Example Photographer" data-consent="true" src="https://evil.example/x.png" srcset="https://evil.example/y.png 2x" onerror="alert(1)" style="position:fixed">`,
+      );
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const image = doc.querySelector("img")!;
+      expect([...image.attributes].map((attribute) => attribute.name).sort()).toEqual(["alt", "data-asset-id", "data-consent", "data-credit"]);
+      expect(image.getAttribute("data-asset-id")).toBe(ID);
+      expect(html).not.toContain("evil");
+      expect(html).not.toContain("onerror");
+    });
+
+    it("still drops outside images: no data-asset-id, one that is not a UUID, and images inside picture", () => {
+      const html = normalizePastedHtml(
+        `<img src="https://evil.example/a.png"><img data-asset-id="not-a-uuid" src="https://evil.example/b.png"><img data-asset-id="" src="https://evil.example/c.png"><picture><img data-asset-id="${ID}"></picture>`,
+      );
+      expect(html).not.toContain("<img");
+      expect(html).not.toContain("evil");
+    });
+
+    it("an image copied in the editor comes back as the same image when pasted (the body keeps only the asset id and fields)", () => {
+      const source = makeEditor({ type: "doc", content: [{ type: "image", attrs: { assetId: ID, alt: "朝の海", credit: "Example Photographer", consent: true } }] });
+      const copied = source.getHTML();
+      expect(copied).toContain(ID);
+      const target = makeEditor();
+      const blocks = paste(target, copied);
+      expect(JSON.stringify(blocks)).toContain(ID);
+      expect(JSON.stringify(blocks)).toContain("朝の海");
+      expect(JSON.stringify(blocks)).not.toContain("evil");
+    });
   });
 });

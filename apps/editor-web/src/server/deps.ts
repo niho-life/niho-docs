@@ -3,19 +3,26 @@ import { connectionSource } from "@niho/editor-publish";
 import {
   audioInfo,
   completeAudioUpload,
+  completeImageUpload,
+  countPageImages,
   createRecordingPage,
   duplicatePage,
   enableShare,
   enqueueTranscription,
   failRun,
+  findImageUploadByKey,
   getRecording,
   getShare,
+  imageAsset,
   latestRun,
   rotateShare,
   searchPages,
+  sharedImageAsset,
   startAudioRecording,
+  startImageUpload,
   stopShare,
   transcriptionStatus,
+  updateImageMeta,
   updateRecording,
 } from "@niho/editor-store";
 import { getAuthProvider } from "../auth";
@@ -26,6 +33,7 @@ import { getStorage } from "../storage/runtime";
 import { getTranscriptionRunner } from "../transcription/runtime";
 import type { AudioApiDeps } from "./audio-api";
 import { getPool, getStore } from "./db";
+import type { ImageApiDeps } from "./images-api";
 import { faceCredentialsFromEnv } from "../public-api/source";
 import type { PublicApiRouteDeps } from "../public-api/http";
 import { pgPreviewTokenStore, pgPublicApiSource } from "../public-api/pg-source";
@@ -168,4 +176,23 @@ export const transcriptionDeps: TranscriptionApiDeps = {
     const pool = getPool();
     return pool ? getTranscriptionRunner(pool, process.env) : null;
   },
+};
+
+/** 本文の画像（#33）の実行時の依存（DB・保存先は要求のたびに遅延して決める。Pool は getStore と共有）。 */
+export const imageDeps: ImageApiDeps = {
+  auth: () => getAuthProvider(),
+  store: () => {
+    const pool = getPool();
+    if (!pool) return null;
+    return {
+      startImageUpload: (owner, input) => startImageUpload(pool, owner, input),
+      completeImageUpload: (owner, assetId, stored) => completeImageUpload(pool, owner, assetId, stored),
+      imageAsset: (owner, assetId) => imageAsset(pool, owner, assetId),
+      updateImageMeta: (owner, assetId, patch) => updateImageMeta(pool, owner, assetId, patch),
+      countPageImages: (owner, pageId) => countPageImages(pool, owner, pageId),
+      findImageUploadByKey: (owner, input) => findImageUploadByKey(pool, owner, input),
+      sharedImageAsset: (token, assetId) => sharedImageAsset(pool, token, assetId),
+    };
+  },
+  storage: () => getStorage(process.env),
 };

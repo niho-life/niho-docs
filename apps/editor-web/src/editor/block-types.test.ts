@@ -4,8 +4,9 @@ import { TextSelection } from "@tiptap/pm/state";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { validateBlocks } from "@/ast/blocks";
 import { BLOCK_CHOICES, LINE_TYPE_CHOICES, blankLineAround, fillBlankLine, filterBlockChoices, lineTypeOf, setLineType } from "./block-types";
+import type { PageImages } from "@/lib/image-upload-client";
 import { checkLinkInput } from "./link-href";
-import { buildPageExtensions } from "./page-extensions";
+import { buildPageExtensions, type PageExtensionsOptions } from "./page-extensions";
 
 beforeAll(() => {
   const rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }) as DOMRect;
@@ -40,10 +41,16 @@ const BODY: JSONContent = {
   ],
 };
 
-function makeEditor(content: JSONContent = BODY): Editor {
+/** 画像のアップロードの口（ファイル選択を開くところまでを試すので、呼ばれない）。 */
+const IMAGES: PageImages = {
+  upload: async () => ({ ok: false, problem: "failed" }),
+  saveMeta: async () => true,
+};
+
+function makeEditor(content: JSONContent = BODY, options: PageExtensionsOptions = {}): Editor {
   const element = document.createElement("div");
   document.body.appendChild(element);
-  editor = new Editor({ element, extensions: buildPageExtensions(), content });
+  editor = new Editor({ element, extensions: buildPageExtensions(options), content });
   return editor;
 }
 
@@ -118,7 +125,8 @@ describe("every operation of the format bar and the block lists keeps the body w
   });
 
   it("fills only a blank line directly in the body, and leaves everything else untouched", () => {
-    const current = makeEditor({ type: "doc", content: [p("前"), p(), p("後")] });
+    // 「画像」はファイル選択を開くので、口と id を渡した状態で見る（本文に入るのはアップロードが済んでから）
+    const current = makeEditor({ type: "doc", content: [p("前"), p(), p("後")] }, { images: IMAGES, pageId: () => "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11" });
     for (const choice of BLOCK_CHOICES) {
       current.commands.setContent({ type: "doc", content: [p("前"), p(), p("後")] });
       expect(fillBlankLine(current, choice.id, { at: 3 }), choice.id).toBe(true);
@@ -142,10 +150,42 @@ describe("every operation of the format bar and the block lists keeps the body w
 });
 
 describe("the block choices", () => {
-  it("never offer what this body cannot hold (heading 1, code, check, image, recording)", () => {
-    expect(BLOCK_CHOICES.map((choice) => choice.id)).toEqual(["paragraph", "h2", "h3", "bullet", "ordered", "quote", "hr"]);
-    expect(filterBlockChoices("").map((choice) => choice.label)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "区切り線"]);
-    for (const query of ["画像", "image", "録音", "code", "h1", "todo"]) expect(filterBlockChoices(query), query).toEqual([]);
+  it("never offer what this body cannot hold (heading 1, code, check, recording)", () => {
+    expect(BLOCK_CHOICES.map((choice) => choice.id)).toEqual(["paragraph", "h2", "h3", "bullet", "ordered", "quote", "hr", "image"]);
+    expect(filterBlockChoices("").map((choice) => choice.label)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "区切り線", "画像"]);
+    for (const query of ["録音", "code", "h1", "todo"]) expect(filterBlockChoices(query), query).toEqual([]);
+    // 画像は一覧にあり、日本語でも英語でも絞れる。行の種類ではない
+    for (const query of ["画像", "image", "がぞう"]) expect(filterBlockChoices(query).map((choice) => choice.id), query).toEqual(["image"]);
+    expect(LINE_TYPE_CHOICES.map((choice) => choice.id)).not.toContain("image");
+  });
+
+  it("opens the file picker for 画像 only when the page and the upload port are there", () => {
+    const line = { type: "doc", content: [p("前"), p(), p("後")] } satisfies JSONContent;
+    // 口が無い（画像を入れる手段が無い）
+    const without = makeEditor(line);
+    expect(fillBlankLine(without, "image", { at: 3 })).toBe(false);
+    without.destroy();
+    // まだ作っていないページ（最初の保存の前）
+    const uncreated = makeEditor(line, { images: IMAGES, pageId: () => null });
+    expect(fillBlankLine(uncreated, "image", { at: 3 })).toBe(false);
+    // 理由は本文の下に出す（本文は変えない）
+    expect(uncreated.view.dom.parentElement?.querySelector("[data-image-problem]")?.textContent).toContain("ページができてから");
+    expect(validateBlocks(uncreated.getJSON().content ?? []).ok).toBe(true);
+    uncreated.destroy();
+    const ready = makeEditor(line, { images: IMAGES, pageId: () => "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11" });
+    const clicks: string[] = [];
+    const click = HTMLInputElement.prototype.click;
+    HTMLInputElement.prototype.click = function patched(this: HTMLInputElement) {
+      clicks.push(this.accept);
+    };
+    try {
+      expect(fillBlankLine(ready, "image", { at: 3 })).toBe(true);
+    } finally {
+      HTMLInputElement.prototype.click = click;
+    }
+    // 受け付ける種類だけを選べる選択を開き、本文にはまだ何も入れない
+    expect(clicks).toEqual(["image/jpeg,image/png,image/webp,image/avif,image/gif"]);
+    expect(ready.getJSON().content?.map((node) => node.type)).toEqual(["paragraph", "paragraph", "paragraph"]);
   });
 });
 

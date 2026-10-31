@@ -9,7 +9,7 @@ import {
   type TranscriptionErrorCode,
   type TranscriptionOutput,
 } from "@niho/editor-store";
-import { StorageError, type ObjectStorage, type OpenedObject } from "../storage/types";
+import { StorageError, type ObjectStorage, type ReadObject } from "../storage/types";
 import { EngineError, type EngineErrorCode, type TranscriptionEngine } from "./engine";
 import { normalizeEngineResult } from "./normalize";
 
@@ -103,12 +103,12 @@ export async function executeRun(deps: ExecuteRunDeps): Promise<ExecuteRunOutcom
   if (audio.expiresAt !== null && Date.parse(audio.expiresAt) <= now()) return fail("audio_expired");
 
   const signal = AbortSignal.timeout(deps.timeoutMs);
-  let opened: OpenedObject | null = null;
+  let opened: ReadObject | null = null;
   try {
-    opened = await deps.storage.open(audio.objectPath);
+    opened = await deps.storage.readObject(audio.objectPath);
     if (!opened) return await fail("audio_missing");
     const raw = await deps.engine.transcribe({
-      audio: { stream: opened.stream, contentType: audio.contentType, sizeBytes: opened.sizeBytes },
+      audio: { stream: opened.body, contentType: audio.contentType, sizeBytes: opened.sizeBytes },
       language: run.language,
       diarize: run.diarize,
       terms: run.terms,
@@ -127,6 +127,6 @@ export async function executeRun(deps: ExecuteRunDeps): Promise<ExecuteRunOutcom
     return await fail(errorCodeFor(error, signal), error);
   } finally {
     // エンジンが読まなかった音声は閉じる（保存先との接続を残さない）
-    if (opened && !opened.stream.locked) await opened.stream.cancel().catch(() => undefined);
+    if (opened && !opened.body.locked) await opened.body.cancel().catch(() => undefined);
   }
 }
