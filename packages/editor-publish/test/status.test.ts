@@ -43,6 +43,7 @@ function plan(patch: Partial<SheetPlanInput> & { page?: Partial<DraftPage>; choi
     pageId: PAGE_ID,
     title: readyPage(page).title,
     roles: ["writer", "kamakura"],
+    storageMode: "CLOUD",
     sites: [SITE],
     declarations: { exp: DECLARATIONS.exp, niho: DECLARATIONS.niho, [SITE]: DECLARATIONS.site },
     selection: sel,
@@ -124,6 +125,20 @@ describe("sheetPlan: the primary button", () => {
     expect(result.primary).toBe(primary);
     expect(result.canStop).toBe(true);
     expect(result.slug).toEqual({ value: "a-morning-walk-along-the-coast", editable: false, error: null });
+  });
+
+  it.each(["LOCAL", "CLOSING"] as const)("is null whatever the page needs while the storage mode is %s, and says why", (mode) => {
+    expect(plan().primary).toBe("publish");
+    const result = plan({ storageMode: mode });
+    expect(result.primary).toBeNull();
+    expect(result.storageBlock).toBe(mode);
+    // Stopping is still possible.
+    expect(plan({ storageMode: mode, publication: live("niho", { fingerprint: OTHER }) }).canStop).toBe(true);
+  });
+
+  it("has no storage block on CLOUD or UNSET", () => {
+    expect(plan().storageBlock).toBeNull();
+    expect(plan({ storageMode: "UNSET" }).storageBlock).toBeNull();
   });
 
   it("stays null on a live page with edits while a problem remains", () => {

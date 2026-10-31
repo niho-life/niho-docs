@@ -73,7 +73,9 @@ Condition = { id, message, fix, kind, …kind ごとの引数 }
 
 転送の記録は `{ from: { dest, slug }, to: { dest, slug } | "list" }`。`resolveRedirect` は鎖を最大 8 段たどり、輪になっていたら一覧とする。面は 410 の `movedTo`（契約）と一覧への転送で旧 URL をさばく。
 
-結果は `{ ok: true, … } | { ok: false, reason, … }`。`reason`：`not_found`、`forbidden_destination`、`not_ready`（`problems` つき）、`slug_locked`、`slug_taken`、`invalid_slug`、`destination_unavailable`、`failed`（再試行できる）。
+**保存先**（[設計 §2.1](editor-niho-life-design.md)、Issue #50）：アカウントの保存先を NIHO から操作のたびに読み（`StorageModeReader`、保存しない）、`CLOUD`（未選択の `UNSET` を含む）以外では `publish`・`update`・`changeDestination` を `storage_not_cloud` で断る（知らない値も断る＝fail closed）。`stop` は常にできる。`sheetPlan` は `storageBlock` を返し、主ボタンを押せなくして理由を示す。
+
+結果は `{ ok: true, … } | { ok: false, reason, … }`。`reason`：`not_found`、`forbidden_destination`、`storage_not_cloud`、`not_ready`（`problems` つき）、`slug_locked`、`slug_taken`、`invalid_slug`、`destination_unavailable`、`failed`（再試行できる）。
 
 ## #41 発信先の設定
 

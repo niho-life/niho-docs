@@ -8,7 +8,17 @@ import { FACE_DESTS, type Extras, type PublicationRange } from "@niho/editor-pub
 import { destinationUrl, parseDestinationDeclaration, type DestinationDeclaration } from "./declaration.js";
 import { evaluateReadiness, type ReadinessFacts } from "./readiness.js";
 import { slugFromTitle, suggestSlug, validateSlug, type SlugError } from "./slug.js";
-import { EXTRA_KEYS, destOf, roleAllows, type ExtraKey, type Notice, type Problem } from "./types.js";
+import {
+  EXTRA_KEYS,
+  destOf,
+  roleAllows,
+  storageBlockOf,
+  type ExtraKey,
+  type Notice,
+  type Problem,
+  type StorageBlock,
+  type StorageMode,
+} from "./types.js";
 import type { Dest } from "@niho/editor-publish-contract";
 
 export const STATUS_STATES = ["private", "published", "updated", "limited", "stopped"] as const;
@@ -60,6 +70,8 @@ export interface SheetPlanInput {
   readonly title: string;
   /** Roles read from NIHO for this render. Never stored. */
   readonly roles: readonly string[];
+  /** The account's storage mode read from NIHO for this render. Never stored. Publishing needs `CLOUD` (design §2.1). */
+  readonly storageMode: StorageMode;
   /** Handles of the owner's connected sites (#41). */
   readonly sites: readonly string[];
   /** Declaration JSON by handle as fetched; missing or null means unavailable. Parsed (fail closed) here. */
@@ -95,6 +107,8 @@ export interface SheetSlug {
 
 export interface SheetPlan {
   readonly status: StatusState;
+  /** Set when the storage mode rules publishing out: the primary button is off and the sheet says why. Stopping stays possible. */
+  readonly storageBlock: StorageBlock | null;
   readonly destinations: readonly SheetDestination[];
   readonly selected: SheetDestination | null;
   readonly ranges: readonly PublicationRange[];
@@ -157,8 +171,10 @@ export function sheetPlan(input: SheetPlanInput): SheetPlan {
   const declaration = selected === null ? null : declarations.get(selected.handle) ?? null;
   const publication = input.publication;
   const canStop = publication !== null && publication.stoppedAt === null;
+  const storageBlock = storageBlockOf(input.storageMode);
   const empty: SheetPlan = {
     status,
+    storageBlock,
     destinations,
     selected,
     ranges: [],
@@ -192,7 +208,7 @@ export function sheetPlan(input: SheetPlanInput): SheetPlan {
   }
 
   let primary: PrimaryAction | null = null;
-  if (readiness.problems.length === 0 && slug.error === null && selectionError === null) {
+  if (storageBlock === null && readiness.problems.length === 0 && slug.error === null && selectionError === null) {
     if (publication === null || publication.stoppedAt !== null || !sameHandle) primary = "publish";
     else if (publication.fingerprint !== input.draftFingerprint) primary = "update";
     else if (settingsDiffer(publication, selection)) primary = "save";

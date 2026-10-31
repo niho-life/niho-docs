@@ -15,6 +15,22 @@ import {
   type PublicationRange,
 } from "@niho/editor-publish-contract";
 
+/**
+ * The account's storage mode (design §2.1). The names are `DocsStorageMode`'s in @niho/docs-core, which this
+ * package does not depend on. `UNSET` (never chosen) is read as `CLOUD`.
+ */
+export const STORAGE_MODES = ["UNSET", "CLOUD", "CLOSING", "LOCAL"] as const;
+export type StorageMode = (typeof STORAGE_MODES)[number];
+
+/** Why publishing is off: the pages live only on the Mac, are being moved there, or the mode is not one we know. */
+export type StorageBlock = "LOCAL" | "CLOSING" | "unknown";
+
+/** `null` when the server may hold pages and publish (`CLOUD`, `UNSET`). Anything else, a value we do not know included, blocks (fail closed). */
+export function storageBlockOf(mode: unknown): StorageBlock | null {
+  if (mode === "CLOUD" || mode === "UNSET") return null;
+  return mode === "LOCAL" || mode === "CLOSING" ? mode : "unknown";
+}
+
 /** The field of the sheet / page that "直す" opens. Closed vocabulary. */
 export const FIXES = ["lang", "cover", "lead", "category", "body", "related"] as const;
 export type Fix = (typeof FIXES)[number];
