@@ -56,8 +56,10 @@ export async function loadPublishSheet(pageId: string, selection: PublishSelecti
     return NETWORK;
   }
   if (!response.ok) return failureOf(response, PUBLISH_MESSAGES.unavailable);
-  const body = (await response.json()) as { sheet: PublishSheetDto };
-  return { ok: true, sheet: body.sheet };
+  // 応答の形が違う（JSON でない・sheet が無い）ときも、例外にせず失敗として返す（画面は読み込みの失敗を出す）
+  const body = (await response.json().catch(() => null)) as { sheet?: unknown } | null;
+  if (typeof body?.sheet !== "object" || body.sheet === null) return { ok: false, status: response.status, error: null, message: PUBLISH_MESSAGES.unavailable };
+  return { ok: true, sheet: body.sheet as PublishSheetDto };
 }
 
 /** 公開する・更新を公開・保存・発信先を変える（どれにするかはサーバーが今の公開から決める）。slug は変えられるときだけ送る。 */
