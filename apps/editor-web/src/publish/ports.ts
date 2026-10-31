@@ -22,7 +22,7 @@ import { DEV_DECLARATIONS } from "./dev-declarations";
 
 /**
  * 公開（#39）のポートの組み立て。store（Postgres）以外を、要求の本人（session）ごとに作る。
- * store は段 2 で `pgPublishStore(pool)`（src/publish/pg-store.ts）を渡す。テストは MemoryPublishStore。
+ * store は `pgPublishStore(pool)`（src/publish/pg-store.ts。src/server/deps.ts がつなぐ）。テストは MemoryPublishStore。
  *
  * - roles: stub の方式は `EDITOR_STUB_ROLES`（既定 writer,kamakura）。niho の方式は役割なし（fail closed。役割の契約は #42 と niho-app 側）。
  * - declarations: 本人のサイトは接続の設定から（editor-publish の siteDeclarationSource）、面は config.ts の DeclarationPlan に従う。
@@ -36,12 +36,16 @@ export type PublishWiring = {
   readonly publish: PublishPorts;
   /** ConnectionService が使う（シートでは本人の接続の一覧だけ）。 */
   readonly connections: ConnectionPorts;
+  /** 写真の置き場所（EDITOR_ASSET_ORIGIN）があるか。無ければ写真のあるページは公開できない（何度試しても同じ）。 */
+  readonly photosReady: boolean;
 };
 
 export type PublishWiringOptions = {
   readonly env?: PublishEnv;
   readonly fetch?: FetchLike;
   readonly clock?: Clock;
+  /** 「更新あり」の比較（ConnectionService の公開中の一覧）。省略すると store の transaction で読む。Postgres は pgDraftFingerprints。 */
+  readonly drafts?: DraftFingerprints;
 };
 
 export const systemClock: Clock = { now: () => new Date().toISOString() };
@@ -132,7 +136,7 @@ export function faceDeclarations(plan: DeclarationPlan, fetch?: FetchLike): Decl
   return holder.__nihoEditorDeclarations.source;
 }
 
-/** store 以外の PublishPorts・ConnectionPorts を組み立てる（段 2 の配線は deps.ts から `wirePublishPorts(pgPublishStore(pool), session)`）。 */
+/** store 以外の PublishPorts・ConnectionPorts を組み立てる（実行時の配線は src/server/deps.ts の publishDeps）。 */
 export function wirePublishPorts(store: ConnectionStore, session: Session, options: PublishWiringOptions = {}): PublishWiring {
   const config = publishConfig(options.env);
   const clock = options.clock ?? systemClock;
@@ -147,6 +151,7 @@ export function wirePublishPorts(store: ConnectionStore, session: Session, optio
       assetUrls: assetUrlsOf(config.assetOrigin),
       clock,
     },
-    connections: { store, clock, drafts: storeDraftFingerprints(store), assetBytes: NO_ASSET_BYTES },
+    connections: { store, clock, drafts: options.drafts ?? storeDraftFingerprints(store), assetBytes: NO_ASSET_BYTES },
+    photosReady: config.assetOrigin !== null,
   };
 }

@@ -36,6 +36,7 @@ export function OpenPage({ summary, blocks, revision }: { summary: PageSummary; 
       page={{ id, title: summary.title, blocks, revision, updatedAt: summary.updatedAt }}
       onTitleChange={(value) => frame.pageTitleChanged(id, value)}
       onSaved={() => frame.pageSaved(id)}
+      registerSaveNow={frame.registerPageSaver}
     />
   );
 }
@@ -93,6 +94,7 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
       onSaved={() => {
         if (createdRef.current) frame.pageSaved(createdRef.current);
       }}
+      registerSaveNow={frame.registerPageSaver}
     />
   );
 }

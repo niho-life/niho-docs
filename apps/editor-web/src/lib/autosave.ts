@@ -48,6 +48,11 @@ export type Autosave<Patch extends object> = {
   change: (patch: LazyPatch<Patch>) => void;
   /** 時計を待たずに今たまっている変更を保存する（変換中・前の保存の最中は、その後へ送る）。 */
   flush: (options?: FlushOptions) => Promise<void>;
+  /**
+   * 今たまっている変更を今すぐ送り、届き終わるまで待つ（公開の前。#39）。前の保存の最中なら、その終わりを待ってから送る。
+   * 全てサーバーにあれば true。送れなかった（オフライン・失敗・ログイン切れ）・止まっている（競合）・変換中・閉じたあとは false。
+   */
+  saveNow: () => Promise<boolean>;
   /** 自動保存を止める（開いたときに競合していた下書きなど）。変更はため続ける。 */
   stop: () => void;
   /** 止まった自動保存を再開し、たまった変更をすぐ送る（「この内容で上書き」）。 */
@@ -90,6 +95,8 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
   let stopped = false;
   let failures = 0;
   let state: SaveState = "saved";
+  /** 送っている保存の後始末まで済んだら解ける（saveNow が待つ）。 */
+  let sending: Promise<void> = Promise.resolve();
 
   const setState = (next: SaveState, error?: unknown) => {
     if (next === state && error === undefined) return;
@@ -142,6 +149,17 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
     }
     if (!inFailure()) setState("saving");
     inFlight = true;
+    let sent: () => void = () => undefined;
+    sending = new Promise<void>((resolve) => (sent = resolve));
+    try {
+      await settle(patch, flushOptions);
+    } finally {
+      sent();
+    }
+  }
+
+  /** 1 回の保存を送り、結果に応じて状態・次の保存を決める（flush の後半）。 */
+  async function settle(patch: Patch, flushOptions: FlushOptions): Promise<void> {
     try {
       await options.save(patch, { keepalive: flushOptions.keepalive === true });
     } catch (error) {
@@ -180,6 +198,23 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
     }
   }
 
+  async function saveNow(): Promise<boolean> {
+    // 公開の前の 1 回の操作なので、入力が続いて終わらないことは無いが、念のため回数を区切る
+    for (let round = 0; round < 5; round += 1) {
+      if (disposed || closing || stopped) return false;
+      if (inFlight) {
+        await sending;
+        if (inFailure() || stopped) return false;
+        continue;
+      }
+      if (pending === null) return true;
+      if (options.isComposing()) return false;
+      await flush();
+      if (inFailure() || stopped) return false;
+    }
+    return false;
+  }
+
   return {
     change(patch) {
       pending = { ...(pending ?? {}), ...patch };
@@ -190,6 +225,7 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
       later(delay);
     },
     flush,
+    saveNow,
     stop() {
       if (disposed || closing) return;
       stopped = true;

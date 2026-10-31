@@ -22,8 +22,10 @@ import {
   sheetPlan,
   slugFromTitle,
   slugStem,
+  toPublishedBlocks,
   validateSlug,
   type ConnectionTx,
+  type DraftPage,
   type DestinationBlock,
   type ExtraKey,
   type Notice,
@@ -183,6 +185,14 @@ export function placeBodyOf(body: unknown): Parsed<PublishSelection> {
   };
 }
 
+/** 写真の置き場所が無いときに公開できない、とする問題（どの発信先でも。本文から写真を外すと公開できる）。 */
+export const PHOTOS_UNAVAILABLE: Problem = Object.freeze({ id: "photos-unavailable", message: PUBLISH_MESSAGES.photosUnavailable, fix: "body" });
+
+/** 公開版に写真が入るページか（カバー写真か、本文の写真）。 */
+export function hasPhotos(page: DraftPage): boolean {
+  return page.coverAssetId !== null || toPublishedBlocks(page.content).figures.length > 0;
+}
+
 /** 他のページが持つ slug（`base` とその stem の下）。PublishService の提案と同じ範囲を見る。 */
 async function takenUnder(tx: ConnectionTx, handle: string, base: string, pageId: string): Promise<readonly string[]> {
   if (!validateSlug(base).ok) return [];
@@ -284,8 +294,9 @@ export async function loadPublishSheet(
   const destinations: PublishDestinationDto[] = plan.destinations.map((entry) => {
     const parsed = entry.available ? parseDestinationDeclaration(declarations[entry.handle]) : null;
     const declaration = parsed?.ok ? parsed.value : null;
+    // 選んでいる発信先は、いま評価した URL（slug が使えなければ null。前の URL や提案を見せない）
     const url =
-      entry.handle === plan.selected?.handle && plan.url !== null
+      entry.handle === plan.selected?.handle
         ? plan.url
         : publication?.handle === entry.handle && version
           ? version.snapshot.canonicalUrl
@@ -295,6 +306,8 @@ export async function loadPublishSheet(
     return { handle: entry.handle, dest: entry.dest, label: entry.label, available: entry.available, reason: entry.reason, url };
   });
   const selectedDeclaration = plan.selected?.available ? parseDestinationDeclaration(declarations[plan.selected.handle]) : null;
+  // 写真の置き場所が無いのに写真のあるページは、何度押しても公開に失敗するので、先に押せなくする
+  const photosBlocked = plan.selected !== null && !wiring.photosReady && hasPhotos(page);
 
   return {
     status: plan.status,
@@ -319,12 +332,12 @@ export async function loadPublishSheet(
     ranges: [...plan.ranges],
     extras: plan.extras.map((entry) => ({ ...entry })),
     selectionError: plan.selectionError,
-    problems: plan.problems.map((problem) => ({ ...problem })),
+    problems: [...plan.problems.map((problem) => ({ ...problem })), ...(photosBlocked ? [{ ...PHOTOS_UNAVAILABLE }] : [])],
     notices: plan.notices.map((notice) => ({ ...notice })),
     url: plan.url,
     slug: { ...plan.slug },
     slugPrefix: selectedDeclaration?.ok ? destinationUrl(selectedDeclaration.value, "") : null,
-    primary: plan.primary,
+    primary: photosBlocked ? null : plan.primary,
     changesDestination: plan.changesDestination,
     canStop: plan.canStop,
   };
@@ -379,12 +392,16 @@ export function publishFailureResponse(result: Exclude<PublishResult, { ok: true
   }
 }
 
-/** 今の公開（本人のページのときだけ）。ページが無ければ undefined。 */
-async function currentPublication(wiring: PublishWiring, actorId: string, pageId: string): Promise<PublicationRecord | null | undefined> {
+/** 今の公開と、写真のあるページか（本人のページのときだけ）。ページが無ければ undefined。 */
+async function currentPublication(
+  wiring: PublishWiring,
+  actorId: string,
+  pageId: string,
+): Promise<{ publication: PublicationRecord | null; photos: boolean } | undefined> {
   return wiring.connections.store.transaction(async (tx) => {
     const page = await tx.getPage(pageId);
     if (!page || page.ownerId !== actorId) return undefined;
-    return tx.getPublication(pageId);
+    return { publication: await tx.getPublication(pageId), photos: hasPhotos(page) };
   });
 }
 
@@ -405,8 +422,13 @@ export function publishRoute(request: Request, id: string, deps: PublishApiDeps)
     if (!input.ok) return errorResponse("bad_request");
     if (!UUID_PATTERN.test(id)) return notFoundResponse();
     const actorId = session.userId;
-    const current = await currentPublication(wiring, actorId, id);
-    if (current === undefined) return notFoundResponse();
+    const read = await currentPublication(wiring, actorId, id);
+    if (read === undefined) return notFoundResponse();
+    // 写真の置き場所が無いと、写真のあるページは何度試しても失敗する。もう一度とは言わない
+    if (read.photos && !wiring.photosReady) {
+      return jsonResponse(422, { error: "failed", retryable: false, detail: "photos_unavailable", message: PUBLISH_MESSAGES.photosUnavailable });
+    }
+    const current = read.publication;
     const { handle, range, extras, slug } = input.value;
     const live = current !== null && current.stoppedAt === null;
     const same = current !== null && current.handle === handle;

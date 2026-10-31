@@ -1,14 +1,8 @@
-import type { PageSummary } from "@niho/editor-store";
+import type { PagePublicationSummary, PageSummary } from "@niho/editor-store";
 import type { ShellDest, ShellListItem } from "niho-docs-ui/shell";
 
-/**
- * 2 行目の公開先に要るもの（#39）。段 2 で PageSummary.publication（packages/editor-store の一覧）が同じ形で入る。
- * それまでは開いたページのシートが読んだ値を、枠（EditorFrame）がこの形で重ねる。
- */
-export type SidebarPublication = { dest: ShellDest; handle: string; range: "live" | "unlisted"; stopped: boolean };
-
-/** 一覧の 1 行の入力（公開の状態はあれば使う）。 */
-export type SidebarPage = PageSummary & { publication?: SidebarPublication | null };
+/** 2 行目の公開先に要るもの（#39）。一覧の行（listPageChunk の PageSummary.publication）と同じ形。 */
+export type SidebarPublication = PagePublicationSummary;
 
 /** 2 行目の発信先の名前（モック v6 の DEST と同じ）。本人のサイトは「自分のサイト」。 */
 const DEST_NAMES: Readonly<Record<ShellDest, string>> = { exp: "NIHO Experience", niho: "NIHO", site: "自分のサイト" };
@@ -43,7 +37,7 @@ export function formatWhen(iso: string, now: number): string {
 }
 
 /** 題名での絞り込み（読み込んだ行だけ。題名と本文の検索は #35 でこれを差し替える）。 */
-export function searchPages<T extends PageSummary>(pages: readonly T[], query: string): T[] {
+export function searchPages(pages: readonly PageSummary[], query: string): PageSummary[] {
   const needle = query.normalize("NFKC").toLowerCase().trim();
   return pages.filter((page) => page.title.normalize("NFKC").toLowerCase().includes(needle));
 }
@@ -52,7 +46,7 @@ export function searchPages<T extends PageSummary>(pages: readonly T[], query: s
  * 2 行目（モック v6 の sidebar の sub と同じ順）: 公開中（限定公開を含む）は発信先の名前と印、公開をやめたページは「公開をやめた」、
  * 録音は「録音」、手順が動いているページは「作成中…」。それ以外は出さない。
  */
-function subOf(page: SidebarPage): ShellListItem["sub"] {
+function subOf(page: PageSummary): ShellListItem["sub"] {
   const publication = page.publication;
   if (publication && !publication.stopped) return { text: DEST_NAMES[publication.dest], dest: publication.dest };
   if (publication?.stopped) return { text: "公開をやめた" };
@@ -61,7 +55,7 @@ function subOf(page: SidebarPage): ShellListItem["sub"] {
   return undefined;
 }
 
-function rowOf(page: SidebarPage, now: number, child: boolean): ShellListItem {
+function rowOf(page: PageSummary, now: number, child: boolean): ShellListItem {
   const item: ShellListItem = { id: page.id, title: page.title, when: formatWhen(page.updatedAt, now) };
   if (child) item.child = true;
   const sub = subOf(page);
@@ -70,7 +64,7 @@ function rowOf(page: SidebarPage, now: number, child: boolean): ShellListItem {
 }
 
 /** 読み込んだ中でいちばん上の祖先。親を辿れなくなったところ（未読み込み・循環）で止める。循環なら null（その行は上の段に出す）。 */
-function topAncestor<T extends PageSummary>(page: T, byId: ReadonlyMap<string, T>): T | null {
+function topAncestor(page: PageSummary, byId: ReadonlyMap<string, PageSummary>): PageSummary | null {
   const seen = new Set([page.id]);
   let top = page;
   while (top.parent) {
@@ -93,12 +87,12 @@ function byCreated(a: PageSummary, b: PageSummary): number {
  * サイドバーの行。上の段は渡した順（更新順）。親（か祖先）を読み込んである行は、いちばん上の祖先の直後に作った順で少し下げて並べる。
  * 親を読み込んでいない行は上の段に出す。query があるときは題名で絞り、入れ子にせずに並べる。
  */
-export function arrangeSidebarItems(pages: readonly SidebarPage[], options: { now: number; query?: string }): ShellListItem[] {
+export function arrangeSidebarItems(pages: readonly PageSummary[], options: { now: number; query?: string }): ShellListItem[] {
   const { now } = options;
   if (options.query?.trim()) return searchPages(pages, options.query).map((page) => rowOf(page, now, false));
   const byId = new Map(pages.map((page) => [page.id, page]));
-  const children = new Map<string, SidebarPage[]>();
-  const tops: SidebarPage[] = [];
+  const children = new Map<string, PageSummary[]>();
+  const tops: PageSummary[] = [];
   for (const page of pages) {
     const top = topAncestor(page, byId);
     if (top === null || top.id === page.id) {
