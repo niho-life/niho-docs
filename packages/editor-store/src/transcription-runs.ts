@@ -1,0 +1,466 @@
+import type { PoolClient } from "pg";
+import { audioInfo, type AudioInfo } from "./recording-audio.ts";
+import {
+  CONTROL_CHARACTERS,
+  InvalidRecordingError,
+  TOUCH_PAGE_SQL,
+  assertOwner,
+  charCount,
+  isInvalidTextRepresentation,
+  isStorableText,
+  recordingDataProblem,
+  rollback,
+  type Connectable,
+  type RecordingSegment,
+} from "./recordings.ts";
+import { isPageId } from "./store.ts";
+import type { OwnerId, PageLang, Queryable } from "./types.ts";
+
+/**
+ * 録音の文字起こしの実行（#36 段 2b。migrations/0009_transcription_runs.sql）。手順（#37）の実行の表とは別の経路。
+ *
+ * 流れ: 開始（enqueueTranscription）で run を queued で作る → 実行する側が claimRun で running にして世代を 1 つ進める →
+ * 保存先の音声をエンジンに渡す → finishRun で段落を page_recordings に書き、run を succeeded にする（1 transaction）。
+ * 途中の失敗は failRun（短い code だけ）。音声は消さないので、失敗しても「もう一度」（新しい run）ができる。
+ *
+ * 状態遷移は step-runs.ts と同じ流儀で、すべて「世代（generation）と状態を条件にした UPDATE」で行う。claim のたびに世代が進み、
+ * 確定・失敗は claim のときの世代と一致して running のときだけ通る（掃除のあとに遅れて返った実行の結果で上書きしない）。
+ * 1 つのページで有効な run（queued・running）は 1 つだけ（部分 unique index と、録音の行の FOR UPDATE）。
+ * 段落を書くのは replace の run か、段落が空の録音だけ（直した文章を失わせない）。
+ * 読み書きは全て本人の・ゴミ箱でないページだけ（claimRun・finishRun・failRun は実行する側が run の id で呼ぶ）。
+ * 本文・音声・エンジンの応答・鍵はこの表に持たない。
+ */
+
+export const TRANSCRIPTION_ENGINES = ["deepgram", "fake"] as const;
+export type TranscriptionEngineName = (typeof TRANSCRIPTION_ENGINES)[number];
+
+export const TRANSCRIPTION_RUN_STATUSES = ["queued", "running", "succeeded", "failed"] as const;
+export type TranscriptionRunStatus = (typeof TRANSCRIPTION_RUN_STATUSES)[number];
+
+/** 失敗の理由（0009 の CHECK と同じ）。 */
+export const TRANSCRIPTION_ERROR_CODES = [
+  "audio_missing",
+  "audio_expired",
+  "engine_unavailable",
+  "engine_rejected",
+  "engine_timeout",
+  "engine_bad_response",
+  "too_large",
+  "internal",
+] as const;
+export type TranscriptionErrorCode = (typeof TRANSCRIPTION_ERROR_CODES)[number];
+
+/** 固有名詞の表記の数と、1 つの文字数の上限（0009 の CHECK と API の検査と同じ）。 */
+export const TRANSCRIPTION_TERMS_MAX = 100;
+export const TRANSCRIPTION_TERM_MAX_CHARS = 64;
+
+/** 画面に出す run（決まった項目だけ）。時刻は ISO 8601。 */
+export type TranscriptionRunView = {
+  id: string;
+  status: TranscriptionRunStatus;
+  engine: TranscriptionEngineName;
+  language: PageLang;
+  errorCode: TranscriptionErrorCode | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export type EnqueueTranscriptionInput = {
+  /** 使うエンジン（設定で決まる。要求からは選ばせない）。 */
+  engine: TranscriptionEngineName;
+  /** 音声の言語。無ければ録音の言語。 */
+  language?: PageLang;
+  /** 話者を分けるか。 */
+  diarize: boolean;
+  /** 既にある段落を置き換えてよいか（false なら、段落が空の録音だけ）。 */
+  replace: boolean;
+  /** 固有名詞の表記（100 個まで・1 つ 64 文字まで・制御文字なし）。 */
+  terms: readonly string[];
+};
+
+export type EnqueueTranscriptionResult =
+  | { status: "created"; run: TranscriptionRunView }
+  /** 有効な run（queued・running）が既にある（新しく作らない）。 */
+  | { status: "existing"; run: TranscriptionRunView }
+  /** 音声のアップロードが済んでいない（uploading）か、音声の無い録音。 */
+  | { status: "audio_not_ready" }
+  /** 音声の保持の期限を過ぎた（保存先から消えている見込み）。 */
+  | { status: "audio_expired" }
+  /** 段落が既にあり、replace が false（直した文章を失わせない）。 */
+  | { status: "has_transcript" };
+
+/** 実行する側が claim した run。audio は本人の・ゴミ箱でないページの音声（無ければ null）。 */
+export type ClaimedTranscription = {
+  run: TranscriptionRunView & { owner: OwnerId; pageId: string; diarize: boolean; replace: boolean; terms: string[] };
+  /** この実行の世代。finishRun・failRun に渡す。 */
+  generation: number;
+  audio: AudioInfo | null;
+};
+
+/** finishRun に渡す結果（段落は保存の形に正規化したもの。話者は 1 始まりの番号か null）。 */
+export type TranscriptionOutput = { segments: readonly RecordingSegment[]; durationSec: number | null };
+
+/**
+ * succeeded: 段落を書いて run を確定した / superseded: replace でない run で、その間に段落が入っていた（書かずに run を failed（internal）にした）/
+ * stale: 世代が古い・running でない（掃除・別の実行のあと）。何も書いていない。
+ */
+export type FinishTranscriptionResult = "succeeded" | "superseded" | "stale";
+
+type RunRow = {
+  id: string;
+  status: TranscriptionRunStatus;
+  engine: TranscriptionEngineName;
+  language: PageLang;
+  error_code: TranscriptionErrorCode | null;
+  created_at: Date;
+  started_at: Date | null;
+  finished_at: Date | null;
+};
+
+const RUN_COLUMNS = "t.id, t.status, t.engine, t.language, t.error_code, t.created_at, t.started_at, t.finished_at";
+
+function toView(row: RunRow): TranscriptionRunView {
+  return {
+    id: row.id,
+    status: row.status,
+    engine: row.engine,
+    language: row.language,
+    errorCode: row.error_code,
+    createdAt: row.created_at.toISOString(),
+    startedAt: row.started_at ? row.started_at.toISOString() : null,
+    finishedAt: row.finished_at ? row.finished_at.toISOString() : null,
+  };
+}
+
+export function isTranscriptionErrorCode(value: unknown): value is TranscriptionErrorCode {
+  return typeof value === "string" && (TRANSCRIPTION_ERROR_CODES as readonly string[]).includes(value);
+}
+
+/** 固有名詞の表記として受け付けるか（前後の空白なし・1〜64 文字・制御文字なし・保存できる文字）。 */
+export function isTranscriptionTerm(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value === value.trim() &&
+    charCount(value) <= TRANSCRIPTION_TERM_MAX_CHARS &&
+    !CONTROL_CHARACTERS.test(value) &&
+    isStorableText(value)
+  );
+}
+
+function assertEnqueueInput(input: EnqueueTranscriptionInput): void {
+  if (!(TRANSCRIPTION_ENGINES as readonly string[]).includes(input.engine)) throw new TypeError("editor-store: unknown transcription engine");
+  if (input.language !== undefined && input.language !== "ja" && input.language !== "en") throw new TypeError("editor-store: language must be ja or en");
+  if (typeof input.diarize !== "boolean" || typeof input.replace !== "boolean") throw new TypeError("editor-store: diarize and replace must be booleans");
+  if (!Array.isArray(input.terms) || input.terms.length > TRANSCRIPTION_TERMS_MAX || !input.terms.every(isTranscriptionTerm)) {
+    throw new TypeError("editor-store: terms are not valid");
+  }
+}
+
+type LockRow = { language: PageLang; audio_status: "none" | "uploading" | "uploaded"; expired: boolean; has_segments: boolean };
+
+// 本人の・ゴミ箱でないページの録音を押さえる（同じページの開始を直列にする）。$1 owner / $2 page id。
+// 期限は DB の時計で比べる（期限が無い行は、期限切れとしない。消えていれば実行のときに audio_missing になる）。
+const LOCK_RECORDING_SQL = `
+SELECT r.language, r.audio_status,
+       COALESCE(r.audio_expires_at <= clock_timestamp(), false) AS expired,
+       jsonb_array_length(r.segments) > 0 AS has_segments
+  FROM page_recordings AS r
+  JOIN pages AS p ON p.owner = r.owner AND p.id = r.page_id
+ WHERE r.owner = $1 AND r.page_id = $2 AND p.deleted_at IS NULL
+   FOR UPDATE OF r`;
+
+// $1 owner / $2 page id。
+const ACTIVE_RUN_SQL = `
+SELECT ${RUN_COLUMNS}
+  FROM transcription_runs AS t
+ WHERE t.owner = $1 AND t.page_id = $2 AND t.status IN ('queued', 'running')`;
+
+// $1 owner / $2 page id / $3 engine / $4 language / $5 diarize / $6 replace / $7 terms（JSON の配列）
+const INSERT_RUN_SQL = `
+INSERT INTO transcription_runs AS t (owner, page_id, engine, status, language, diarize, replace, terms)
+VALUES ($1, $2, $3, 'queued', $4, $5, $6, $7::jsonb)
+RETURNING ${RUN_COLUMNS}`;
+
+const ACTIVE_INDEX = "transcription_runs_active_idx";
+
+function isActiveRunConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const { code, constraint } = error as { code?: unknown; constraint?: unknown };
+  return code === "23505" && constraint === ACTIVE_INDEX;
+}
+
+async function activeRun(db: Pick<PoolClient, "query">, owner: OwnerId, pageId: string): Promise<TranscriptionRunView | null> {
+  const row = (await db.query<RunRow>(ACTIVE_RUN_SQL, [owner, pageId])).rows[0];
+  return row ? toView(row) : null;
+}
+
+/**
+ * 文字起こしを始める（run を queued で作る）。録音の行を FOR UPDATE で押さえてから前提を順に見る:
+ * - 本人の・ゴミ箱でないページの録音が無い（別の人・存在しない・不正な id・削除済み・録音の無いページ）: null
+ * - 音声のアップロードが済んでいない・音声が無い: audio_not_ready / 期限を過ぎた: audio_expired
+ * - 有効な run（queued・running）がある: それを返す（existing。何も書かない）
+ * - 段落があり replace が false: has_transcript（何も書かない）
+ * - それ以外: run を作る（created）
+ * 同じページの開始が並んでも、作られる run は 1 つだけ（行の lock と部分 unique index。unique で止まった側は既存を返す）。
+ */
+export async function enqueueTranscription(
+  pool: Connectable,
+  owner: OwnerId,
+  pageId: string,
+  input: EnqueueTranscriptionInput,
+): Promise<EnqueueTranscriptionResult | null> {
+  assertOwner(owner);
+  assertEnqueueInput(input);
+  if (!isPageId(pageId)) return null;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    try {
+      const recording = (await client.query<LockRow>(LOCK_RECORDING_SQL, [owner, pageId])).rows[0];
+      if (!recording) {
+        await rollback(client);
+        return null;
+      }
+      if (recording.audio_status !== "uploaded") {
+        await rollback(client);
+        return { status: "audio_not_ready" };
+      }
+      if (recording.expired) {
+        await rollback(client);
+        return { status: "audio_expired" };
+      }
+      const existing = await activeRun(client, owner, pageId);
+      if (existing) {
+        await rollback(client);
+        return { status: "existing", run: existing };
+      }
+      if (recording.has_segments && !input.replace) {
+        await rollback(client);
+        return { status: "has_transcript" };
+      }
+      const inserted = await client.query<RunRow>(INSERT_RUN_SQL, [
+        owner,
+        pageId,
+        input.engine,
+        input.language ?? recording.language,
+        input.diarize,
+        input.replace,
+        JSON.stringify([...input.terms]),
+      ]);
+      const row = inserted.rows[0];
+      if (!row) throw new Error("editor-store: insert returned no transcription run");
+      await client.query("COMMIT");
+      return { status: "created", run: toView(row) };
+    } catch (error) {
+      await rollback(client);
+      // 録音の行の lock を通らずに同じページの run が入った（並んだ開始）: 先に入った方を返す
+      if (isActiveRunConflict(error)) {
+        const existing = await activeRun(client, owner, pageId);
+        if (existing) return { status: "existing", run: existing };
+      }
+      if (isInvalidTextRepresentation(error)) return null;
+      throw error;
+    }
+  } finally {
+    client.release();
+  }
+}
+
+type ClaimRow = RunRow & { owner: string; page_id: string; diarize: boolean; replace: boolean; terms: unknown; generation: number };
+
+// queued の run だけを running にして世代を 1 つ進める（同時に何本来ても 1 本だけが通る）。$1 run id。
+const CLAIM_SQL = `
+UPDATE transcription_runs AS t
+   SET status = 'running',
+       generation = t.generation + 1,
+       started_at = GREATEST(clock_timestamp(), t.created_at)
+ WHERE t.id = $1 AND t.status = 'queued'
+RETURNING ${RUN_COLUMNS}, t.owner, t.page_id, t.diarize, t.replace, t.terms, t.generation`;
+
+/**
+ * queued の run を実行中にする（世代を 1 つ進め、開始の時刻を入れる）。他が claim 済み・終わっている・無い・不正な id は null。
+ * あわせて、本人の・ゴミ箱でないページの音声の資産の情報を返す（無ければ audio: null。実行する側が audio_missing にする）。
+ */
+export async function claimRun(db: Queryable, runId: string): Promise<ClaimedTranscription | null> {
+  if (typeof runId !== "string" || !isPageId(runId)) return null;
+  const row = (await db.query<ClaimRow>(CLAIM_SQL, [runId])).rows[0];
+  if (!row) return null;
+  const terms = Array.isArray(row.terms) ? row.terms.filter(isTranscriptionTerm) : [];
+  const audio = await audioInfo(db, row.owner, row.page_id);
+  return {
+    run: { ...toView(row), owner: row.owner, pageId: row.page_id, diarize: row.diarize, replace: row.replace, terms },
+    generation: row.generation,
+    audio,
+  };
+}
+
+type FinishLockRow = { owner: string; page_id: string; status: TranscriptionRunStatus; generation: number; replace: boolean; engine: TranscriptionEngineName };
+
+const LOCK_RUN_SQL = "SELECT owner, page_id, status, generation, replace, engine FROM transcription_runs WHERE id = $1 FOR UPDATE";
+
+// 録音の行を押さえる（run → 録音 の順に lock を取る。開始は録音の行だけを押さえて run の行を lock しないので、順が逆転しない）
+const LOCK_SEGMENTS_SQL = `
+SELECT jsonb_array_length(segments) > 0 AS has_segments
+  FROM page_recordings
+ WHERE owner = $1 AND page_id = $2
+   FOR UPDATE`;
+
+// 段落を書く。話者名の表は空にする（番号の付け方が変わるので、前の名前は当てはまらない）。revision を進めるので、
+// 開いている画面の古い revision の書き込みは 409（最新を受け取って当て直す）になる。長さはエンジンが返したときだけ置き換える。
+// $1 owner / $2 page id / $3 segments / $4 engine / $5 duration
+const WRITE_SEGMENTS_SQL = `
+UPDATE page_recordings AS r
+   SET segments = $3::jsonb,
+       speaker_names = '{}'::jsonb,
+       engine = $4::text,
+       duration_sec = COALESCE($5::numeric, r.duration_sec),
+       revision = r.revision + 1,
+       updated_at = GREATEST(clock_timestamp(), r.updated_at)
+ WHERE r.owner = $1 AND r.page_id = $2`;
+
+// $1 run id / $2 generation
+const SUCCEED_SQL = `
+UPDATE transcription_runs
+   SET status = 'succeeded',
+       finished_at = GREATEST(clock_timestamp(), started_at)
+ WHERE id = $1 AND generation = $2 AND status = 'running'`;
+
+// $1 run id / $2 generation / $3 error code。queued の run は世代 0 のままなので、世代 0 を渡すと「claim される前」の run だけを失敗にできる
+// （積めなかったとき）。claim のあとは世代が 1 以上なので、世代 0 の呼び出しは何もしない。
+const FAIL_SQL = `
+UPDATE transcription_runs
+   SET status = 'failed',
+       error_code = $3,
+       finished_at = GREATEST(clock_timestamp(), COALESCE(started_at, created_at))
+ WHERE id = $1 AND generation = $2 AND status IN ('queued', 'running')`;
+
+function cleanOutput(output: TranscriptionOutput): { segments: RecordingSegment[]; durationSec: number | null } {
+  if (!output || !Array.isArray(output.segments)) throw new InvalidRecordingError("segments");
+  const segments = output.segments.map((segment) => {
+    if (typeof segment !== "object" || segment === null) throw new InvalidRecordingError("segment");
+    const { start, end, text, speaker } = segment;
+    return { start, end, text, speaker };
+  });
+  const problem = recordingDataProblem({ segments, speakerNames: {} });
+  if (problem) throw new InvalidRecordingError(problem);
+  const duration = output.durationSec;
+  if (duration !== null && (typeof duration !== "number" || !Number.isFinite(duration) || duration < 0)) throw new InvalidRecordingError("duration");
+  return { segments, durationSec: duration };
+}
+
+/**
+ * 実行の結果を確定する。1 つの transaction で、run の行を FOR UPDATE で押さえ、世代が一致して running のときだけ:
+ * - replace でない run で、その間に段落が入っていた: 書かずに run を failed（internal）にする（superseded）
+ * - それ以外: page_recordings の段落・話者名（空）・エンジン・長さを書いて revision を 1 進め、ページの更新時刻も進め、run を succeeded にする
+ * 世代が違う・running でない・不正な id は何もしない（stale）。結果の形が規則に合わなければ InvalidRecordingError（何も書かない）。
+ */
+export async function finishRun(pool: Connectable, runId: string, generation: number, output: TranscriptionOutput): Promise<FinishTranscriptionResult> {
+  if (!Number.isSafeInteger(generation) || generation < 1) throw new TypeError("editor-store: generation must be a positive integer");
+  const clean = cleanOutput(output);
+  if (typeof runId !== "string" || !isPageId(runId)) return "stale";
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    try {
+      const run = (await client.query<FinishLockRow>(LOCK_RUN_SQL, [runId])).rows[0];
+      if (!run || run.status !== "running" || run.generation !== generation) {
+        await rollback(client);
+        return "stale";
+      }
+      const recording = (await client.query<{ has_segments: boolean }>(LOCK_SEGMENTS_SQL, [run.owner, run.page_id])).rows[0];
+      if (!recording || (recording.has_segments && !run.replace)) {
+        // 誰かが先に段落を書いた（または録音が無くなった）: 上書きしない
+        await client.query(FAIL_SQL, [runId, generation, "internal"]);
+        await client.query("COMMIT");
+        return "superseded";
+      }
+      await client.query(WRITE_SEGMENTS_SQL, [run.owner, run.page_id, JSON.stringify(clean.segments), run.engine, clean.durationSec]);
+      await client.query(TOUCH_PAGE_SQL, [run.owner, run.page_id]);
+      const done = await client.query(SUCCEED_SQL, [runId, generation]);
+      if (done.rowCount !== 1) throw new Error("editor-store: transcription run disappeared");
+      await client.query("COMMIT");
+      return "succeeded";
+    } catch (error) {
+      await rollback(client);
+      throw error;
+    }
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * 実行の失敗。世代が一致して running のとき（または世代 0 で、まだ claim されていない queued のとき）だけ failed にする。
+ * 失敗にしたら true、何もしなかったら false（掃除・別の実行のあと・不正な id）。
+ */
+export async function failRun(db: Queryable, runId: string, generation: number, errorCode: TranscriptionErrorCode): Promise<boolean> {
+  if (!isTranscriptionErrorCode(errorCode)) throw new TypeError("editor-store: unknown transcription error code");
+  if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError("editor-store: generation must be a non-negative integer");
+  if (typeof runId !== "string" || !isPageId(runId)) return false;
+  const result = await db.query(FAIL_SQL, [runId, generation, errorCode]);
+  return result.rowCount === 1;
+}
+
+type StatusRow = { [K in keyof RunRow]: RunRow[K] | null };
+
+// 本人の・ゴミ箱でないページの録音と、その最新の run。$1 owner / $2 page id。
+const STATUS_SQL = `
+SELECT ${RUN_COLUMNS}
+  FROM page_recordings AS r
+  JOIN pages AS p ON p.owner = r.owner AND p.id = r.page_id
+  LEFT JOIN LATERAL (
+    SELECT * FROM transcription_runs AS x
+     WHERE x.owner = r.owner AND x.page_id = r.page_id
+     ORDER BY x.created_at DESC, x.id DESC
+     LIMIT 1
+  ) AS t ON true
+ WHERE r.owner = $1 AND r.page_id = $2 AND p.deleted_at IS NULL`;
+
+/**
+ * 本人の・ゴミ箱でないページの録音の、文字起こしの状態（`{ run }`。run が無ければ run: null）。
+ * 録音が無ければ null（別の人・存在しない・不正な id・削除済み・録音の無いページ。呼び出し側は同じ 404 にする）。
+ */
+export async function transcriptionStatus(db: Queryable, owner: OwnerId, pageId: string): Promise<{ run: TranscriptionRunView | null } | null> {
+  assertOwner(owner);
+  if (typeof pageId !== "string" || !isPageId(pageId)) return null;
+  try {
+    const row = (await db.query<StatusRow>(STATUS_SQL, [owner, pageId])).rows[0];
+    if (!row) return null;
+    return { run: row.id === null ? null : toView(row as RunRow) };
+  } catch (error) {
+    if (isInvalidTextRepresentation(error)) return null;
+    throw error;
+  }
+}
+
+/** 本人の・ゴミ箱でないページの最新の run。無ければ null（run が無い・別の人・存在しない・不正な id・削除済み・録音の無いページ）。 */
+export async function latestRun(db: Queryable, owner: OwnerId, pageId: string): Promise<TranscriptionRunView | null> {
+  return (await transcriptionStatus(db, owner, pageId))?.run ?? null;
+}
+
+// $1 now / $2 olderThanSec
+const SWEEP_SQL = `
+UPDATE transcription_runs
+   SET status = 'failed',
+       error_code = CASE WHEN status = 'running' THEN 'engine_timeout' ELSE 'internal' END,
+       finished_at = GREATEST($1::timestamptz, COALESCE(started_at, created_at))
+ WHERE (status = 'running' AND started_at < $1::timestamptz - make_interval(secs => $2::double precision))
+    OR (status = 'queued' AND created_at < $1::timestamptz - make_interval(secs => $2::double precision))
+RETURNING id`;
+
+/**
+ * 古くなった有効な run の掃除（DB だけ。呼ぶのは将来の worker・定期の実行）:
+ * - running のまま started_at が now − olderThanSec より前: failed（engine_timeout）。実行する側が落ちた・時間切れ
+ * - queued のまま created_at が now − olderThanSec より前: failed（internal）。積めなかった・実行する側が claim の前に落ちた
+ * 失敗にした run の id を返す。遅れて返った実行の確定・失敗は、running でなくなったので通らない。
+ */
+export async function sweepStaleRuns(db: Queryable, now: Date, olderThanSec: number): Promise<string[]> {
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new TypeError("editor-store: now must be a valid Date");
+  if (typeof olderThanSec !== "number" || !Number.isFinite(olderThanSec) || olderThanSec <= 0) throw new RangeError("editor-store: olderThanSec must be > 0");
+  const result = await db.query<{ id: string }>(SWEEP_SQL, [now.toISOString(), olderThanSec]);
+  return result.rows.map((row) => row.id);
+}

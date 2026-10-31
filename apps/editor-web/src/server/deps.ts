@@ -5,22 +5,28 @@ import {
   createRecordingPage,
   duplicatePage,
   enableShare,
+  enqueueTranscription,
+  failRun,
   getRecording,
   getShare,
+  latestRun,
   rotateShare,
   searchPages,
   startAudioRecording,
   stopShare,
+  transcriptionStatus,
   updateRecording,
 } from "@niho/editor-store";
 import { getAuthProvider } from "../auth";
 import { getStorage } from "../storage/runtime";
+import { getTranscriptionRunner } from "../transcription/runtime";
 import type { AudioApiDeps } from "./audio-api";
 import { getPool, getStore } from "./db";
 import type { PagesApiDeps } from "./pages-api";
 import type { RecordingsApiDeps } from "./recordings-api";
 import type { SearchApiDeps } from "./search-api";
 import type { ShareApiDeps } from "./share-api";
+import type { TranscriptionApiDeps } from "./transcription-api";
 
 /** 実行時の依存（方式の選択・DB の接続は要求のたびに遅延して決める）。`/auth/*` の route も同じものを使う。 */
 export const runtimeDeps: PagesApiDeps = {
@@ -66,6 +72,7 @@ export const recordingDeps: RecordingsApiDeps = {
       createRecordingPage: (owner, input) => createRecordingPage(pool, owner, input),
       getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
       updateRecording: (owner, pageId, baseRevision, mutate) => updateRecording(pool, owner, pageId, baseRevision, mutate),
+      latestTranscription: (owner, pageId) => latestRun(pool, owner, pageId),
     };
   },
 };
@@ -84,4 +91,25 @@ export const audioDeps: AudioApiDeps = {
     };
   },
   storage: () => getStorage(process.env),
+};
+
+/**
+ * 録音の文字起こし（#36 段 2b）の実行時の依存（DB・エンジン・実行の呼び出し口は要求のたびに遅延して決める。Pool は getStore と共有）。
+ * 本番は実行の口（Cloud Tasks と worker）ができるまで runner が null（開始は 503 transcription_unavailable）。
+ */
+export const transcriptionDeps: TranscriptionApiDeps = {
+  auth: () => getAuthProvider(),
+  store: () => {
+    const pool = getPool();
+    if (!pool) return null;
+    return {
+      enqueue: (owner, pageId, input) => enqueueTranscription(pool, owner, pageId, input),
+      status: (owner, pageId) => transcriptionStatus(pool, owner, pageId),
+      failRun: (runId, generation, errorCode) => failRun(pool, runId, generation, errorCode),
+    };
+  },
+  runner: () => {
+    const pool = getPool();
+    return pool ? getTranscriptionRunner(pool, process.env) : null;
+  },
 };

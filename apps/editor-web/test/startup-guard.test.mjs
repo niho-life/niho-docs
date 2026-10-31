@@ -272,3 +272,54 @@ describe("production start with the asset storage settings (#36)", () => {
     });
   }
 });
+
+describe("production start with the transcription settings (#36 段 2b)", () => {
+  function transcribeEnv(port, engine, key) {
+    const env = childEnv(port, "niho");
+    for (const name of ["EDITOR_TRANSCRIBE_ENGINE", "DEEPGRAM_API_KEY", "EDITOR_TRANSCRIBE_TIMEOUT_SEC", "EDITOR_TRANSCRIBE_FAKE_FAIL", "EDITOR_STORAGE", "EDITOR_ASSETS_BUCKET"]) delete env[name];
+    if (engine !== undefined) env.EDITOR_TRANSCRIBE_ENGINE = engine;
+    if (key !== undefined) env.DEEPGRAM_API_KEY = key;
+    return env;
+  }
+
+  // 文字起こしの検査も src/startup-check.ts（instrumentation）で行う。入口（server-entry.mjs）は認証だけを見る
+  for (const [label, engine, key, message] of [
+    ["EDITOR_TRANSCRIBE_ENGINE=fake", "fake", undefined, /refusing to start: EDITOR_TRANSCRIBE_ENGINE=fake is not allowed when NODE_ENV=production/],
+    ["EDITOR_TRANSCRIBE_ENGINE=deepgram without a key", "deepgram", undefined, /refusing to start: DEEPGRAM_API_KEY is required/],
+    ["EDITOR_TRANSCRIBE_ENGINE=deepgram with a malformed key", "deepgram", "test key not secret", /refusing to start: DEEPGRAM_API_KEY is not a valid key/],
+    ["an unknown EDITOR_TRANSCRIBE_ENGINE", "whisper", undefined, /refusing to start: EDITOR_TRANSCRIBE_ENGINE must be one of/],
+  ]) {
+    it(`refuses to start with ${label}, without printing the value`, async () => {
+      const port = await freePort();
+      const result = await runUntilExit(["scripts/server-entry.mjs", standaloneServer], transcribeEnv(port, engine, key), port);
+      assert.notEqual(result.code, 0, result.output);
+      assert.equal(result.signal, null, "it must exit by itself, not by the test timeout");
+      assert.match(result.output, message);
+      assert.doesNotMatch(result.output, /test key not secret/);
+    });
+  }
+
+  for (const [label, engine] of [["EDITOR_TRANSCRIBE_ENGINE unset", undefined], ["EDITOR_TRANSCRIBE_ENGINE=off", "off"]]) {
+    it(`starts with ${label}, and the transcription routes answer 401 without a session`, async () => {
+      const port = await freePort();
+      const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env: transcribeEnv(port, engine), stdio: "ignore" });
+      try {
+        const response = await waitForHttp(port);
+        assert.equal(response.status, 401);
+        const id = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+        const start = await fetch(`http://127.0.0.1:${port}/api/pages/${id}/recording/transcribe`, {
+          method: "POST",
+          headers: { "content-type": "application/json", origin: `http://127.0.0.1:${port}` },
+          body: "{}",
+        });
+        assert.equal(start.status, 401);
+        assert.equal(start.headers.get("x-robots-tag"), "noindex, nofollow");
+        const status = await fetch(`http://127.0.0.1:${port}/api/pages/${id}/recording/transcription`);
+        assert.equal(status.status, 401);
+        assert.equal(status.headers.get("cache-control"), "private, no-store");
+      } finally {
+        child.kill("SIGTERM");
+      }
+    });
+  }
+});

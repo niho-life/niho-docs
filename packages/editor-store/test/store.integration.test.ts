@@ -52,8 +52,9 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name",
       [schema],
     );
-    // page_shares は共有リンク（0004）、ai_usage は AI の使用量（0005）、step_runs・step_attempts は手順の実行（0006。ページの表とは別）、page_recordings は録音の文字起こし（0007）
-    const documented = ["pages", "page_versions", "assets", "publications", "page_shares", "step_runs", "step_attempts", "ai_usage", "page_recordings"];
+    // page_shares は共有リンク（0004）、ai_usage は AI の使用量（0005）、step_runs・step_attempts は手順の実行（0006。ページの表とは別）、page_recordings は録音の文字起こし（0007）、
+    // transcription_runs は文字起こしの実行（0009）
+    const documented = ["pages", "page_versions", "assets", "publications", "page_shares", "step_runs", "step_attempts", "ai_usage", "page_recordings", "transcription_runs"];
     assert.deepEqual(tables.rows.map((row) => row.table_name), [...documented, MIGRATIONS_TABLE].sort());
     for (const table of documented) {
       const count = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM ${table}`);

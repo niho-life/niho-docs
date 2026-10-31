@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { StorageError, isObjectPath, type ObjectStorage, type StartUploadInput, type StoredObject, type UploadTicket } from "./types";
+import { StorageError, isObjectPath, type ObjectStorage, type OpenedObject, type StartUploadInput, type StoredObject, type UploadTicket } from "./types";
 
 /**
  * メモリの中だけの偽の保存先（開発と CI だけ。本番では src/storage/config.ts が受け付けない）。
@@ -57,6 +57,20 @@ export function createFakeStorage(options: { state?: FakeStorageState; now?: () 
       if (!isObjectPath(objectPath)) throw new StorageError("rejected");
       const object = state.objects.get(objectPath);
       return object ? { sizeBytes: object.bytes.byteLength, contentType: object.contentType } : null;
+    },
+    async open(objectPath: string): Promise<OpenedObject | null> {
+      if (!isObjectPath(objectPath)) throw new StorageError("rejected");
+      const object = state.objects.get(objectPath);
+      if (!object) return null;
+      // 置いたときの複製をさらに複製して流す（読み手が中身を書き換えても、偽物の保存先は変わらない）
+      const bytes = object.bytes.slice();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (bytes.byteLength > 0) controller.enqueue(bytes);
+          controller.close();
+        },
+      });
+      return { stream, sizeBytes: bytes.byteLength, contentType: object.contentType };
     },
     putFakeObject(token: string, bytes: Uint8Array, contentType: string | null): FakePutResult {
       if (!FAKE_TOKEN_PATTERN.test(token)) return "not_found";

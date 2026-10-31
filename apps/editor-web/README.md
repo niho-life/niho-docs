@@ -30,6 +30,9 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | `EDITOR_STEPS_MODE` | 手順の実行の方式。`inline`（開発・CI だけ）。未設定・`off`・未知の値と、本番（`NODE_ENV=production`）の `inline` では手順の開始は 503 |
 | `EDITOR_STORAGE` | 任意。資産（音声）の保存先。`fake`（メモリの偽物。開発・CI だけで、`NODE_ENV=production` では起動しない）・`gcs`・`off`。未設定は本番 `off`（音声の API は 503 `storage_unavailable`）、それ以外は `fake`。未知の値は起動しない |
 | `EDITOR_ASSETS_BUCKET` | `EDITOR_STORAGE=gcs` のとき必須。資産の bucket 名（無い・規則に合わなければ起動しない。値は表示しない） |
+| `EDITOR_TRANSCRIBE_ENGINE` | 任意。文字起こしのエンジン（#36 段 2b）。`fake`（偽物。開発・CI だけで、`NODE_ENV=production` では起動しない）・`deepgram`・`off`。未設定は本番 `off`、それ以外は `fake`。未知の値は起動しない。本番は実行の口ができるまで、どの値でも開始は 503 |
+| `DEEPGRAM_API_KEY` | `EDITOR_TRANSCRIBE_ENGINE=deepgram` のとき必須。無い・空白や改行や制御文字を含むなら起動しない（前後の空白は除いて使う。値は表示しない） |
+| `EDITOR_TRANSCRIBE_TIMEOUT_SEC` | 任意。1 回の文字起こしの時間切れ（秒）。既定 1200、60〜3300 の整数（範囲の外・整数でなければ起動しない） |
 
 確認のコマンド: `typecheck`・`lint`・`test`（vitest）・`build`・`test:startup`（build の後。本番の起動の守り）・`test:e2e`（`DATABASE_URL` と migration が要る。`next dev` を起動して API と画面を確かめ、作った行は消す）。
 
@@ -123,6 +126,26 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **権限**: 実行 ID（`niho-editor-runner`）に作成と閲覧（`storage.objects.create`・`storage.objects.get`）だけ。削除・上書き・署名は要らない。
 - 配備で `EDITOR_STORAGE=gcs` を渡すまで、本番の音声の API は 503 `storage_unavailable`。
 - 画面の CSP の `connect-src` に `https://storage.googleapis.com` を足すのは、画面に組み込む段 3（今の CSP は `'self'` だけなので、ブラウザから GCS への PUT は通らない）。
+
+## 文字起こし（#36 段 2b）
+
+アップロード済みの録音の音声（段 2a）を、サーバー側のエンジンで文字起こしし、話者と時刻つきの段落（段 1 の `segments`。話者名の表は空から）として保存する。失敗しても音声は残り、もう一度できる。マイク録音・再生・タイムスタンプの画面（段 3）・設定画面・エンジンの選択を保存する場所・Gemini（長い音声を区切る処理が Web のサーバー側に無い）は含まない。
+
+- **API**（作法は段 1 と同じ: 未認証 401、DB が無い 503、更新系は同じ origin でなければ 403、別の人・存在しない・不正な id・削除済み・録音の無いページは同じ 404）:
+  `POST /api/pages/{id}/recording/transcribe`（本文 `{ lang?, diarize?, replace?, terms? }`。202 `{ run }`＝作って、応答のあとに実行を始めた／200 `{ run }`＝有効な run（queued・running）が既にある。積み直さない）・
+  `GET /api/pages/{id}/recording/transcription`（200 `{ run }`。まだ無ければ `{ run: null }`）。`GET /api/pages/{id}/recording` にも `transcription`（最新の run か null）が付く。
+  run は `{ id, status: "queued" | "running" | "succeeded" | "failed", engine, language, errorCode, createdAt, startedAt, finishedAt }`。
+- **本文**: `lang`（既定は録音の言語）・`diarize`（話者を分けるか。既定 true）・`replace`（既定 false）・`terms`（固有名詞の表記。100 個まで・1 つ 64 文字まで・制御文字なし。Deepgram には docs-core の `deepgramKeyterms` で 500 バイトの予算まで渡す）。エンジンは設定で決まり、要求からは選ばせない。
+- **エラー**: 400 `{"error":"bad_request","reason":…}`（`body`・`lang`・`diarize`・`replace`・`terms`）、413（本文が 64 KiB 超）、409 `{"error":"cannot_start","reason":…}`（`audio_not_ready`＝アップロードが済んでいない・音声の無い録音、`audio_expired`＝保持の期限を過ぎた、`has_transcript`＝段落があって `replace` が無い）、503 `transcription_unavailable`（`off`・本番・保存先を使わない設定）。
+- **`replace`**: 段落が既にある録音（直した文章を含む）は、`replace: true` が無いと 409 `has_transcript`（直した文章を失わせない）。`replace: true` は確定のときに段落を丸ごと置き換え、話者名の表を空にする（前の段落・直した文章は残らない。録音には版が無いので、画面で確かめてから送る）。確定は録音の `revision` を 1 進めるので、開いている画面の古い revision の書き込みは 409（最新を受け取る）になる。`replace` でない run の間に段落が入っていたら、書かずに失敗（`internal`）にする。
+- **失敗の理由**（`errorCode`）: `audio_missing`（音声の資産が無い・アップロードが済んでいない・保存先に無い）、`audio_expired`（保持の期限を過ぎた）、`engine_unavailable`（エンジンに届かない・鍵・混雑）、`engine_rejected`（エンジンが音声・要求を断った）、`engine_timeout`（時間切れ・実行が途中で止まって掃除された）、`engine_bad_response`（応答の形が違う・段落が無い）、`too_large`（応答が 64 MiB・段落が 20,000 個・本文が 8 MiB を超える）、`internal`（保存先の失敗・積めなかった・その他）。どれも音声は消さないので、`POST …/transcribe` で新しい run を作り直せる。
+- **実行**（`src/transcription/`）: `run.ts` の `executeRun` が claim（世代を 1 進める）→ 音声の資産 → 保存先から読み出し（`ObjectStorage.open`。GCS は `alt=media` の GET）→ エンジン → 正規化（`normalize.ts`: 話者を最初に出た順に 1 始まりの連番に・時刻順・5,000 文字を超える段落を文の終わり → 空白 → 文字数で割る・上限）→ 確定（段落・ページの更新時刻・run の状態を 1 transaction）。確定・失敗は claim のときの世代と一致して running のときだけ通る（掃除のあとに遅れて返った結果で上書きしない）。状態の表は migration `0009_transcription_runs.sql`（1 ページに有効な run は 1 つ。本文・音声・応答・鍵は持たない）、コードは `packages/editor-store/src/transcription-runs.ts`。`sweepStaleRuns`（古い running を `engine_timeout`、古い queued を `internal` で失敗にする）はあるが、定期の呼び出しはまだ無い。
+- **実行の口**: 開発と CI は `inline`（同じプロセスで、応答のあとに実行する）。**本番（`NODE_ENV=production`）は、実行の口（Cloud Tasks に積み、内向きの worker が run の id で `executeRun` を呼ぶ。worker の認証と OIDC は #37 の側）ができるまで、開始は 503 `transcription_unavailable`**（Cloud Run は応答のあとに CPU を絞るので、同じプロセスで長い文字起こしを続けられる保証が無い。偽物の実行器も本番に出さない）。開発で `next dev` を実行の途中で止めると、その run が有効なまま残り、同じページで開始できなくなる（`sweepStaleRuns` で掃除する）。
+- **音声が外部のエンジンに渡る**: `deepgram` では、サーバーが保存先から音声を読み出して Deepgram（`https://api.deepgram.com/v1/listen`）へそのまま送る。利用者への表示（外部に送ることの説明）は画面の側（段 3）で必要。鍵・音声・応答の本文・URL・bucket 名・object の場所はログにもエラーにも出さない。**Deepgram と GCS の読み出しは実物では未検証**（fetch を差し替えたテストだけ）。
+- **Deepgram の呼び出し**（`src/transcription/deepgram.ts`）: Mac 版（`apps/docs/crates/api-ai/src/deepgram.rs`）と同じ `model=nova-3`・`smart_format=false`・`punctuate=true`・`utterances=true`・`paragraphs=false`・`diarize_model=latest`（話者を分けるとき）・`keyterm`、header `Authorization: Token <鍵>`、本文は音声のバイト列そのまま（`Content-Length` 付き）。違いは `diarize=true|false` を明示すること。応答は 64 MiB まで、`results.utterances` が無い・空なら `engine_bad_response`。
+- **偽物**（`src/transcription/fake.ts`。開発と CI だけ）: 音声を読み捨て、`[fake]` の印を付けた固定の段落 3 つ（話者 2 人）を返す。`EDITOR_TRANSCRIBE_FAKE_FAIL`（`unavailable`・`rejected`・`timeout`・`bad_response`）を設定すると、その理由で失敗する（e2e 用。本番では偽物が起動しないので効かない）。
+- **画面から呼ぶ関数**（組み込みは段 3）: `src/lib/transcription-client.ts`（`startTranscription`・`getTranscription`・`isTranscriptionDone`）。
+- **本番の守り**: `NODE_ENV=production` で `EDITOR_TRANSCRIBE_ENGINE=fake`、`deepgram` で `DEEPGRAM_API_KEY` が無い・不正、未知の値、時間切れの範囲の外は起動しない（`src/startup-check.ts`。値は表示しない）。要求ごとの解決（`src/transcription/runtime.ts`）でも同じ規則で、誤りは 503。入口 `scripts/server-entry.mjs` と Dockerfile は変えていない（保存先の設定と同じ）。
 
 ## まだやらないこと
 

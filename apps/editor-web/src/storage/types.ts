@@ -1,8 +1,9 @@
 /**
  * 資産の保存先（private bucket）の接続口。音声（#36）で使い、画像（#33）も同じ口で足せる形にしている（今は音声だけ実装）。
  *
- * サーバーは中身を受け取らない: 「開始」で保存先のアップロードのセッションを作ってブラウザに渡し（ブラウザが保存先へ直接 PUT する）、
- * 「完了」で object の大きさを確かめるだけ。削除と上書きはしない（実行 ID の権限が作成と閲覧だけ。期限での削除は bucket の規則）。
+ * サーバーはアップロードの中身を受け取らない: 「開始」で保存先のアップロードのセッションを作ってブラウザに渡し（ブラウザが保存先へ直接 PUT する）、
+ * 「完了」で object の大きさを確かめるだけ。文字起こし（#36 段 2b）のときだけ、サーバーが object を読み出してエンジンへ流す（open）。
+ * 削除と上書きはしない（実行 ID の権限が作成と閲覧だけ。期限での削除は bucket の規則）。
  *
  * 秘密の扱い: ticket の url は持っている人がアップロードできる値（bearer）。応答で本人に渡すだけで、ログ・エラー・DB に書かない。
  * StorageError のメッセージには bucket 名・object の場所・token・URL を入れない（固定の文だけ）。
@@ -32,12 +33,20 @@ export type StartUploadInput = {
 /** 保存先にある object（無ければ null）。 */
 export type StoredObject = { sizeBytes: number; contentType: string | null };
 
+/**
+ * 読み出しを始めた object（#36 段 2b。サーバーが音声を文字起こしのエンジンへ流すため）。stream は読み終えるか cancel する
+ * （読まずに捨てると保存先との接続が残る）。中身はログ・エラー・DB に書かない。
+ */
+export type OpenedObject = { stream: ReadableStream<Uint8Array>; sizeBytes: number; contentType: string | null };
+
 export interface ObjectStorage {
   readonly kind: "fake" | "gcs";
   /** アップロードのセッションを作る。同じ場所に object が既にあれば上書きしない（保存先が断る）。 */
   startUpload(input: StartUploadInput): Promise<UploadTicket>;
   /** object の大きさと種類。無ければ null。 */
   stat(objectPath: string): Promise<StoredObject | null>;
+  /** object の中身を読み出す（stream）。無ければ null。読み出しは閲覧の権限だけで足りる（削除・上書きはしない）。 */
+  open(objectPath: string): Promise<OpenedObject | null>;
 }
 
 /** unavailable: 保存先に届かない・権限・一時的な失敗 / rejected: 保存先が要求を断った（形・既にある・大きさ）。 */
