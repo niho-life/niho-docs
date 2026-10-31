@@ -117,6 +117,27 @@ describe("runAttempt", () => {
     expect(store.pages.get(run.steps[0]!.pageId)?.blocks).toEqual(upstream);
   });
 
+  it("書き切れなかったときは、書けたところまでを残す（サブページの本文には書かない。#37）", async () => {
+    const partial = [{ type: "paragraph", content: [{ type: "text", text: "書けたところまで" }] }];
+    const executor: StepExecutor = { run: () => Promise.reject(new StepError("output_too_long", false, partial)) };
+    const { store, queue, start, deps, view } = await setup(executor);
+    const run = await start();
+    expect((await runAttempt(deps, queue.drain()[0]!)).status).toBe("failed");
+    expect(store.partialOf(run.id, 0)).toEqual(partial);
+    // 失敗した段階のページを半分の本文で埋めない
+    expect(store.pages.get(run.steps[0]!.pageId)?.blocks).toEqual([]);
+    expect((await view())?.steps[0]?.errorCode).toBe("output_too_long");
+  });
+
+  it("もう一度積み直すときは、書きかけを残さない（次の試行が書き直す）", async () => {
+    const partial = [{ type: "paragraph", content: [{ type: "text", text: "途中" }] }];
+    const executor: StepExecutor = { run: () => Promise.reject(new StepError("ai_timeout", true, partial)) };
+    const { store, queue, start, deps } = await setup(executor);
+    const run = await start();
+    expect((await runAttempt(deps, queue.drain()[0]!)).status).toBe("retry");
+    expect(store.partialOf(run.id, 0)).toBeNull();
+  });
+
   it("rebuilds from fromStep and reuses the upstream sub-pages", async () => {
     const executor = createFakeExecutor();
     const { store, start, drainAll, view } = await setup(executor);
