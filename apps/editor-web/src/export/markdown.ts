@@ -10,6 +10,7 @@
  * - `**太字**` `*斜体*` `[文字](https://…)`（https で資格情報の無いリンクだけ。それ以外のリンクは文字だけ）
  * 区切り線・画像・録音は出さない。code・取り消し線などその他の mark は文字だけ。
  *
+ * 箱は既定で `:::note`。一般の Markdown の読み手へ渡すときは `{ boxes: "quote" }` で `> ` にする（Google ドキュメントへの書き出し）。
  * 本文の文字は、サブセットの記法として読まれないよう `\` で逃がす（日本語の文字は変えない）。
  * 規則と根拠は src/export/markdown.test.ts の oracle（guide-markdown.ts の受理規則を写したもの）に書いている。
  */
@@ -432,7 +433,7 @@ function renderTextBlock(block: TextBlock): string[] {
   return line === "" ? [] : [line];
 }
 
-function renderBlock(block: Block): string[] {
+function renderBlock(block: Block, boxes: MarkdownBoxStyle): string[] {
   if (block.type === "heading") {
     const line = renderInline(block.inline);
     return line === "" ? [] : [`${"#".repeat(block.level)} ${line}`];
@@ -440,18 +441,41 @@ function renderBlock(block: Block): string[] {
   if (block.type === "note") {
     const inner = block.blocks.flatMap(renderTextBlock);
     // 空の箱は parser が断るので出さない
-    return inner.length === 0 ? [] : [`:::note\n${inner.join("\n\n")}\n:::`];
+    if (inner.length === 0) return [];
+    // 一般の Markdown（`:::note` を知らない読み手）では引用にする
+    if (boxes === "quote") {
+      return [
+        inner
+          .join("\n\n")
+          .split("\n")
+          .map((line) => (line === "" ? ">" : `> ${line}`))
+          .join("\n"),
+      ];
+    }
+    return [`:::note\n${inner.join("\n\n")}\n:::`];
   }
   return renderTextBlock(block);
 }
 
 /**
+ * 箱（引用・囲み）の書き方。
+ *
+ * - `note`（既定）: `:::note` … `:::`。niho-experience のサブセット（`.md` の書き出し）。
+ * - `quote`: `> `。`:::note` を知らない一般の Markdown の読み手へ渡すとき（Google ドキュメントへの書き出し。
+ *   src/google-docs/ が使う）。ほかの記法はどちらも同じ。
+ */
+export type MarkdownBoxStyle = "note" | "quote";
+
+export type ExportMarkdownOptions = { boxes?: MarkdownBoxStyle };
+
+/**
  * 本文（TipTap の doc の content）を Markdown にする。空の本文は空文字列、それ以外は末尾に改行 1 つ。
  * 未知のノードは投げずに、文字のブロックなら段落、入れ物なら中身を書き出す。
  */
-export function exportMarkdown(blocks: readonly unknown[]): string {
+export function exportMarkdown(blocks: readonly unknown[], options: ExportMarkdownOptions = {}): string {
+  const boxes = options.boxes ?? "note";
   const converted: Block[] = [];
   convertBlocks(Array.isArray(blocks) ? blocks : [], 0, converted);
-  const parts = converted.flatMap(renderBlock);
+  const parts = converted.flatMap((block) => renderBlock(block, boxes));
   return parts.length === 0 ? "" : `${parts.join("\n\n")}\n`;
 }

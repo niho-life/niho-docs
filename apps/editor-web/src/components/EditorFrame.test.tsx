@@ -548,14 +548,14 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(moreButton()).toBeNull();
   });
 
-  it("opens and closes the … menu with リンクで共有, 書き出し (.md), 履歴, 複製 and 削除, moved by the keyboard; none for a page not created yet", async () => {
+  it("opens and closes the … menu with リンクで共有, 書き出し (.md), Google ドキュメントへ, 履歴, 複製 and 削除, moved by the keyboard; none for a page not created yet", async () => {
     await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A)} />);
     expect(moreButton()?.getAttribute("aria-expanded")).toBe("false");
     await act(async () => moreButton()!.click());
     expect(moreButton()?.getAttribute("aria-expanded")).toBe("true");
-    // Google ドキュメントは出さない。共有しているか分からないときは「共有中」を出さない
-    expect(menuItems().map((item) => item.textContent)).toEqual(["リンクで共有", "書き出し.md", "履歴", "複製", "削除"]);
-    const [shareItem, exportItem, , , deleteItem] = menuItems();
+    // 書き出しは .md と Google ドキュメントの 2 項目。共有しているか分からないときは「共有中」を出さない
+    expect(menuItems().map((item) => item.textContent)).toEqual(["リンクで共有", "書き出し.md", "Google ドキュメントへ", "履歴", "複製", "削除"]);
+    const [shareItem, exportItem, , , , deleteItem] = menuItems();
     expect(document.activeElement).toBe(shareItem);
     await press(document.activeElement!, "ArrowDown");
     expect(document.activeElement).toBe(exportItem);
@@ -858,7 +858,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(nav.push).not.toHaveBeenCalled();
     // 移った先の「…」はふつうに使える
     await act(async () => moreButton()!.click());
-    expect(menuItems()).toHaveLength(5);
+    expect(menuItems()).toHaveLength(6);
   });
 
   describe("リンクで共有 (#34 第 2 段)", () => {

@@ -15,6 +15,7 @@ const ALLOWED_PATHS = [
   /^\/destinations\/[a-z0-9-]{1,64}$/,
   /^\/account$/,
   /^\/settings$/,
+  /^\/google-docs\/connect$/,
 ];
 
 /** 戻り先を editor の中の path にする。query と hash は落とす（`/p/new?from=recording` だけはそのまま）。 */

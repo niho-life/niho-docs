@@ -25,4 +25,8 @@ export const stubAuthProvider: AuthProvider = {
   async logout() {
     return seeOther("/auth/login");
   },
+  /** stub の本人は NIHO に実在しないので、NIHO の API は呼べない（Google ドキュメントの書き出しは 503）。 */
+  async apiToken() {
+    return null;
+  },
 };
