@@ -536,4 +536,29 @@ describe("ページの部品", () => {
     expect(chosen).not.toContain("一言");
     expect(unlabeledButtons(hinted + stopping + chosen)).toEqual([]);
   });
+
+  it("録音から: 文字起こしの場所の一言を替えられる（Mac は端末内。#45）", () => {
+    const html = renderToStaticMarkup(
+      <RecordingStart
+        how="mic"
+        onHow={noop}
+        background=""
+        onBackground={noop}
+        people={[]}
+        terms=""
+        next="none"
+        onNext={noop}
+        onStart={noop}
+        engineNote="文字起こしはこの Mac で行います"
+        onEditEngine={noop}
+        busy
+      />,
+    );
+    expect(html).toContain("文字起こしはこの Mac で行います");
+    expect(html).not.toContain("NIHO クラウド");
+    expect(html).toContain("変える");
+    // 取り込み中は開始を押せない
+    expect(html).toMatch(/<button[^>]*es-btn--primary[^>]*disabled/);
+    expect(unlabeledButtons(html)).toEqual([]);
+  });
 });
