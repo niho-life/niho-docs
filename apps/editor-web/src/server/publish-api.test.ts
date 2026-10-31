@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DraftPage } from "@niho/editor-publish";
+import type { DraftPage, StorageMode } from "@niho/editor-publish";
 import { ManualClock, MemoryPublishStore } from "@niho/editor-publish/test-support";
 import type { AuthProvider, Session } from "../auth/types";
 import { wirePublishPorts, type PublishWiring } from "../publish/ports";
@@ -43,7 +43,7 @@ function authAs(session: Session | null): AuthProvider {
 
 const SESSION: Session = { userId: ME, mode: "stub", profile: { name: "合成の書き手" } };
 
-type WorldOptions = { env?: Record<string, string | undefined>; fetch?: FetchLike; session?: Session | null; ports?: boolean };
+type WorldOptions = { env?: Record<string, string | undefined>; fetch?: FetchLike; session?: Session | null; ports?: boolean; storage?: StorageMode };
 
 function world(options: WorldOptions = {}) {
   const store = new MemoryPublishStore();
@@ -56,7 +56,10 @@ function world(options: WorldOptions = {}) {
     auth: () => authAs(options.session === undefined ? SESSION : options.session),
     ports: (session) => {
       if (options.ports === false) return null;
-      const wiring = wirePublishPorts(store, session, { env, fetch: options.fetch, clock });
+      const wired = wirePublishPorts(store, session, { env, fetch: options.fetch, clock });
+      // 保存先は NIHO から読む（契約が出るまでは UNSET）。テストでは差し替える
+      const mode = options.storage;
+      const wiring = mode === undefined ? wired : { ...wired, publish: { ...wired.publish, storage: { read: async () => mode } } };
       wirings.push(wiring);
       return wiring;
     },
@@ -265,6 +268,25 @@ describe("失敗の応答（reason → HTTP と一言）", () => {
     const response = await post(deps, to("niho", { extras: { app: false, news: false, xp: true } }));
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: "forbidden_destination", detail: "extras" });
+  });
+
+  it("storage_not_cloud: 保存先がこの Mac だけ・移行中・知らない値なら 403 で何も書かない。シートは主ボタンを出さず storageBlock を返す。クラウドと未選択は公開できる", async () => {
+    for (const [storage, block] of [["LOCAL", "LOCAL"], ["CLOSING", "CLOSING"], ["MARS", "unknown"]] as const) {
+      const { deps } = world({ storage: storage as StorageMode });
+      const sheet = await sheetOf(await getSheet(deps, PAGE, "?handle=niho"));
+      expect(sheet.storageBlock, storage).toBe(block);
+      expect(sheet.primary).toBeNull();
+      const response = await post(deps, to("niho"));
+      expect(response.status, storage).toBe(403);
+      expect(await response.json()).toEqual({ error: "storage_not_cloud", detail: block, message: "保存先が NIHO クラウドではないので、公開できません（公開は保存先がクラウドのときだけです）" });
+      // 何も書いていない
+      expect((await sheetOf(await getSheet(deps))).publication, storage).toBeNull();
+    }
+    for (const storage of ["CLOUD", "UNSET"] as const) {
+      const { deps } = world({ storage });
+      expect((await sheetOf(await getSheet(deps, PAGE, "?handle=niho"))).storageBlock, storage).toBeNull();
+      expect((await post(deps, to("niho"))).status, storage).toBe(200);
+    }
   });
 
   it("slug_taken: 409 と提案。GET でもその slug は slug_taken", async () => {

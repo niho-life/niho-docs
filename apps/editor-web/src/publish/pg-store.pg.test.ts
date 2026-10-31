@@ -150,6 +150,7 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
     const publisher = new PublishService({
       store: over,
       roles,
+      storage: { read: async () => "CLOUD" },
       connections: connectionSource(over),
       declarations: siteDeclarationSource(over, faces),
       authors,

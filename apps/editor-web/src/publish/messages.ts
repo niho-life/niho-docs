@@ -8,6 +8,7 @@ export const PUBLISH_MESSAGES = {
   forbiddenRole: "この発信先に出す役割がありません",
   forbiddenConnection: "このサイトとの接続がありません",
   forbiddenSetting: "この発信先では選べない設定があります",
+  storageNotCloud: "保存先が NIHO クラウドではないので、公開できません（公開は保存先がクラウドのときだけです）",
   slugLocked: "公開したあとは URL を変えられません",
   slugTaken: "この URL は使われています",
   unavailable: "いまは公開できません",
