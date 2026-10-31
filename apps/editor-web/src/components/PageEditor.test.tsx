@@ -69,7 +69,8 @@ function bodyEditor(): Editor {
   return (container!.querySelector(".ProseMirror") as HTMLElement & { editor: Editor }).editor;
 }
 
-const status = () => container!.querySelector('[role="status"]');
+/** 本文の上の保存状態の表示（見える文字だけ。読み上げはヘッダーの状態の丸が持つ）。 */
+const status = () => container!.querySelector("[data-save-state]");
 const alertBand = () => container!.querySelector('[data-conflict-band] [role="alert"]');
 const button = (label: string) => [...container!.querySelectorAll("button")].find((element) => element.textContent === label)!;
 
@@ -157,9 +158,12 @@ describe("niho-docs-ui on React 19", () => {
     expect(body?.getAttribute("contenteditable")).toBe("true");
     expect(body?.textContent).toContain("合成の本文");
     expect(container.querySelector<HTMLTextAreaElement>("textarea.page-title")?.value).toBe("合成の題名");
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("保存済み");
+    expect(status()?.textContent).toBe("保存済み");
+    // 読み上げはヘッダーの状態の丸（aria-live）に任せる。ここを live region にすると同じ言葉を二重に読み上げる
+    expect(status()?.getAttribute("role")).toBeNull();
+    expect(status()?.getAttribute("aria-live")).toBeNull();
     // jsdom には IndexedDB が無い: 端末への保持なしとして続ける
-    expect(container.querySelector('[role="status"]')?.getAttribute("data-drafts")).toBe("none");
+    expect(status()?.getAttribute("data-drafts")).toBe("none");
   });
 
   it("caps the title at the server limit so an over-long title never enters autosave", async () => {
@@ -694,7 +698,7 @@ describe("a new page (id null)", () => {
       expect(container.querySelector(".ProseMirror")).toBe(body);
       expect(container.querySelector("textarea.page-title")).toBe(title);
       expect(title.value).toBe("合成の題名 3");
-      expect(container.querySelector('[role="status"]')?.textContent).toBe("保存済み");
+      expect(status()?.textContent).toBe("保存済み");
     } finally {
       vi.unstubAllGlobals();
     }

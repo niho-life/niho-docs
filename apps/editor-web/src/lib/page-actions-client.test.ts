@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PageActionError,
+  deletePageRequest,
   duplicatePageRequest,
   getPageShare,
   pageExportUrl,
@@ -61,14 +62,38 @@ describe("page actions client", () => {
     }
   });
 
-  it("duplicates a page and returns the new id", async () => {
+  it("duplicates a page and returns the new id, title and kind (for the top of the list)", async () => {
     const newId = "7f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d12";
-    const fetchMock = mockFetch(201, { page: { id: newId, title: "合成のコピー" } });
-    expect(await duplicatePageRequest(ID)).toBe(newId);
+    const fetchMock = mockFetch(201, { page: { id: newId, title: "合成のコピー", kind: "rec", blocks: [] } });
+    expect(await duplicatePageRequest(ID)).toEqual({ id: newId, title: "合成のコピー", kind: "rec" });
     expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${ID}/duplicate`, { method: "POST", credentials: "same-origin", cache: "no-store" });
-    mockFetch(201, { page: { id: "not-a-uuid" } });
+    // 読めない種類は note として扱う（複製はできているので失敗にしない）
+    mockFetch(201, { page: { id: newId, title: "", kind: "unknown" } });
+    expect(await duplicatePageRequest(ID)).toEqual({ id: newId, title: "", kind: "note" });
+    mockFetch(201, { page: { id: "not-a-uuid", title: "x" } });
+    await expect(duplicatePageRequest(ID)).rejects.toMatchObject({ status: 500 });
+    mockFetch(201, { page: { id: newId } });
     await expect(duplicatePageRequest(ID)).rejects.toMatchObject({ status: 500 });
     mockFetch(404, { error: "not_found" });
     await expect(duplicatePageRequest(ID)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("deletes a page with DELETE (204), and keeps the status and code of a refusal", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(deletePageRequest(ID)).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${ID}`, expect.objectContaining({ method: "DELETE", credentials: "same-origin", cache: "no-store" }));
+    // 応答が来ないまま待ち続けない
+    expect((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].signal).toBeInstanceOf(AbortSignal);
+
+    mockFetch(409, { error: "published" });
+    await expect(deletePageRequest(ID)).rejects.toMatchObject({ name: "PageActionError", status: 409, code: "published" });
+    mockFetch(404, { error: "not_found" });
+    await expect(deletePageRequest(ID)).rejects.toMatchObject({ status: 404, code: "not_found" });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>", { status: 502 })));
+    await expect(deletePageRequest(ID)).rejects.toMatchObject({ status: 502, code: null });
+    const encoded = mockFetch(404, { error: "not_found" });
+    await expect(deletePageRequest("../trash")).rejects.toThrow(PageActionError);
+    expect(encoded).toHaveBeenCalledWith("/api/pages/..%2Ftrash", expect.anything());
   });
 });
