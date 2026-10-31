@@ -102,6 +102,20 @@ describe("recipes table (20261101001500_recipes)", { skip: databaseUrl === undef
     assert.deepEqual(fewer.map((recipe) => recipe.id), ["tpl-1", "tpl-2"]);
   });
 
+  it("makes overlapping saves of the same person replace each other, never merge (the last whole list wins)", async () => {
+    const person = "synthetic-recipes-owner-race";
+    const base = [article, minutes];
+    for (let round = 0; round < 3; round += 1) {
+      await putRecipes(pool, person, base);
+      const lists = Array.from({ length: 8 }, (_, index) => [...base, { ...added, id: `r-race-${round}-${index}`, name: `重なる保存 ${index}` }]);
+      await Promise.all(lists.map((list) => putRecipes(pool, person, list)));
+      const ids = (await listRecipes(pool, person)).map((recipe) => recipe.id);
+      // どの保存の一覧とも違う「重なった和」が残らない: 既定の 2 つ + 保存した 1 つだけ
+      assert.equal(ids.length, base.length + 1, `round ${round}: ${ids.join(", ")}`);
+      assert.deepEqual(ids.slice(0, base.length), base.map((recipe) => recipe.id));
+    }
+  });
+
   it("counts a revision only when the contents change, not when the order does", async () => {
     const before = await putRecipes(pool, OWNER, [article, minutes]);
     const reordered = await putRecipes(pool, OWNER, [minutes, article]);
