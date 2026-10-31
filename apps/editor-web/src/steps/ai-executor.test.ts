@@ -303,6 +303,36 @@ describe("the real step executor", () => {
     expect(usage.records).toHaveLength(MAX_CONTINUATIONS + 1);
   });
 
+  it("carries the text it did write when it gives up (to show, never to write to the page)", async () => {
+    const written = '{"blocks":[{"kind":"heading","level":2,"text":"書けた見出し"},{"kind":"paragraph","text":"書けた段落。"},{"kind":"paragraph","text":"切れた';
+    const client = stubClient(async (round) =>
+      round === 0
+        ? { text: written, stopReason: "max_tokens", usage: { model: "claude-sonnet-5-5", inputTokens: 10, outputTokens: 10 } }
+        : { text: "段", stopReason: "max_tokens", usage: { model: "claude-sonnet-5-5", inputTokens: 10, outputTokens: 10 } },
+    );
+    const error = await setup({ client: client.client })
+      .run(input)
+      .catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(StepError);
+    expect((error as StepError).code).toBe("output_too_long");
+    // 書けた分だけ（切れた段落は入らない）。ページに書く道はここには無い
+    expect((error as StepError).partial).toBe("書けた見出し\n\n書けた段落。");
+    // 失敗の文そのものには本文を入れない（ログに流れるのは message と code）
+    expect((error as Error).message).toBe("step failed: output_too_long");
+    expect((error as Error).message).not.toContain("書けた");
+  });
+
+  it("has no partial text on the other failures", async () => {
+    const client = stubClient(async () => ({ text: "これは JSON ではありません", usage: { model: "claude-sonnet-5-5", inputTokens: 10, outputTokens: 10 } }));
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const error = await setup({ client: client.client })
+      .run(input)
+      .catch((reason: unknown) => reason);
+    log.mockRestore();
+    expect((error as StepError).code).toBe("invalid_output");
+    expect((error as StepError).partial).toBeUndefined();
+  });
+
   it("stops asking for the rest when the month's limit is reached in the middle", async () => {
     const usage = memoryUsage();
     const client = stubClient(async () => ({ text: '{"blocks":[{"kind":"paragraph","text":"長い', stopReason: "max_tokens", usage: { model: "claude-sonnet-5-5", inputTokens: 1_000_000, outputTokens: 1_000_000 } }));

@@ -239,6 +239,49 @@ function blockOf(block: ComposeBlock): Block {
   }
 }
 
+/**
+ * 出力の上限で切れた答えから、**書けていた分の文**を読む（JSON として閉じている要素だけを拾う）。
+ * 人に見せて写してもらうためのもので、**ページには書かない**（steps/ai-executor.ts）。読めなければ空。
+ */
+export function partialComposeText(text: string): string {
+  const start = text.indexOf("[");
+  if (start < 0) return "";
+  const chars = Array.from(text.slice(start + 1));
+  const blocks: unknown[] = [];
+  let depth = 0;
+  let begin = -1;
+  let inString = false;
+  let escaped = false;
+  for (const [index, char] of chars.entries()) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{") {
+      if (depth === 0) begin = index;
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0 && begin >= 0) {
+        try {
+          blocks.push(JSON.parse(chars.slice(begin, index + 1).join("")));
+        } catch {
+          // 閉じているのに読めないものは捨てる（人に出すのは読めた分だけ）
+        }
+        begin = -1;
+      }
+    }
+  }
+  const parsed = parseComposeOutput({ blocks });
+  if (!parsed.ok) return "";
+  return parsed.blocks
+    .map((block) => (block.kind === "bullets" ? block.items.map((item) => `- ${item}`).join("\n") : block.text))
+    .join("\n\n");
+}
+
 /** 検証を通った出力を本文のブロックにする。結果は必ず validateBlocks を通す。 */
 export function composeBlocks(blocks: readonly ComposeBlock[]): AstResult {
   return validateBlocks(blocks.map(blockOf));

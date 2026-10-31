@@ -224,6 +224,22 @@ describe("runAttempt", () => {
     expect(JSON.stringify([...store.runs.values()])).not.toContain("secret");
   });
 
+  it("keeps the text an executor wrote before giving up out of the record (only the code is stored)", async () => {
+    // 続きが終わらなかった段階は、書けた分を `partial` で運ぶ。記録に載るのは code だけで、本文は入らない
+    const executor: StepExecutor = {
+      run: async () => {
+        throw new StepError("output_too_long", false, "合成の書けた本文");
+      },
+    };
+    const { store, queue, start, deps, view } = await setup(executor);
+    await start();
+    expect(await runAttempt(deps, queue.drain()[0]!)).toEqual({ status: "failed" });
+    expect((await view())?.steps[0]).toMatchObject({ state: "failed", errorCode: "output_too_long" });
+    expect(JSON.stringify([...store.runs.values()])).not.toContain("合成の書けた本文");
+    // ページにも書かない
+    expect([...store.pages.values()].every((page) => JSON.stringify(page.blocks).indexOf("合成の書けた本文") < 0)).toBe(true);
+  });
+
   it("fails at once on output that is not blocks, and skips a duplicated task", async () => {
     const executor: StepExecutor = { run: async () => ({ blocks: [{ text: "no type" }] as never }) };
     const { queue, start, deps, view } = await setup(executor);

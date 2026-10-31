@@ -6,6 +6,7 @@ import {
   composeBlocks,
   composeMaxTokens,
   parseComposeOutput,
+  partialComposeText,
   type ComposeInput,
 } from "./compose";
 
@@ -166,5 +167,25 @@ describe("composeBlocks", () => {
         { type: "callout", content: [{ type: "paragraph", content: [{ type: "text", text: "注意" }] }] },
       ],
     });
+  });
+});
+
+describe("partialComposeText（出力の上限で切れた答えから、書けた分を読む）", () => {
+  it("reads the blocks that are closed and drops the one that was cut", () => {
+    const cut = '{"blocks":[{"kind":"heading","level":2,"text":"見出し"},{"kind":"paragraph","text":"一つ目の段落。"},{"kind":"paragraph","text":"切れた段';
+    expect(partialComposeText(cut)).toBe("見出し\n\n一つ目の段落。");
+  });
+
+  it("reads a list, and keeps a brace inside a text from breaking it", () => {
+    const cut = '{"blocks":[{"kind":"bullets","items":["一","二"]},{"kind":"paragraph","text":"括弧 {} と \\"引用\\" を含む文。"},{"kind":"para';
+    expect(partialComposeText(cut)).toBe('- 一\n- 二\n\n括弧 {} と "引用" を含む文。');
+  });
+
+  it("is empty when nothing is readable yet", () => {
+    expect(partialComposeText("")).toBe("");
+    expect(partialComposeText('{"blocks":[{"kind":"para')).toBe("");
+    expect(partialComposeText("これは JSON ではありません")).toBe("");
+    // 閉じていても、知らない種類は人に出さない
+    expect(partialComposeText('{"blocks":[{"kind":"image","text":"x"}')).toBe("");
   });
 });

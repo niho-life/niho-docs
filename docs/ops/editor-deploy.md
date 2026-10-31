@@ -253,6 +253,7 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 
 ### 制約
 
+- 続きが終わらずに失敗した段階は、**そこまでに書けた本文を `StepError.partial` で運ぶ**（払った分を捨てないため）。これは**本文そのものなのでログに出さず、ページにも書かない**。人が見て写すためだけのもので、記録に載るのは短い code だけ（出す画面は #136）。
 - **出力が `EDITOR_AI_MAX_TOKENS`（既定 12,000）で切れたら、同じ答えの続きを書かせて繋ぐ**（旧 NIHO docs と同じ。続きは 8 回まで、重なりは 400 字まで除く。docs-core の `MAX_CONTINUATIONS`・`joinContinuation`）。続きの 1 回ずつも使用量に数え、月の上限は続きの前にも見る（上限に達したらそこで止める）。8 回で終わらなければ `output_too_long` で失敗し、**途中まで書けた文書はページに書かない**。
 - 1 つの段階は 1 回の要求（続きを頼んだ分だけ往復は増える）。今の `deploy.sh` の Cloud Run の要求の上限（`lib.sh` の `service_request_timeout`。既定 300 秒）を超える段階は途中で切れる（Cloud Tasks が再試行し、lease が切れれば掃除が拾う）。1 回のモデルの呼び出しの時間切れは `EDITOR_AI_TIMEOUT_MS`（既定 120 秒）なので、今の 300 秒に収まる。長い資料で足りなくなったら、要求の上限を段階の長さに合わせて上げる（上限は task の 30 分）。
 

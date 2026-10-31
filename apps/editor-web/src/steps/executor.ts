@@ -32,16 +32,23 @@ export type StepExecutor = {
 /**
  * 段階の失敗。`code` は短い英小文字の code だけ（本文・プロンプト・内部の情報を入れない）。
  * `retryable` は一時的な失敗（時間切れ・5xx 相当）。入力の誤り（4xx 相当）は false ですぐ失敗にする。
+ *
+ * `partial` は、諦めるまでに AI が書けた本文（出力の上限で切れた段階。そのトークンは既に課金されているので捨てない）。
+ * **これは本文そのもの**なので、`code` と違って次の 2 つを必ず守る:
+ * - **ログ・エラーの文（`message`）に出さない**（`message` は code だけ）。
+ * - **ページに書かない。** 人が見て写すためだけに運ぶ（中途半端な文書が黙って入る方が、はっきり失敗するより悪い）。
  */
 export class StepError extends Error {
   readonly code: string;
   readonly retryable: boolean;
+  readonly partial: string | undefined;
 
-  constructor(code: string, retryable: boolean) {
+  constructor(code: string, retryable: boolean, partial?: string) {
     super(`step failed: ${code}`);
     this.name = "StepError";
     this.code = code;
     this.retryable = retryable;
+    this.partial = partial !== undefined && partial.length > 0 ? partial : undefined;
   }
 }
 

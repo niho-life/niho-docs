@@ -11,7 +11,7 @@ import {
   type ReferencePage,
 } from "@niho/editor-store";
 import { AnthropicError, maxTokensLimit, type AnthropicErrorKind } from "../ai/anthropic";
-import { buildComposePrompt, composeBlocks, composeMaxTokens, parseComposeOutput, type ComposeInput, type ComposeSource } from "../ai/compose";
+import { buildComposePrompt, composeBlocks, composeMaxTokens, parseComposeOutput, partialComposeText, type ComposeInput, type ComposeSource } from "../ai/compose";
 import type { AiComposeBackend } from "../ai/config";
 import { blockText } from "../ai/engine";
 import type { AiUsageReport } from "../ai/model";
@@ -164,8 +164,8 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
         if (!truncated || piece.length === 0) break;
       }
       if (!report) throw new StepError("internal", true);
-      // 続きの回数を使い切っても終わらなかった（人に見せる。黙って切った文書をページに書かない）
-      if (truncated) throw new StepError("output_too_long", false);
+      // 続きの回数を使い切っても終わらなかった。**書けた分は運ぶが、ページには書かない**（人が見て写す用）
+      if (truncated) throw new StepError("output_too_long", false, partialComposeText(text));
 
       const parsed = parseComposeOutput(parseJson(text));
       if (!parsed.ok) {
