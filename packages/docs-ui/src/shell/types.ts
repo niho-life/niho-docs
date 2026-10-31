@@ -7,7 +7,7 @@
 export type ShellDest = "exp" | "niho" | "site";
 export type ShellLang = "ja" | "en";
 /** ページの種類。step は録音から作った手順のサブページ。 */
-export type ShellPageKind = "journal" | "note" | "rec" | "step" | "article";
+export type ShellPageKind = "note" | "rec" | "step" | "article";
 /** 状態の丸。private＝自分だけ、published＝公開中、updated＝更新あり、limited＝限定公開、stopped＝公開をやめた。 */
 export type ShellStatusState = "private" | "published" | "updated" | "limited" | "stopped";
 export type ShellStepState = "done" | "run" | "wait";

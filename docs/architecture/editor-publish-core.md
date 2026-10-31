@@ -5,7 +5,8 @@ Issue #39（公開のシート）と #41（発信先の設定）の「実処理�
 ## 置き場所と境界
 
 - `packages/editor-publish`（`@niho/editor-publish`）：純粋な TypeScript。DB・HTTP・時計・乱数・資産の置き場は **ポート（interface）** として受け取る。`@niho/editor-publish-contract` にだけ依存する。
-- Postgres の実装（`editor-store` の migration と adapter）と HTTP の経路（`apps/editor-web`）は、先行 PR（#53）の取り込み後に別 PR で配線する。この PR ではメモリ上の実装（`test-support/`）で、受入の挙動を確かめる。
+- Postgres の実装：表は `editor-store` の migration 0009、SQL は `packages/editor-store/src/publications.ts`、ポートへの adapter は `apps/editor-web/src/publish/pg-store.ts`（`pgPublishStore` は `PublishService` と `ConnectionService` の両方の store）。受入の流れと巻き戻しを、メモリの実装（`test-support/`）と実 PostgreSQL（`pg-store.pg.test.ts`）の両方で確かめる。
+- 行ロック：同じページへの公開はページの行で、解除と公開のすれ違いは接続の行で直列にする（`pg-store.ts` の各メソッドのコメント）。
 - 鍵の生成・ハッシュ・照合の**コード**は公開してよい。守るのはコードの秘匿ではなく、256 bit の乱数と、ハッシュしか保存しないこと、失効を次の request から効かせること（publication-gates.md の方針）。
 
 ## #39 公開のシート
@@ -107,8 +108,8 @@ Condition = { id, message, fix, kind, …kind ごとの引数 }
 | 鍵を再発行すると旧鍵で読めない | `rotateKey` 後に `authenticateKey(旧鍵)` が `null` |
 | 接続を解除すると公開中のページは「公開をやめた」になる | `disconnect` 後の `deriveStatus` が `stopped`、一覧が空 |
 
-## この PR に含めないもの
+## まだ無いもの
 
-- Postgres の migration・adapter、HTTP の経路、鍵を表示するコピー／再発行の画面、公開のシートの React 実装（`docs-ui` の PublishSheet に `sheetPlan` をつなぐ）。#53・#54 の取り込み後に配線する。
+- HTTP の経路と画面：公開のシート（#39）、公開 API v1（#40）、鍵を表示するコピー／再発行の画面（#41）。
 - 宣言の取得（`.well-known` の配備）、NIHO からの役割の読み取り（#42 と niho-app 側）。ポートまでを定義する。
 - WordPress・Ghost への送信。

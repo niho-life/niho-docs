@@ -6,9 +6,10 @@ import "niho-docs-ui/styles/shell.css";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageKind, PageSummary } from "@niho/editor-store";
-import { EditorShell, ShellHeader, ShellSheet, ShellSidebar, shellAccountItems, type NewPageKind } from "niho-docs-ui/shell";
+import { EditorShell, ShellHeader, ShellSheet, ShellSidebar, shellAccountItems, shellPublishButton, type NewPageKind } from "niho-docs-ui/shell";
 import { listPagesRequest } from "@/lib/pages-client";
 import { headerStatus } from "@/lib/save-status";
+import { useShortcuts } from "@/lib/shortcuts";
 import { arrangeSidebarItems, searchRows, withoutPageTree } from "@/lib/sidebar-items";
 import { usePageHistory } from "@/lib/use-page-history";
 import { usePageMenu, type AttachedPage } from "@/lib/use-page-menu";
@@ -16,6 +17,7 @@ import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
 import { HistorySheet } from "./HistorySheet";
+import { FramePublishSheet, PublishNotice, type FramePublishKind } from "./FramePublish";
 import { BUSY_STYLE } from "./sheet-parts";
 import { ShareSheet } from "./ShareSheet";
 
@@ -62,6 +64,8 @@ export type EditorFrameApi = {
    * 保存の状態が変わるたびに登録し直し、画面を離れたら返す関数で外す（後から登録したページは外さない）。
    */
   attachPage: (page: AttachedPage) => () => void;
+  /** 公開のシートを開く（ページを開いている画面だけで出る）。 */
+  openPublish: () => void;
 };
 
 const noop = () => undefined;
@@ -74,6 +78,7 @@ const FrameContext = createContext<EditorFrameApi>({
   pageCreated: noop,
   pageRemoved: noop,
   attachPage: () => noop,
+  openPublish: noop,
 });
 
 export function useEditorFrame(): EditorFrameApi {
@@ -177,6 +182,7 @@ function DeleteConfirm(props: { busy: boolean; error: string | null; onConfirm: 
  * - ヘッダーの右上は、開いているページ（`attachPage` で登録されたもの）の状態の丸（いつも「自分だけ」＋保存の状態）と、
  *   「…」（リンクで共有・書き出し・履歴・複製・削除。src/lib/use-page-menu.ts・use-page-share.ts・use-page-history.ts）。
  *   まだ作っていないページでは「…」を出さない。削除の確認・共有・履歴は ShellSheet で overlay に出す。
+ * - ショートカット（設計 §11）: ⌘N 新しいページ、⌘K 検索、⌘⇧P 公開のシート（⌘S はページ、⌘/ は本文が持つ）。
  */
 export function EditorFrame({ initial, children }: { initial: FrameInitial; children: ReactNode }) {
   const router = useRouter();
@@ -195,9 +201,20 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // ページを削除するたびに増やす。検索の結果は削除の前の答えのことがあり、読み込んでいない子ページはここでは分からないので、
   // サーバーにもう一度聞く（その間も、この画面で消したと分かっているページは結果から外す）
   const [removedTick, setRemovedTick] = useState(0);
-  // ⌘K のたびに増やし、検索の入力へフォーカスを移す合図にする（すでに開いているときも）
+  // ⌘K で検索の入力欄へフォーカスを移す回数（開いていても移す）
   const [searchFocus, setSearchFocus] = useState(0);
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  // 公開のシート（path が変われば閉じる）と、「公開はまだ使えません」の知らせ
+  const [sheet, setSheet] = useState<FramePublishKind | null>(null);
+  const [sheetPath, setSheetPath] = useState(pathname);
+  if (sheetPath !== pathname) {
+    setSheetPath(pathname);
+    setSheet(null);
+  }
+  const [notice, setNotice] = useState(0);
+  const hideNotice = useCallback(() => setNotice(0), []);
+  const frameRoot = useRef<HTMLDivElement | null>(null);
+  // ⌘N で移り始めた元の path（移り終わるまで二度は押さない）
+  const newFrom = useRef<string | null>(null);
   // 開いているページ（ページの中の PageEditor が登録する）。ref は非同期の操作のあとに今の値を読むため（描画を待たない）
   const [attached, setAttached] = useState<AttachedPage | null>(null);
   const attachedRef = useRef<AttachedPage | null>(null);
@@ -274,7 +291,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         }),
       pageCreated: (id, title, kind = "note") => {
         const at = new Date().toISOString();
-        const page: PageSummary = { id, kind, title, lang: "ja", parent: null, stepStatus: null, createdAt: at, updatedAt: at };
+        // 作ったばかりのページは公開していない
+        const page: PageSummary = { id, kind, title, lang: "ja", parent: null, stepStatus: null, createdAt: at, updatedAt: at, publication: null };
         setList((current) => ({ ...current, pages: toTop(current.pages, page) }));
       },
       pageRemoved: (id) => {
@@ -295,12 +313,13 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           setAttached(null);
         };
       },
+      openPublish: () => setSheet("publish"),
     }),
     [],
   );
   const frame = useMemo<EditorFrameApi>(() => ({ narrow, ...api }), [narrow, api]);
 
-  const focusMore = useCallback(() => rootRef.current?.querySelector<HTMLButtonElement>('.es-dt button[aria-haspopup="menu"]')?.focus(), []);
+  const focusMore = useCallback(() => frameRoot.current?.querySelector<HTMLButtonElement>('.es-dt button[aria-haspopup="menu"]')?.focus(), []);
   // 「…」の「リンクで共有」と「履歴」のシート（保存してから開く）
   const share = usePageShare({ page: attached, current: () => attachedRef.current });
   const history = usePageHistory({
@@ -346,23 +365,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     [searching, hits, list.pages, now],
   );
 
-  // ⌘K（Mac 以外は Ctrl+K）: 一覧が隠れていれば出し、検索の入力を開いてフォーカスする
-  useSearchShortcut(() => {
-    if (narrow) {
-      if (pathname !== "/") setListFor(pathname);
-    } else {
-      setCollapsed(false);
-    }
-    setSearch((current) => ({ open: true, value: current.open ? current.value : "" }));
-    setSearchFocus((tick) => tick + 1);
-  });
-  useEffect(() => {
-    if (searchFocus === 0) return;
-    const input = rootRef.current?.querySelector<HTMLInputElement>('[role="search"] input');
-    input?.focus();
-    input?.select();
-  }, [searchFocus]);
-
   const select = (id: string) => {
     if (id === currentId) setListFor(null);
     else router.push(`/p/${id}`);
@@ -389,18 +391,52 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     }
   };
 
-  const title = currentId
-    ? (list.pages.find((page) => page.id === currentId)?.title ?? (list.opened?.id === currentId ? list.opened.title : ""))
-    : pathname === "/p/new" && searchParams.get("from") === "recording"
-      ? "録音から"
-      : (settings?.title ?? "");
+  const opened = currentId ? (list.pages.find((page) => page.id === currentId) ?? (list.opened?.id === currentId ? list.opened : undefined)) : undefined;
+  const recordingStart = pathname === "/p/new" && searchParams.get("from") === "recording";
+  const title = currentId ? (opened?.title ?? "") : recordingStart ? "録音から" : (settings?.title ?? "");
+
+  // 公開のシートはページを開いている画面だけ（一覧・設定・新しいページ・録音からでは出さない）
+  const sheetShown = currentId ? sheet : null;
+  const { openPublish } = api;
+
+  const openSearch = () => {
+    if (sheetShown) return;
+    if (narrow) setListFor(pathname);
+    else setCollapsed(false);
+    setSearch((current) => (current.open ? current : { open: true, value: "" }));
+    setSearchFocus((count) => count + 1);
+  };
+  useEffect(() => {
+    if (searchFocus === 0) return;
+    const input = frameRoot.current?.querySelector<HTMLInputElement>('[role="search"] input');
+    input?.focus();
+    input?.select();
+  }, [searchFocus]);
+  useSearchShortcut(openSearch);
+
+  useEffect(() => {
+    newFrom.current = null;
+  }, [pathname]);
+  useShortcuts({
+    newPage: () => {
+      if (sheetShown) return false;
+      // 新しいページを開いている（作っている）とき・⌘N で移っている最中は、二つ目を作らない
+      if ((pathname === "/p/new" && !recordingStart) || newFrom.current === pathname) return;
+      newFrom.current = pathname;
+      pickNew("blank");
+    },
+    publish: () => {
+      if (!currentId || (narrow && sidebarOpen)) return false;
+      if (!sheetShown) openPublish();
+    },
+  });
 
   // 一覧をしまう: デスクトップでは列を閉じ、狭い画面ではページへ戻る（`/` では一覧がその画面なので出さない）
   const collapse = narrow ? (pathname === "/" ? undefined : () => setListFor(null)) : () => setCollapsed(true);
 
   return (
     <FrameContext.Provider value={frame}>
-      <div ref={rootRef} data-docs-app-root="" data-docs-shared-ui="" style={{ position: "fixed", inset: 0 }}>
+      <div ref={frameRoot} data-docs-app-root="" data-docs-shared-ui="" style={{ position: "fixed", inset: 0 }}>
         <EditorShell
           sidebarOpen={sidebarOpen}
           railOpen={false}
@@ -444,7 +480,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               plain={settings !== undefined}
               showListButton={!sidebarOpen}
               onToggleList={() => (narrow ? setListFor(pathname) : setCollapsed(false))}
-              // 公開の状態は出さない（公開の配線が無い間はいつも「自分だけ」）。公開ボタンも出さない。読み上げはこの丸の aria-live が持つ
+              // 公開の状態は出さない（公開の配線が無い間はいつも「自分だけ」）。読み上げはこの丸の aria-live が持つ
               status={attached ? headerStatus(attached.status) : undefined}
               trailing={
                 <>
@@ -465,16 +501,29 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 </>
               }
               more={menu.more}
+              publish={currentId ? { ...shellPublishButton({ pub: null, isArticle: opened?.kind === "article" }), onClick: openPublish } : null}
             />
           }
           overlay={
-            menu.confirm ? (
-              <DeleteConfirm {...menu.confirm} />
-            ) : share.sheet ? (
-              <ShareSheet {...share.sheet} />
-            ) : history.sheet ? (
-              <HistorySheet {...history.sheet} now={now} />
-            ) : undefined
+            <>
+              {menu.confirm ? <DeleteConfirm {...menu.confirm} /> : share.sheet ? <ShareSheet {...share.sheet} /> : history.sheet ? <HistorySheet {...history.sheet} now={now} /> : null}
+              {sheetShown && (
+                <FramePublishSheet
+                  kind={sheetShown}
+                  onKind={setSheet}
+                  onClose={() => setSheet(null)}
+                  onUnavailable={() => {
+                    setSheet(null);
+                    setNotice((count) => count + 1);
+                  }}
+                  onDestinations={() => {
+                    setSheet(null);
+                    router.push("/destinations");
+                  }}
+                />
+              )}
+              <PublishNotice shown={notice} onHide={hideNotice} />
+            </>
           }
         >
           {children}

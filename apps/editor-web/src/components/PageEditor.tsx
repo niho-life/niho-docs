@@ -32,6 +32,7 @@ import { UNCREATED_REVISION, classifySaveFailure, createPageSaver, type PageSave
 import type { RestoredPage } from "@/lib/page-actions-client";
 import { PageConflictError, type ConflictPage, type PageBody } from "@/lib/pages-client";
 import { SAVE_STATUS_TEXT, type SaveStatus } from "@/lib/save-status";
+import { isSaveShortcut } from "@/lib/shortcuts";
 
 export { docFromBlocks };
 /** 右上の保存状態（`conflict` は競合の帯が出ていて、自動保存を止めている）。 */
@@ -84,11 +85,6 @@ const noSubscription = () => () => undefined;
 
 function statusOf(state: SaveState): SaveStatus {
   return state === "stopped" ? "conflict" : state;
-}
-
-/** ⌘S・Ctrl+S（⇧・⌥ との組み合わせはブラウザに任せる）。 */
-function isSaveShortcut(event: KeyboardEvent): boolean {
-  return (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && typeof event.key === "string" && event.key.toLowerCase() === "s";
 }
 
 /** 下書きの本文をエディタに載せる。今の schema で読めなければ載せずに false（下書きはそのまま残す）。 */

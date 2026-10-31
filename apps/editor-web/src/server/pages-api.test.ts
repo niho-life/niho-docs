@@ -83,7 +83,7 @@ function memoryStore() {
         if (start === 0) throw new InvalidPageCursorError();
       }
       const limit = options.limit ?? 100;
-      const pages: PageSummary[] = sorted.slice(start, start + limit).map(({ id, kind, title, lang, parent, stepStatus, createdAt, updatedAt }) => ({ id, kind, title, lang, parent, stepStatus, createdAt, updatedAt }));
+      const pages: PageSummary[] = sorted.slice(start, start + limit).map(({ id, kind, title, lang, parent, stepStatus, createdAt, updatedAt }) => ({ id, kind, title, lang, parent, stepStatus, createdAt, updatedAt, publication: null }));
       return { pages, next: start + limit < sorted.length ? (pages.at(-1)?.id ?? null) : null };
     },
     async getPage(owner: string, id: string): Promise<Page | null> {
@@ -372,7 +372,7 @@ describe("/api/pages", () => {
     const first = (await (await listPages(request("GET", "/api/pages"), deps("user-a", store))).json()) as PageChunk;
     expect(first.pages).toHaveLength(5);
     expect(first.next).toBeNull();
-    expect(Object.keys(first.pages[0]!).sort()).toEqual(["createdAt", "id", "kind", "lang", "parent", "stepStatus", "title", "updatedAt"]);
+    expect(Object.keys(first.pages[0]!).sort()).toEqual(["createdAt", "id", "kind", "lang", "parent", "publication", "stepStatus", "title", "updatedAt"]);
 
     const seen: string[] = [];
     let cursor: string | null = null;

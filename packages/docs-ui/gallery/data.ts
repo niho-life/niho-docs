@@ -65,7 +65,7 @@ const strong = (text: string) => ({ kind: "strong" as const, text });
 
 export const PAGES: GalleryPage[] = [
   {
-    id: "j1030", title: "10月30日（木）", kind: "journal", lang: "ja", cover: false, pub: null, saved: "たった今", xs: [],
+    id: "j1030", title: "10月30日（木）", kind: "note", lang: "ja", cover: false, pub: null, saved: "たった今", xs: [],
     body: [
       { type: "p", text: "朝、北鎌倉まで歩いた。寺の門が開く前の道は、まだ空気が冷たくて静か。" },
       { type: "p", text: "体験サイトの記事をどう増やすか、歩きながらずっと考えていた。書く人を増やすより、書きたくなる場所を作る方が先かもしれない。" },

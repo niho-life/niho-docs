@@ -10,7 +10,7 @@ export type { DocsPageShareState };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** editor-store の PAGE_KINDS の写し（画面に pg を持ち込まないよう、値は import しない）。 */
-const PAGE_KINDS = ["note", "journal", "rec", "article", "step"] as const satisfies readonly PageKind[];
+const PAGE_KINDS = ["note", "rec", "article", "step"] as const satisfies readonly PageKind[];
 
 export class PageActionError extends Error {
   override readonly name = "PageActionError";

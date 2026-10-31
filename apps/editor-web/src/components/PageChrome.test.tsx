@@ -645,6 +645,84 @@ describe("the 「＋」 next to an empty paragraph", () => {
   });
 });
 
+describe("⌘/ (Ctrl+/ off a Mac): the block list from the keyboard (design §11)", () => {
+  const heading2: JSONContent = { type: "heading", attrs: { level: 2 } };
+  /** 本文で ⌘/ を押す（jsdom の platform は Mac ではないので Ctrl）。 */
+  async function blockShortcut(editor: Editor) {
+    const event = new KeyboardEvent("keydown", { key: "/", code: "Slash", ctrlKey: true, bubbles: true, cancelable: true });
+    await act(async () => {
+      editor.view.dom.dispatchEvent(event);
+    });
+    await advance(20);
+    return event;
+  }
+
+  it("in an empty line, opens the same list as 「＋」 with focus on it, and ↑↓ and Enter turn that line into the block", async () => {
+    const editor = await renderHarness(doc(paragraph("前"), paragraph(), paragraph("後")));
+    await cursorAt(editor, 4);
+    const event = await blockShortcut(editor);
+    expect(event.defaultPrevented).toBe(true);
+    const list = menu("ブロックを足す")!;
+    expect(itemNames(list)).toEqual(BLOCK_CHOICES.map((choice) => choice.label));
+    expect(document.activeElement).toBe(menuItem(list, "テキスト"));
+    await press(document.activeElement as HTMLElement, "ArrowDown");
+    expect(document.activeElement).toBe(menuItem(list, "見出し 2"));
+    // Enter はボタンの click になる（jsdom はキーから click を起こさないので、フォーカスのある項目を押す）
+    await click(document.activeElement as HTMLElement);
+    expect(menu("ブロックを足す")).toBeNull();
+    expect(savedBlocks(editor)).toEqual([paragraph("前"), heading2, paragraph("後")]);
+    expect(document.activeElement).toBe(editor.view.dom);
+  });
+
+  it("in a line with text, keeps that line and makes the picked block on a new line below it, undone in one step", async () => {
+    const editor = await renderHarness(doc(paragraph("前"), paragraph("後")));
+    await cursorAt(editor, 2);
+    await blockShortcut(editor);
+    // 選ぶまでは何も足さない
+    expect(savedBlocks(editor)).toEqual([paragraph("前"), paragraph("後")]);
+    await click(menuItem(menu("ブロックを足す"), "箇条書き"));
+    expect(savedBlocks(editor)).toEqual([paragraph("前"), MADE.bullet, paragraph("後")]);
+    expect(document.activeElement).toBe(editor.view.dom);
+    expect(editor.state.selection.$anchor.parent.type.name).toBe("paragraph");
+    expect(editor.state.selection.$anchor.node(1).type.name).toBe("bulletList");
+    await act(async () => {
+      editor.commands.undo();
+    });
+    expect(savedBlocks(editor)).toEqual([paragraph("前"), paragraph("後")]);
+  });
+
+  it("adds below the whole list when the cursor is in a list item", async () => {
+    const list: JSONContent = { type: "bulletList", content: [{ type: "listItem", content: [paragraph("項目")] }] };
+    const editor = await renderHarness(doc(list, paragraph("後")));
+    await cursorAt(editor, 4);
+    await blockShortcut(editor);
+    await click(menuItem(menu("ブロックを足す"), "区切り線"));
+    expect(savedBlocks(editor)).toEqual([list, MADE.hr, paragraph("後")]);
+  });
+
+  it("closes on Esc back to where the cursor was, adding nothing", async () => {
+    const editor = await renderHarness(doc(paragraph("前"), paragraph("後")));
+    await cursorAt(editor, 2);
+    await blockShortcut(editor);
+    await press(document.activeElement as HTMLElement, "Escape");
+    expect(menu("ブロックを足す")).toBeNull();
+    expect(document.activeElement).toBe(editor.view.dom);
+    expect(editor.state.selection.from).toBe(2);
+    expect(savedBlocks(editor)).toEqual([paragraph("前"), paragraph("後")]);
+  });
+
+  it("leaves the key to the browser when the body does not have focus", async () => {
+    const editor = await renderHarness(doc(paragraph("前")));
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    await act(async () => outside.focus());
+    const event = await blockShortcut(editor);
+    expect(event.defaultPrevented).toBe(false);
+    expect(menu("ブロックを足す")).toBeNull();
+    outside.remove();
+  });
+});
+
 describe("PageEditor with the chrome", () => {
   it("puts the chrome in the body's .be and saves what the 「/」 list makes", async () => {
     fakeTimersWithFrames();

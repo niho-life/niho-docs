@@ -37,6 +37,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # macOS のランナーは同時に動かせる数が少なく（無料の枠）、待ちが長い。mac のジョブ（Rust・Swift）が見るものに
+  # 触れていない変更では走らせない。見分けられないとき・main への push では走らせる。
+  # `docs-mac-native` は必須チェックなので、skip しても成功として数えられる（jobs の `if` による skip）。
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mac-native: ${{ steps.filter.outputs.mac-native }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          # docs-mac-native が見るもの: apps/docs（Cargo・swift・remote-runner）、それが path で使う packages の
+          # Rust・Swift（desktop-account・desktop-vault・apple-speech）、このワークフロー自身。
+          mac_paths='^(apps/docs/|packages/apple-speech/|packages/desktop-account/|packages/desktop-vault/|\.github/workflows/docs-core-ci\.yml$)'
+          result=true
+          base=""
+          case "$EVENT" in
+            # チェックアウトは PR と base の merge commit。第一親が base
+            pull_request) base=$(git rev-parse --verify -q HEAD^1) || base="" ;;
+            # チェックアウトは queue の先頭（PR + 先に並んだ変更）。main は base_sha
+            merge_group) git fetch --no-tags --depth=1 origin "$MERGE_GROUP_BASE" && base="$MERGE_GROUP_BASE" || base="" ;;
+          esac
+          # --no-renames: 改名は移動先だけが出るので、見るディレクトリの外へ移したとき（移動元が消えたとき）を見落とす
+          if [ -n "$base" ] && files=$(git diff --name-only --no-renames "$base" HEAD); then
+            echo "changed files:"; printf '%s\n' "$files" | sed 's/^/  /'
+            if ! printf '%s\n' "$files" | grep -Eq "$mac_paths"; then result=false; fi
+          else
+            echo "cannot tell what changed (event: $EVENT); running the macOS job"
+          fi
+          echo "mac-native=$result" | tee -a "$GITHUB_OUTPUT"
+
   docs-core:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -168,6 +205,7 @@ jobs:
       - run: npm -C packages/docs-core ci
       - run: packages/docs-core/node_modules/.bin/tsc -p packages/desktop-vault/tsconfig.json
 
+  # 名前は mac だが ubuntu で動く（必須チェックの名前なので変えない）。macOS で動くのは下の docs-mac-native だけ。
   docs-mac-frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -186,6 +224,10 @@ jobs:
       - run: node scripts/ci/public-boundary-guard.mjs
 
   docs-mac-native:
+    needs: changes
+    # changes が落ちたときは見分けられないので走らせる（needs が落ちたままだと skip になり、skip は必須チェックでは成功になる）。
+    # always() は workflow の cancel のあとにも走るので、!cancelled() にする。
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.mac-native == 'true') }}
     runs-on: macos-26
     timeout-minutes: 45
     env:
