@@ -125,6 +125,8 @@ AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messa
 | `AI_MODEL` | `claude-sonnet-5-5` | `EDITOR_AI_MODEL` | 文を整える・要約・見出しには十分な品質で、Opus 系の約半額（入力 $2・出力 $10／100 万トークン）。docs-core の単価表にあり、見込み金額が出る |
 | `AI_MONTHLY_LIMIT_USD` | `10` | `EDITOR_AI_MONTHLY_LIMIT_USD` | 1 人・1 か月の見込みの上限。数段落の提案は 1 回 $0.01 前後、出力が上限まで出るいちばん悪い 1 回の呼び出し（本文 約 4,000 文字・出力 12,000 トークン）でも約 $0.13 なので、普段使いでは届かず、誤用や暴走は止まる |
 
+会話（AI チャット）はページごとに DB（`ai_conversations`・`ai_messages`。migration 0022）に残る。残すのは頼んだことと提案の中身・採用した中身・採用で残った版の番号だけで、**鍵・プロンプト・モデルへ送った文は残さない**。ページを消せば会話も消える。GCP の追加の資源は無い。
+
 1 回の提案で送る本文は 30,000 文字まで（超えたら 413 `too_large`。範囲を選んで頼む）で、段落の切れ目で約 4,000 文字ずつに分けて順に呼ぶ。1 回の呼び出しの時間切れ（`EDITOR_AI_TIMEOUT_MS`、既定 120 秒）と出力の上限（`EDITOR_AI_MAX_TOKENS`、既定 12,000 トークン。思考の分を含む）は `deploy.sh` から渡さない（アプリの既定のまま）。Cloud Run の要求の時間切れはそれに合わせて 300 秒。自動の再試行はしない。上流の失敗（401・429・529・5xx・時間切れ）と、使えない応答（JSON でない・出力の上限で途中で切れた）は 502 `ai_failed`。
 
 ### 有効にする
@@ -155,7 +157,10 @@ AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messa
 
 ## 11. 手順の実行基盤（#37）
 
-手順（記事制作・議事録・インサイト整理）の段階を、画面を閉じても進むようにサーバー側で実行する。方式は [editor-steps-execution.md](../architecture/editor-steps-execution.md) の B（§5.2 実行・§5.5 費用）。**この段階では実行器が偽物（`[fake]` の印を付けた決定的な結果。AI は呼ばない）なので、有効にしても本物の記事は作られない。** 本物の実行器は後段で、差し替える所は `apps/editor-web/src/server/steps-deps.ts` の 1 か所。
+手順（記事制作・議事録・インサイト整理）の段階を、画面を閉じても進むようにサーバー側で実行する。方式は [editor-steps-execution.md](../architecture/editor-steps-execution.md) の B（§5.2 実行・§5.5 費用）。
+
+**段階は本物の AI（§10 と同じ Anthropic の鍵・モデル・月の上限）で実行する。** 1 段階 = モデルの 1 往復で、資料は段階 1 が録音ページの本文、それ以降は前の段階の結果（合わせて 24,000 文字まで。超えた分は先頭だけ送る）。作られるのは見出し・段落・箇条書き・囲みだけ。配線は `apps/editor-web/src/server/steps-deps.ts` の 1 か所。
+**`EDITOR_AI_MODE` が無効なあいだ、段階は `ai_unavailable` で失敗する**（手順を使うなら §10 の AI も有効にする）。開発と CI の `EDITOR_AI_MODE=fake` では偽物の 1 往復（`[fake]` の印が付く）で、本番では偽物を受け付けない。
 
 ### 構成
 
@@ -219,12 +224,15 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
   - `editor-web: request failed`（500）: `code` は `tasks_http_<status>`（Cloud Tasks の拒否。403 なら実行 ID の権限）・`tasks_token_*`（メタデータサーバー）・DB の code。Cloud Tasks が同じ task を再試行する。
   - `editor-web: sweep could not requeue every step`: 掃除の積み直しの一部が失敗した（次の回でまた拾う）。
   - `editor-web: sweep read only the oldest queued steps`: queued の段階が 1,000 件を超えて残っている（掃除は古い順に 100 件ずつ 10 回まで読む）。Cloud Tasks のキューが止まっていないか（`gcloud tasks queues describe`）を見る。
-- **段階の失敗の理由**: 帯（`GET /api/pages/{id}/steps` の `errorCode`）。`lease_expired` は実行中に worker が落ちて lease が切れたもの。
+- **段階の失敗の理由**: 帯（`GET /api/pages/{id}/steps` の `errorCode`）。`lease_expired` は実行中に worker が落ちて lease が切れたもの。AI の分は次のとおり（再試行するものは Cloud Tasks が自動で、しないものはその段階で失敗にする）:
+  - 再試行しない: `ai_unavailable`（`EDITOR_AI_MODE` が無効・鍵が無い）・`quota_exceeded`（今月の上限に達した。モデルを呼ぶ前に止めた）・`ai_auth`（鍵が通らない。401・402・403）・`ai_bad_request`・`invalid_output`（答えが使える形でなかった）・`unknown_step`
+  - 再試行する: `ai_rate_limit`（429）・`ai_overloaded`（529）・`ai_server`（5xx）・`ai_timeout`・`ai_network`・`usage_unavailable`（DB に届かず使用量を数えられなかった）
+- **段階の費用**: §10 の使用量（`GET /api/ai/usage`）に提案と一緒に入る（1 人・1 か月の見込みの上限は同じものが効く）。
 - **Cloud Scheduler のジョブ**の最後の実行: 成功は 200 `{"requeued": n}`。
 
 ### 制約
 
-- 1 つの段階は 1 回の要求。今の `deploy.sh` の Cloud Run の要求の上限（`lib.sh` の `service_request_timeout`。既定 300 秒）を超える段階は途中で切れる（Cloud Tasks が再試行し、lease が切れれば掃除が拾う）。偽物の実行器はすぐ終わるので今は当たらない。本物の実行器をつなぐ段で、段階の長さに合わせて上げる（上限は task の 30 分）。
+- 1 つの段階は 1 回の要求。今の `deploy.sh` の Cloud Run の要求の上限（`lib.sh` の `service_request_timeout`。既定 300 秒）を超える段階は途中で切れる（Cloud Tasks が再試行し、lease が切れれば掃除が拾う）。1 回のモデルの呼び出しの時間切れは `EDITOR_AI_TIMEOUT_MS`（既定 120 秒）なので、今の 300 秒に収まる。長い資料で足りなくなったら、要求の上限を段階の長さに合わせて上げる（上限は task の 30 分）。
 
 ## 12. 文字起こし（#36）
 

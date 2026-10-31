@@ -34,9 +34,29 @@ export class AiConflictError extends Error {
   }
 }
 
-export type ProposalRequest = { baseRevision: number; intent: AiIntent; scope?: AiScope };
-export type ProposalResult = { proposal: Proposal; usage: { nearLimit: boolean } };
-export type AdoptionRequest = { baseRevision: number; changes: { index: number; text: string }[]; inserts: ProposalInsert[] };
+export type ProposalRequest = { baseRevision: number; intent: AiIntent; scope?: AiScope; conversationId?: string };
+/** 会話に残った 1 回のやりとり（会話の id と、その提案の発言の id。残せなかったときは null）。 */
+export type AiTurnRef = { id: string; messageId: string };
+export type ProposalResult = { proposal: Proposal; usage: { nearLimit: boolean }; conversation: AiTurnRef | null };
+export type AdoptionRequest = { baseRevision: number; changes: { index: number; text: string }[]; inserts: ProposalInsert[]; messageId?: string };
+/** 採用の結果（保存したページと、会話に書けた採用）。 */
+export type AdoptionResult = { page: AiPage; adopted: { messageId: string; version: number } | null };
+
+/** 会話の 1 つの発言（画面に出す分だけ。提案の中身は履歴では開かない）。 */
+export type AiChatMessage = {
+  id: string;
+  seq: number;
+  role: "user" | "assistant";
+  text: string;
+  preset: string | null;
+  /** 提案を伴う発言（AI の発言）。 */
+  hasProposal: boolean;
+  /** 採用の前の本文が残った版の番号（採用していなければ null）。 */
+  version: number | null;
+};
+
+export type AiChatSummary = { id: string; updatedAt: string; messages: number; lastText: string | null };
+export type AiChat = { conversation: AiChatSummary; messages: AiChatMessage[] };
 
 function codeOf(status: number, error: unknown): AiErrorCode {
   if (status === 401) return "signedOut";
@@ -121,6 +141,37 @@ function proposalOf(data: unknown): ProposalResult | null {
   return {
     proposal: { label: raw.label, baseRevision: raw.baseRevision, changes: changes as ProposalChange[], inserts: inserts as ProposalInsert[], unchanged },
     usage: { nearLimit },
+    conversation: turnRefOf(data.conversation),
+  };
+}
+
+/** 会話の id と発言の id（形が違えば null。会話に残せなくても提案は使える）。 */
+function turnRefOf(value: unknown): AiTurnRef | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.messageId !== "string") return null;
+  return { id: value.id, messageId: value.messageId };
+}
+
+function chatMessageOf(value: unknown): AiChatMessage | null {
+  if (!isRecord(value) || typeof value.id !== "string" || !isIndex(value.seq, 1) || typeof value.text !== "string") return null;
+  if (value.role !== "user" && value.role !== "assistant") return null;
+  return {
+    id: value.id,
+    seq: value.seq,
+    role: value.role,
+    text: value.text,
+    preset: typeof value.preset === "string" ? value.preset : null,
+    hasProposal: isRecord(value.proposal),
+    version: isIndex(value.version, 1) ? value.version : null,
+  };
+}
+
+function chatSummaryOf(value: unknown): AiChatSummary | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.updatedAt !== "string") return null;
+  return {
+    id: value.id,
+    updatedAt: value.updatedAt,
+    messages: isIndex(value.messages, 0) ? value.messages : 0,
+    lastText: typeof value.lastText === "string" ? value.lastText : null,
   };
 }
 
@@ -134,9 +185,53 @@ export async function proposeAiRequest(pageId: string, body: ProposalRequest, op
   return result;
 }
 
-/** 採用したものだけを 1 回で保存する（今の本文は版 `ai` に残る）。保存したページを返す。`baseRevision` が違えば AiConflictError。 */
-export async function adoptAiRequest(pageId: string, body: AdoptionRequest): Promise<AiPage> {
-  const page = conflictPageOf(await post(pagePath(pageId, "/ai/adoptions"), body));
+/**
+ * 採用したものだけを 1 回で保存する（今の本文は版 `ai` に残る）。保存したページと、会話に書けた採用を返す。
+ * `baseRevision` が違えば AiConflictError。
+ */
+export async function adoptAiRequest(pageId: string, body: AdoptionRequest): Promise<AdoptionResult> {
+  const data = await post(pagePath(pageId, "/ai/adoptions"), body);
+  const page = conflictPageOf(data);
   if (!page) throw new AiRequestError("failed");
-  return page;
+  const raw = isRecord(data) ? data.adopted : null;
+  const adopted = isRecord(raw) && typeof raw.messageId === "string" && isIndex(raw.version, 1) ? { messageId: raw.messageId, version: raw.version } : null;
+  return { page, adopted };
+}
+
+async function get(path: string, signal?: AbortSignal): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetch(path, { credentials: "same-origin", cache: "no-store", ...(signal ? { signal } : {}) });
+  } catch (error) {
+    throw new AiRequestError(aborted(error, signal) ? "aborted" : "network");
+  }
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { error?: unknown } | null;
+    throw new AiRequestError(codeOf(response.status, data?.error));
+  }
+  try {
+    return await response.json();
+  } catch (error) {
+    throw new AiRequestError(aborted(error, signal) ? "aborted" : "failed");
+  }
+}
+
+/** そのページの会話の一覧（新しい順）。 */
+export async function listAiChats(pageId: string, options: { signal?: AbortSignal } = {}): Promise<AiChatSummary[]> {
+  const data = await get(pagePath(pageId, "/ai/conversations"), options.signal);
+  if (!isRecord(data) || !Array.isArray(data.conversations)) throw new AiRequestError("failed");
+  const conversations = data.conversations.map(chatSummaryOf);
+  if (conversations.some((item) => item === null)) throw new AiRequestError("failed");
+  return conversations as AiChatSummary[];
+}
+
+/** 1 つの会話とその発言（古い順）。 */
+export async function getAiChat(pageId: string, conversationId: string, options: { signal?: AbortSignal } = {}): Promise<AiChat> {
+  const data = await get(pagePath(pageId, `/ai/conversations/${encodeURIComponent(conversationId)}`), options.signal);
+  if (!isRecord(data)) throw new AiRequestError("failed");
+  const conversation = chatSummaryOf(data.conversation);
+  if (!conversation || !Array.isArray(data.messages)) throw new AiRequestError("failed");
+  const messages = data.messages.map(chatMessageOf);
+  if (messages.some((item) => item === null)) throw new AiRequestError("failed");
+  return { conversation, messages: messages as AiChatMessage[] };
 }

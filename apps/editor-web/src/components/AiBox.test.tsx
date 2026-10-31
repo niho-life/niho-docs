@@ -5,7 +5,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { presetsFor } from "@/ai/presets";
-import { AI_ADOPT_REFUSED_TEXT, AI_BLOCKED_TEXT, AI_ERROR_TEXT, AI_NOTICE_MS, AI_TEXT } from "./AiBox";
+import { AI_ADOPT_REFUSED_TEXT, AI_BLOCKED_TEXT, AI_ERROR_TEXT, AI_NOTICE_MS, AI_TEXT, aiAdoptedText, aiDoneText } from "./AiBox";
 import { PageEditor, type EditablePage } from "./PageEditor";
 
 beforeAll(() => {
@@ -60,12 +60,25 @@ type Handler = (body: Record<string, unknown>, init: RequestInit) => Response | 
  * サーバーの代わり。保存（PATCH）は revision を 1 つ進める（`save` で差し替え）。提案・採用は渡した応答。
  * 既定の提案は PROPOSAL（baseRevision は送られてきた値）、既定の採用は採用したものを当てた本文で revision を進める。
  */
-function fakeServer(options: { proposal?: Handler; adoption?: Handler; save?: Handler } = {}) {
+function fakeServer(options: { proposal?: Handler; adoption?: Handler; save?: Handler; chats?: ChatHistory } = {}) {
   const calls: Call[] = [];
   let revision = 1;
-  const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+  // 会話（開いたときに読む履歴）。渡さなければ会話なし
+  const history = options.chats ?? { conversations: [], messages: {} };
+  let conversations = history.conversations;
+  const fetchMock = vi.fn(async (url: string, init: RequestInit = {}) => {
+    const method = String(init.method ?? "GET");
+    if (method === "GET") {
+      calls.push({ url, method, body: {}, signal: init.signal });
+      if (url === `/api/pages/${PAGE_ID}/ai/conversations`) return json(200, { conversations });
+      const opened = /\/ai\/conversations\/([^/]+)$/.exec(url)?.[1];
+      const found = opened ? history.messages[opened] : undefined;
+      if (!opened || !found) throw new Error(`unexpected request GET ${url}`);
+      const summary = conversations.find((item) => item.id === opened) ?? { id: opened, updatedAt: UPDATED_AT, messages: found.length, lastText: null };
+      return json(200, { conversation: summary, messages: found });
+    }
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-    calls.push({ url, method: String(init.method), body, signal: init.signal });
+    calls.push({ url, method, body, signal: init.signal });
     if (url === `/api/pages/${PAGE_ID}` && init.method === "PATCH") {
       if (options.save) return options.save(body, init);
       revision = (body.baseRevision as number) + 1;
@@ -73,12 +86,17 @@ function fakeServer(options: { proposal?: Handler; adoption?: Handler; save?: Ha
     }
     if (url === `/api/pages/${PAGE_ID}/ai/proposals`) {
       if (options.proposal) return options.proposal(body, init);
-      return json(200, { proposal: { ...PROPOSAL, baseRevision: body.baseRevision }, usage: USAGE });
+      const id = typeof body.conversationId === "string" ? body.conversationId : CONVERSATION_ID;
+      if (!conversations.some((item) => item.id === id)) conversations = [{ id, updatedAt: UPDATED_AT, messages: 2, lastText: null }, ...conversations];
+      return json(200, { proposal: { ...PROPOSAL, baseRevision: body.baseRevision }, usage: USAGE, conversation: { id, messageId: MESSAGE_ID } });
     }
     if (url === `/api/pages/${PAGE_ID}/ai/adoptions`) {
       if (options.adoption) return options.adoption(body, init);
       revision = (body.baseRevision as number) + 1;
-      return json(200, { page: { id: PAGE_ID, title: "合成の題名", blocks: ADOPTED, revision, updatedAt: UPDATED_AT } });
+      return json(200, {
+        page: { id: PAGE_ID, title: "合成の題名", blocks: ADOPTED, revision, updatedAt: UPDATED_AT },
+        adopted: typeof body.messageId === "string" ? { messageId: body.messageId, version: 7 } : null,
+      });
     }
     throw new Error(`unexpected request ${init.method} ${url}`);
   });
@@ -88,6 +106,27 @@ function fakeServer(options: { proposal?: Handler; adoption?: Handler; save?: Ha
     proposals: () => calls.filter((call) => call.url.endsWith("/ai/proposals")),
     adoptions: () => calls.filter((call) => call.url.endsWith("/ai/adoptions")),
     saves: () => calls.filter((call) => call.method === "PATCH"),
+    chats: () => calls.filter((call) => call.url.includes("/ai/conversations")),
+  };
+}
+
+const CONVERSATION_ID = "00000000-0000-4000-8000-0000000000c1";
+const MESSAGE_ID = "00000000-0000-4000-8000-0000000000m1".replace("m", "a");
+
+type ChatSummary = { id: string; updatedAt: string; messages: number; lastText: string | null };
+type ChatMessage = { id: string; seq: number; role: "user" | "assistant"; text: string; preset: string | null; proposal?: unknown; version: number | null };
+type ChatHistory = { conversations: ChatSummary[]; messages: Record<string, ChatMessage[]> };
+
+/** 1 回のやりとりが残った会話（採用まで済んだもの）。 */
+function savedChat(): ChatHistory {
+  return {
+    conversations: [{ id: CONVERSATION_ID, updatedAt: UPDATED_AT, messages: 2, lastText: "提案が 3 件あります" }],
+    messages: {
+      [CONVERSATION_ID]: [
+        { id: "ask-1", seq: 1, role: "user", text: "整える", preset: "tidy", version: null },
+        { id: "result-1", seq: 2, role: "assistant", text: "提案が 3 件あります", preset: null, proposal: PROPOSAL, version: 4 },
+      ],
+    },
   };
 }
 
@@ -134,6 +173,8 @@ const buttonIn = (scope: Element, text: string | RegExp) =>
   [...scope.querySelectorAll<HTMLButtonElement>("button")].find((button) => (typeof text === "string" ? button.textContent === text : text.test(button.textContent ?? "")));
 const adoptButton = () => buttonIn(dialog()!, /^反映する/)!;
 const proposalBlocks = () => [...dialog()!.querySelectorAll<HTMLElement>(".es-prop .es-blk")];
+const thread = () => dialog()!.querySelector<HTMLElement>("[data-ai-thread] [role=\"log\"]");
+const threadLines = () => [...(thread()?.querySelectorAll<HTMLElement>(".es-msg") ?? [])].map((line) => [line.classList.contains("es-msg--me") ? "me" : "ai", line.textContent]);
 const notice = () => container!.querySelector("[data-ai-notice]")!.textContent;
 
 /** ブラウザと同じく、mousedown の既定の動作（止められていなければ）でボタンにフォーカスしてから押す（jsdom はフォーカスを動かさない）。 */
@@ -255,7 +296,12 @@ describe("the AI box: asking", () => {
     expect(server.saves().map((call) => call.body.baseRevision)).toEqual([1]);
     await click(preset("整える"));
     await advance(0);
-    expect(server.calls.map((call) => `${call.method} ${call.url.replace(`/api/pages/${PAGE_ID}`, "")}`)).toEqual(["PATCH ", "POST /ai/proposals"]);
+    // 箱を開くと、保存のあとにこのページの会話を読む（履歴）。頼むのはそのあと
+    expect(server.calls.map((call) => `${call.method} ${call.url.replace(`/api/pages/${PAGE_ID}`, "")}`)).toEqual([
+      "PATCH ",
+      "GET /ai/conversations",
+      "POST /ai/proposals",
+    ]);
     expect(server.proposals()[0]!.body).toEqual({ baseRevision: 2, intent: { preset: "tidy" } });
   });
 
@@ -399,7 +445,7 @@ describe("the AI box: the proposal", () => {
     await click(adoptButton());
     await advance(0);
     expect(server.adoptions().map((call) => call.body)).toEqual([
-      { baseRevision: 1, changes: [{ index: 2, text: "三つ目です" }], inserts: [{ afterIndex: -1, kind: "paragraph", text: "要約（合成）" }] },
+      { baseRevision: 1, changes: [{ index: 2, text: "三つ目です" }], inserts: [{ afterIndex: -1, kind: "paragraph", text: "要約（合成）" }], messageId: MESSAGE_ID },
     ]);
   });
 
@@ -417,6 +463,7 @@ describe("the AI box: the proposal", () => {
           { index: 2, text: "三つ目です" },
         ],
         inserts: [{ afterIndex: -1, kind: "paragraph", text: "要約（合成）" }],
+        messageId: MESSAGE_ID,
       },
     ]);
   });
@@ -433,7 +480,7 @@ describe("the AI box: the proposal", () => {
     expect(editor.getJSON().content).toEqual(ADOPTED);
     expect(dialog()).toBeNull();
     expect(document.activeElement).toBe(entry());
-    expect(notice()).toBe(AI_TEXT.done);
+    expect(notice()).toBe(aiDoneText(7));
     expect(onSaved).toHaveBeenCalledTimes(1);
     // 載せ替えは自動保存を起こさず、Undo で採用前に戻らない
     await advance(5000);
@@ -651,5 +698,117 @@ describe("the AI box: when it cannot ask", () => {
     expect(preset("整える").disabled).toBe(true);
     expect(input().disabled).toBe(true);
     expect(server.proposals()).toEqual([]);
+  });
+});
+
+describe("the AI box: the conversation of the page", () => {
+  it("shows the saved conversation when the box opens, with the version an adoption left behind", async () => {
+    const server = fakeServer({ chats: savedChat() });
+    await renderPage();
+    await openBox();
+    await advance(0);
+    expect(threadLines()).toEqual([
+      ["me", "整える"],
+      ["ai", `提案が 3 件あります${aiAdoptedText(4)}`],
+    ]);
+    // 読むのは一覧と、その最後の会話だけ
+    expect(server.chats().map((call) => call.url.replace(`/api/pages/${PAGE_ID}`, ""))).toEqual([
+      "/ai/conversations",
+      `/ai/conversations/${CONVERSATION_ID}`,
+    ]);
+    expect(thread()!.getAttribute("aria-label")).toBe("AI との会話");
+  });
+
+  it("continues the same conversation and adds both the ask and the result to it", async () => {
+    const server = fakeServer({ chats: savedChat() });
+    await renderPage();
+    await openBox();
+    await advance(0);
+    await click(preset("整える"));
+    await advance(0);
+    expect(server.proposals()[0]!.body.conversationId).toBe(CONVERSATION_ID);
+    expect(threadLines()).toEqual([
+      ["me", "整える"],
+      ["ai", `提案が 3 件あります${aiAdoptedText(4)}`],
+      ["me", "整える"],
+      ["ai", "提案が 3 件あります"],
+    ]);
+
+    // 自由入力も、頼んだ文のまま会話に残る（提案を閉じると候補と入力欄に戻る。ページは変わらない）
+    await click(buttonIn(dialog()!.querySelector(".es-prop")!, "閉じる")!);
+    setInputValue(input(), "です・ます調にする");
+    await press(input(), "Enter");
+    await advance(0);
+    expect(server.proposals()[1]!.body.conversationId).toBe(CONVERSATION_ID);
+    expect(threadLines().slice(-2)).toEqual([
+      ["me", "です・ます調にする"],
+      ["ai", "提案が 3 件あります"],
+    ]);
+  });
+
+  it("starts a new conversation on 新しい会話にする (the saved one stays on the server)", async () => {
+    const server = fakeServer({ chats: savedChat() });
+    await renderPage();
+    await openBox();
+    await advance(0);
+    await click(buttonIn(dialog()!, AI_TEXT.fresh)!);
+    expect(thread()).toBeNull();
+    await click(preset("整える"));
+    await advance(0);
+    // 会話を指さずに頼む（サーバーが新しい会話を始める）
+    expect(server.proposals()[0]!.body.conversationId).toBeUndefined();
+    expect(threadLines()).toEqual([
+      ["me", "整える"],
+      ["ai", "提案が 3 件あります"],
+    ]);
+  });
+
+  it("asks and shows the result even when the history cannot be read", async () => {
+    const server = fakeServer({ chats: { conversations: [{ id: "missing", updatedAt: UPDATED_AT, messages: 2, lastText: null }], messages: {} } });
+    await renderPage();
+    await openBox();
+    await advance(0);
+    // 履歴が読めないことは出さない（頼めるので）
+    expect(thread()).toBeNull();
+    expect(statusText()).toBe("");
+    await click(preset("整える"));
+    await advance(0);
+    expect(proposalBlocks()).toHaveLength(3);
+    expect(server.proposals()[0]!.body.conversationId).toBeUndefined();
+  });
+
+  it("keeps the conversation when the server could not save the turn (no conversation in the answer)", async () => {
+    const server = fakeServer({
+      proposal: (body) => json(200, { proposal: { ...PROPOSAL, baseRevision: body.baseRevision }, usage: USAGE, conversation: null }),
+    });
+    await renderPage();
+    await openBox();
+    await click(preset("整える"));
+    await advance(0);
+    // 画面の会話には残る（提案は使える）。採用は会話に繋がない
+    expect(threadLines()).toEqual([
+      ["me", "整える"],
+      ["ai", "提案が 3 件あります"],
+    ]);
+    await click(buttonIn(dialog()!, "すべて採用")!);
+    await advance(0);
+    expect(server.adoptions()[0]!.body.messageId).toBeUndefined();
+    expect(notice()).toBe(AI_TEXT.done);
+  });
+
+  it("does not send on the Enter that confirms Japanese input (IME), in the conversation too", async () => {
+    const server = fakeServer({ chats: savedChat() });
+    await renderPage();
+    await openBox();
+    await advance(0);
+    setInputValue(input(), "日本語の変換中");
+    await press(input(), "Enter", { keyCode: 229 });
+    await press(input(), "Enter", { isComposing: true } as KeyboardEventInit);
+    expect(server.proposals()).toEqual([]);
+    expect(threadLines()).toHaveLength(2);
+    // 変換が終わった Enter では送る
+    await press(input(), "Enter");
+    await advance(0);
+    expect(server.proposals()).toHaveLength(1);
   });
 });

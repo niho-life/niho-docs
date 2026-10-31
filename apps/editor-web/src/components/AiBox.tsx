@@ -7,14 +7,17 @@ import type { Transaction } from "@tiptap/pm/state";
 import type { Editor } from "@tiptap/react";
 import type { PageKind, PageLang } from "@niho/editor-store";
 import { Icon, ShellProposal, type ShellProposalBlock } from "niho-docs-ui/shell";
-import { MAX_INTENT_TEXT_CHARS, presetsFor, type AiIntent } from "@/ai/presets";
+import { MAX_INTENT_TEXT_CHARS, intentLabel as intentTextOf, presetsFor, type AiIntent } from "@/ai/presets";
 import { aiScopeOf, type SelectionRange } from "@/editor/ai-scope";
 import type { AiBlockedReason, AiBridge } from "@/lib/ai-bridge";
 import {
   AiConflictError,
   AiRequestError,
   adoptAiRequest,
+  getAiChat,
+  listAiChats,
   proposeAiRequest,
+  type AiChatMessage,
   type AiErrorCode,
   type Proposal,
   type ProposalChange,
@@ -33,7 +36,19 @@ export const AI_TEXT = {
   stale: "ページを編集したので、もう一度提案を作ってください",
   done: "反映しました。履歴から戻せます",
   nearLimit: "今月の AI の使用量が上限に近づいています",
+  thread: "これまでのやりとり",
+  fresh: "新しい会話にする",
 } as const;
+
+/** 反映したあとの一言（版の番号が分かるときは番号も出す。履歴から戻すときの手がかり）。 */
+export function aiDoneText(version: number | null): string {
+  return version === null ? AI_TEXT.done : `反映しました。版 ${version} として履歴から戻せます`;
+}
+
+/** 採用した提案に添える一言（会話の履歴に出す）。 */
+export function aiAdoptedText(version: number): string {
+  return `版 ${version} として残しました`;
+}
 
 /** 頼めない理由（1 行）。 */
 export const AI_BLOCKED_TEXT: Record<AiBlockedReason | "aiUnavailable", string> = {
@@ -69,7 +84,7 @@ const GUTTER = 16;
 
 type Choice = "accept" | "keep";
 type Item = { id: string; at: number; order: number; change?: ProposalChange; insert?: ProposalInsert };
-type Result = { pageId: string; proposal: Proposal; items: Item[]; choices: Record<string, Choice> };
+type Result = { pageId: string; proposal: Proposal; items: Item[]; choices: Record<string, Choice>; messageId: string | null };
 type Busy = "thinking" | "adopting" | null;
 
 /** 変更と差し込みを本文の並び（変更の後ろにその位置の差し込み。−1 は先頭）にする。 */
@@ -78,6 +93,19 @@ function itemsOf(proposal: Proposal): Item[] {
   const inserts = proposal.inserts.map((insert, position): Item => ({ id: `i${position}`, at: insert.afterIndex, order: 1, insert }));
   // Array.prototype.sort は安定（同じ位置の差し込みは応答の順のまま）
   return [...changes, ...inserts].sort((a, b) => a.at - b.at || a.order - b.order);
+}
+
+/**
+ * 画面の会話に足す 1 回のやりとり（頼んだこと → 結果の一言）。文はサーバーが会話に残すものと同じ
+ * （開き直して読み込んでも並びと文が変わらない）。
+ */
+function turnOf(current: readonly AiChatMessage[], intent: AiIntent, result: string, messageId: string | null): AiChatMessage[] {
+  const seq = (current.at(-1)?.seq ?? 0) + 1;
+  const preset = "preset" in intent ? intent.preset : null;
+  return [
+    { id: `ask-${seq}`, seq, role: "user", text: intentTextOf(intent), preset, hasProposal: false, version: null },
+    { id: messageId ?? `result-${seq + 1}`, seq: seq + 1, role: "assistant", text: result, preset: null, hasProposal: true, version: null },
+  ];
 }
 
 function blocksOf(result: Result): ShellProposalBlock[] {
@@ -92,6 +120,9 @@ function blocksOf(result: Result): ShellProposalBlock[] {
 function isComposingKey(event: ReactKeyboardEvent): boolean {
   return event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
 }
+
+/** 会話の高さ（箱の中で読める分だけ。続きは中でスクロールする）。 */
+const THREAD_STYLE: CSSProperties = { maxHeight: 200, padding: 0, gap: 10 };
 
 const ENTRY_STYLE: CSSProperties = { height: "auto", minHeight: 0, background: "transparent", display: "flex", justifyContent: "flex-end", margin: "4px 0" };
 
@@ -241,8 +272,13 @@ function AiBox(props: {
   const [nearLimit, setNearLimit] = useState(false);
   const [text, setText] = useState("");
   const [choiceTick, setChoiceTick] = useState(0);
+  // このページの会話（開いたときに最新の会話を読み、頼むたびに続ける）
+  const [pageId, setPageId] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [thread, setThread] = useState<AiChatMessage[]>([]);
 
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const threadRef = useRef<HTMLDivElement | null>(null);
   const stopRef = useRef<HTMLButtonElement | null>(null);
   const adoptRef = useRef<HTMLButtonElement | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
@@ -274,12 +310,38 @@ function AiBox(props: {
     void bridge.prepare().then((target) => {
       if (cancelled) return;
       setPreparing(false);
-      if (!target.ok) setBlocked(target.reason);
+      if (target.ok) setPageId(target.pageId);
+      else setBlocked(target.reason);
     });
     return () => {
       cancelled = true;
     };
   }, [bridge]);
+
+  // このページの最後の会話を読んで続ける（読めなくても頼める。新しい会話として始まるだけ）
+  useEffect(() => {
+    if (!pageId) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const newest = (await listAiChats(pageId, { signal: controller.signal }))[0];
+        if (!newest) return;
+        const chat = await getAiChat(pageId, newest.id, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setConversationId(chat.conversation.id);
+        setThread(chat.messages);
+      } catch {
+        // 履歴は手がかりで、頼むのに要らない（読めない理由は出さない）
+      }
+    })();
+    return () => controller.abort();
+  }, [pageId]);
+
+  // 会話が伸びたら最後の発言まで送る
+  useLayoutEffect(() => {
+    const node = threadRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [thread]);
 
   // 本文の編集: 選んだ範囲の位置を動かし、提案を見せている間の編集なら提案を捨てる（反映すると 409 になる）
   useEffect(() => {
@@ -358,19 +420,27 @@ function AiBox(props: {
       // ここから先の編集は、提案のもとにした本文（target.revision）と食い違う
       editedRef.current = false;
       const scope = aiScopeOf(editor.state.doc, rangeRef.current);
-      const response = await proposeAiRequest(target.pageId, { baseRevision: target.revision, intent, ...(scope ? { scope } : {}) }, { signal: controller.signal });
+      const response = await proposeAiRequest(
+        target.pageId,
+        { baseRevision: target.revision, intent, ...(scope ? { scope } : {}), ...(conversationId ? { conversationId } : {}) },
+        { signal: controller.signal },
+      );
       setNearLimit(response.usage.nearLimit);
+      const items = itemsOf(response.proposal);
+      const result = items.length === 0 ? AI_TEXT.nothing : `提案が ${items.length} 件あります`;
+      // やりとりはサーバーの会話に残っている。画面の会話にも同じ 2 つの発言を足す
+      if (response.conversation) setConversationId(response.conversation.id);
+      setThread((current) => [...current, ...turnOf(current, intent, result, response.conversation?.messageId ?? null)]);
       if (editedRef.current) {
         setMessage(AI_TEXT.stale);
         return;
       }
-      const items = itemsOf(response.proposal);
       if (items.length === 0) {
         setMessage(AI_TEXT.nothing);
         return;
       }
-      setResult({ pageId: target.pageId, proposal: response.proposal, items, choices: {} });
-      setMessage(`提案が ${items.length} 件あります`);
+      setResult({ pageId: target.pageId, proposal: response.proposal, items, choices: {}, messageId: response.conversation?.messageId ?? null });
+      setMessage(result);
     } catch (error) {
       await fail(error, "propose");
     } finally {
@@ -401,13 +471,14 @@ function AiBox(props: {
     setBusy("adopting");
     setMessage(AI_TEXT.adopting);
     try {
-      const page = await adoptAiRequest(current.pageId, {
+      const { page, adopted } = await adoptAiRequest(current.pageId, {
         baseRevision: current.proposal.baseRevision,
         changes: chosen.flatMap((item) => (item.change ? [{ index: item.change.index, text: item.change.after }] : [])),
         inserts: chosen.flatMap((item) => (item.insert ? [{ afterIndex: item.insert.afterIndex, kind: item.insert.kind, text: item.insert.text }] : [])),
+        ...(current.messageId ? { messageId: current.messageId } : {}),
       });
       await bridge.replace(page, { saved: true });
-      onDone(AI_TEXT.done);
+      onDone(aiDoneText(adopted?.version ?? null));
     } catch (error) {
       await fail(error, "adopt");
     } finally {
@@ -455,6 +526,48 @@ function AiBox(props: {
         </button>
       </div>
       <div className="es-sh-body">
+        {thread.length > 0 && (
+          <div className="es-sh-sec" data-ai-thread="">
+            <h3>{AI_TEXT.thread}</h3>
+            <div ref={threadRef} className="es-thread" role="log" aria-label="AI との会話" style={THREAD_STYLE}>
+              {thread.map((message) =>
+                message.role === "user" ? (
+                  <div key={message.id} className="es-msg es-msg--me">
+                    <div className="es-bb">{message.text}</div>
+                  </div>
+                ) : (
+                  <div key={message.id} className="es-msg es-msg--ai">
+                    <span className="es-mk" aria-hidden="true">
+                      <Icon name="spark" />
+                    </span>
+                    <div className="es-bb">
+                      {message.text}
+                      {message.version !== null && (
+                        <div className="es-tag-ok" data-ai-adopted="">
+                          {aiAdoptedText(message.version)}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ),
+              )}
+            </div>
+            <div className="es-acts">
+              <button
+                type="button"
+                className="es-btn es-btn--quiet es-btn--sm"
+                disabled={busy !== null}
+                onClick={() => {
+                  // 画面からも会話からも離れる（サーバーの会話は残る。次に頼むと新しい会話になる）
+                  setConversationId(null);
+                  setThread([]);
+                }}
+              >
+                {AI_TEXT.fresh}
+              </button>
+            </div>
+          </div>
+        )}
         <div className="es-sh-sec">
           <p role="status" aria-live="polite" className="es-sh-note es-sh-hint" data-ai-status="">
             {status}
