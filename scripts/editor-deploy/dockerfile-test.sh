@@ -43,12 +43,25 @@ ci_line="$(grep -n 'npm -C apps/editor-web ci' "$dockerfile" | head -1 | cut -d:
 [[ -n "$ci_line" ]] || fail "no 'npm -C apps/editor-web ci' line in the Dockerfile"
 before="$(head -n "${ci_line:-0}" "$dockerfile")"
 
+# BuildKit reads <Dockerfile>.dockerignore in preference to the repository's .dockerignore, and this one is an
+# allowlist (`*` then `!path`). A package that is COPYed but not allowed here is simply absent from the build context:
+# the build then fails with `"/packages/x" not found`, not with ENOENT. Both lists have to name every file: dependency.
+ignore="$dockerfile.dockerignore"
+[[ -f "$ignore" ]] || fail "$ignore is missing (the build context would carry the whole repository)"
+
 while IFS= read -r path; do
   [[ -n "$path" ]] || continue
   if printf '%s' "$before" | grep -qE "^COPY ${path}(/| )"; then
     printf 'ok    %s is copied before npm ci\n' "$path"
   else
     fail "$path is a file: dependency of apps/editor-web but is not COPYed before npm ci (the image build would fail with ENOENT)"
+  fi
+  if [[ -f "$ignore" ]]; then
+    if grep -qxF "!$path" "$ignore"; then
+      printf 'ok    %s is allowed into the build context\n' "$path"
+    else
+      fail "$path is COPYed but not allowed in $(basename "$ignore") (the build would fail with \"/$path\" not found)"
+    fi
   fi
 done <<< "$needed"
 
