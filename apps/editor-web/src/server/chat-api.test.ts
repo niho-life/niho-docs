@@ -625,16 +625,26 @@ describe("POST /api/pages/{id}/ai/chat/turns (この Mac の CLI の結果)", ()
     expect(store.rows.get(page.id)!.blocks).toEqual([p("もとの本文")]);
   });
 
-  it("refuses a page outside the workspace, and says the turn stopped", async () => {
+  it("checks every pageId against the workspace itself (it does not trust what the Mac sends)", async () => {
     const store = memoryStore();
-    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
-    const other = store.add("user-b", { blocks: [p("他人の本文")] });
+    const folder = store.add("user-a", { title: "合成のフォルダ" });
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")], parent: folder.id });
+    // 他人のページ・同じ人の別の場所のページ・同じフォルダのページ（読むだけ）は、どれも書けない
+    const theirs = store.add("user-b", { blocks: [p("他人の本文")] });
+    const far = store.add("user-a", { blocks: [p("同じ人の別の場所")] });
+    const sibling = store.add("user-a", { title: "同じフォルダのページ", blocks: [p("参考の本文")], parent: folder.id });
     const chats = memoryConversations(store);
-    const response = await deviceTurn(page.id, body(other.id), deps("user-a", store, { conversations: chats }));
-    expect(response.status).toBe(200);
-    expect(store.rows.get(other.id)!.blocks).toEqual([p("他人の本文")]);
-    expect(chats.turns[0]).toMatchObject({ result: "stopped", resultCode: "write_refused" });
-    expect(chats.turns[0]!.changes).toEqual([]);
+
+    for (const target of [theirs, far, sibling]) {
+      const before = structuredClone(store.rows.get(target.id)!.blocks);
+      const response = await deviceTurn(page.id, body(target.id), deps("user-a", store, { conversations: chats }));
+      expect(response.status).toBe(200);
+      expect(store.rows.get(target.id)!.blocks, target.id).toEqual(before);
+      expect(chats.turns.at(-1)).toMatchObject({ result: "stopped", resultCode: "write_refused" });
+      expect(chats.turns.at(-1)!.changes).toEqual([]);
+    }
+    // 版も残らない（書く前に断っている）
+    expect(store.versions).toEqual([]);
   });
 
   it("answers 401, 404 and 400 before writing anything", async () => {
