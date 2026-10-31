@@ -120,16 +120,22 @@ Block は段落、見出し（2・3）、箇条書き・番号付き、引用、
 
 どちらの経路でも、**会話と結果は同じサーバーのページに載る**（会話の表と提案の API は T5）。「接続中か」と「AI がどこで動くか」は別の軸で、Mac の CLI は接続中に動かして結果をサーバーへ書く。Mac でもサーバー側の API を選べる（設定）。
 
-**CLI の往復（「文書ファイルは直接編集する」の形）。** 旧アプリでは CLI が手元の Markdown を直接書き換えていた。正本がサーバーになるので、**CLI が手元の作業コピーを直し、結果を同じ API でサーバーのページに書き戻す**：
+**CLI の往復（「文書ファイルは直接編集する」の形）。** 旧アプリでは CLI が手元の Markdown を直接書き換えていた。正本がサーバーになるので、**CLI が手元の作業コピーを直し、画面が結果を同じ API に書き戻す**。書き戻しの口は T5 の `POST /api/pages/{id}/ai/chat/turns`（本文 `{ conversationId?, input, reply, items, writes: [{ pageId, markdown, baseRevision, overwrite? }], engine }`）で、サーバーはモデルを呼ばず、受け取った結果を**サーバー側の AI チャットと同じ道**（作業場の確認 → 本文の検査 → 版を残す → 保存 → 会話に記録）に通す。版を作る口を別に生やさない。
 
-1. 開始：Mac の bridge がサーバーから本文を読み、Markdown にして一時置き場（§13）の `page/body.md` に置く（限定 AST ⇄ Markdown は `niho-docs-ui/page/markdown.ts`）。参照（親ページの本文＝背景情報、固有名詞、選んだ範囲）は `context/*.md` に置く。そのときの `revision` を控える。
-2. 実行：CLI を既存の `niho-local-ai` の `ToolPolicy::ProjectFolder { dir: 一時置き場, writable: ["page"] }` で起動する（cwd＝一時置き場。claude は Read・Edit・Write・Glob・Grep だけ、codex は `--sandbox workspace-write` の apply_patch だけ、agy はファイルの道具だけのエージェント。ほかの道具が見えたら fail closed）。CLI は `page/body.md` を**直接編集する**（旧アプリと同じ体験）。指示は標準入力で渡す。
-3. 書き戻し：終わったら `page/body.md` を読み、限定 AST に変換して**提案**としてサーバーに送る（`baseRevision` 付き）。変換できない要素（表・コード）は黙って欠けさせず、その段落を提案から外して知らせる。会話のターン（指示と返答）は会話 API に送る。
-4. 画面：Web と同じ差分の提案として出す。採用でサーバーが版を作る。**CLI が直接書き換えるのは一時置き場の中だけで、サーバーの本文は採用されるまで変わらない**（上の「AI は本文を勝手に書き換えない」をそのまま満たす）。旧アプリのように採用なしで反映したければ、「すべて採用」を既定にする設定で足りる（本文は常に版として残る）。
-5. 競合：送ったときに `baseRevision` が今の revision と違えば、サーバーは提案を**古い版に対するもの**として保存し、画面は「本文が進んでいます」と出して、もう一度実行するか部分的に採用するかを選ばせる。黙って上書きしない。
-6. 後始末：送り終えたら一時置き場を消す。書けなかったら残して「もう一度」を出す。
+1. 開始：**画面（webview）**が開いているページの本文を Markdown にし（限定 AST → Markdown は `niho-docs-ui/page/markdown.ts`）、参照（親ページの本文＝背景情報、固有名詞、選んだ範囲）と指示の文、そのときの `revision` を bridge の `ai_turn` に渡す。native はこれを一時置き場（§13）の `page/body.md`・`context/*.md`・`instructions.md` に書き、**ファイル → ページ id の対応表（manifest）**を控える。**native はサーバーの API に触らない**（鍵も token も持たない。認証は webview の側にあるものだけ）。
+2. 実行：CLI を既存の `niho-local-ai` の `ToolPolicy::ProjectFolder { dir: 一時置き場, writable: ["page"] }` で起動する（cwd＝一時置き場。claude は Read・Edit・Write・Glob・Grep だけ、codex は `--sandbox workspace-write` の apply_patch だけ、agy はファイルの道具だけのエージェント。ほかの道具が見えたら fail closed）。CLI は `page/body.md` を**直接編集する**（旧アプリと同じ体験）。指示は標準入力で渡す。進み（思考・文・道具の呼び出し）は Tauri の channel で画面へ流す。
+3. 結果：native は `page/` の下で変わったファイルを manifest で引いて `writes: [{ pageId, markdown, baseRevision }]` を組む（**CLI の文からページ id を作らない。manifest に無いファイルは捨てる**）。返答の文を `reply`、道具の呼び出しの一覧（ファイル名と成否だけ）を `items` にして画面へ返す。
+4. 書き戻し：**画面が** `POST /api/pages/{id}/ai/chat/turns` に送る。サーバーが `writes[].pageId` を作業場（開いているページとその親・サブページ）の中だけに**必ず検査**し（Mac を信用する前提にしない）、Markdown を限定 AST にして本文の検査を通し、**版を残して保存**し、会話に記録する。変換できない要素（表・コード）は黙って欠けさせず、応答で `writes[].dropped` として返して画面が知らせる。
+5. 競合：`baseRevision` が今の revision と違えば、サーバーは**書かずに 409** と今の本文を返す。画面は「本文が進んでいます」と出し、もう一度実行する（最新で作り直す）か、`overwrite: true` で「この内容で上書き」（既存の保存と同じ決まり：上書きの前に今の本文を版として残す）を選ばせる。黙って上書きしない。
+6. 後始末：サーバーが受け取ったら一時置き場を消す。受け取れなかったら残して「もう一度」を出す。
 
-**T5 との接点**（AI のレーンに頼むこと）：提案 API が `baseRevision` と出どころ（provider＝`claude-cli`／`codex-cli`／`agy-cli`／`anthropic-api`、connection、cost）を受けること。会話 API が面（Web／Mac）と provider を記録すること。`ai_usage` が cost 0 の行を持てて、上限の計算から外せること。
+チャットの経路は旧アプリの踏襲で**版を残して直接保存**する（「元に戻す」は履歴から）。差分の提案と採用（§6 の冒頭）は書式の帯の「AI」の側の作法で、チャットには使わない。旧アプリの「新しい文書を作る」は v1 の `writes` には無い（足すなら T5 と相談して `creates` を増やす）。
+
+**T5 との接点**（AI のレーンに頼むこと）：
+- `writes[]` に `baseRevision` と `overwrite?` を持ち、不一致は 409 ＋今の本文で返す（editor-store の `SaveOptions` と同じ意味）。応答に `writes[]` ごとの結果（`applied` / `rejected` と `dropped` の一覧）を入れる。
+- `engine` は短い id だけ：`cli:claude-code`・`cli:codex`・`cli:antigravity`・`api:anthropic`（鍵・端末・パス・版は入れない）。CLI が報告した実モデルは別の `model?` に。
+- `ai_messages` に `route`（`server` / `device`）と `engine` を記録し、`ai_usage` は `(owner, month, source)` で **`server` の行だけ月の上限に使う**（CLI は従量が出ないので止めない）。
+- `items` の形を T5 が決める（Mac は CLI の `ToolUse`・`ToolResult` から「ファイル名と成否」だけを入れる）。
 
 ## 7. 録音と手順
 
