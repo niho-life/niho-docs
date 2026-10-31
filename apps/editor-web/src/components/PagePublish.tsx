@@ -22,6 +22,7 @@ import { PUBLISH_MESSAGES, slugMessage } from "@/publish/messages";
  * ここは docs-ui の PublishSheet の props に写すだけ。公開の前の評価・役割・slug はサーバーがもう一度確かめる。
  *
  * - 選ぶ（発信先・範囲・あわせて・URL）たびにシートのデータを読み直す（URL は打ち終わるのを少し待つ）。
+ * - シートを開く前と、公開・更新を送る前に、エディタの保存待ちを送り終える（最後の入力を公開版に入れる）。保存できなければ送らない。
  * - 「直す」: 題名・本文の問題はシートを閉じてその欄へフォーカスを移す。言語・リード・カバー写真・カテゴリ・関連する体験の欄は
  *   editor にまだ無いので、シートは開いたまま「まだ直せない」と一言出す（条件は発信先の宣言の側で決まる）。
  * - 「発信先を追加」「接続する」は発信先の設定（`/destinations`。#41）へ移る。
@@ -151,6 +152,8 @@ export function usePagePublish(input: {
   /** 公開の状態が分かった・変わった（一覧の 2 行目へ）。 */
   onPublication: (id: string, publication: SidebarPublication | null) => void;
   onNavigate: (path: string) => void;
+  /** エディタの保存待ちを今すぐ送り、届き終わるのを待つ。全て保存できたら true。 */
+  saveFirst: () => Promise<boolean>;
 }): PagePublishUi {
   const { pageId, isArticle } = input;
   const [state, setState] = useState<State>(() => initialState(pageId));
@@ -214,9 +217,16 @@ export function usePagePublish(input: {
     if (pageId === null) return;
     clearTimers();
     patch(pageId, { view: { kind: "publish" }, error: null, loading: true });
-    void load(pageId, null).then((sheet) => {
-      if (sheet) patch(pageId, { selection: sheet.selection });
-    });
+    // 書いた直後でも、保存し終えてから読む（「更新あり」と条件を最後の入力で決める）
+    void events.current
+      .saveFirst()
+      .then((saved) => {
+        if (!saved) patch(pageId, { error: PUBLISH_MESSAGES.unsaved });
+        return load(pageId, null);
+      })
+      .then((sheet) => {
+        if (sheet) patch(pageId, { selection: sheet.selection });
+      });
   }, [pageId, load, patch]);
 
   // ⌘⇧P（Ctrl+Shift+P）で公開のシート（設計 §11）
@@ -285,6 +295,11 @@ export function usePagePublish(input: {
     if (!sheet || !selection || busy || loading || sheet.primary === null) return;
     clearTimers();
     patch(pageId, { busy: true, error: null });
+    // 最後の入力を公開版に入れる。保存できなければ送らない（前の公開版はそのまま）
+    if (!(await events.current.saveFirst())) {
+      patch(pageId, { busy: false, error: PUBLISH_MESSAGES.unsaved });
+      return;
+    }
     const result = await publishPageRequest(pageId, {
       handle: selection.handle,
       range: selection.range,

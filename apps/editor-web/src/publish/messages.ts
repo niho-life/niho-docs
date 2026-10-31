@@ -21,6 +21,8 @@ export const PUBLISH_MESSAGES = {
   rangeNotOffered: "この発信先では限定公開を選べません",
   extrasNotOffered: "この発信先では選べない「あわせて」があります",
   noField: "この項目を直す欄は、まだ editor にありません",
+  unsaved: "保存できていないので公開できません。保存の状態を確かめてから、もう一度お試しください",
+  photosUnavailable: "写真の置き場所がまだ設定されていないので、写真のあるページは公開できません",
 } as const;
 
 /** slug を使えない理由の一言（editor-publish の SlugError と slug_taken）。 */

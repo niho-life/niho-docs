@@ -317,15 +317,31 @@ describe("失敗の応答（reason → HTTP と一言）", () => {
     expect(store.dump()).toBe(before);
   });
 
-  it("写真のあるページは EDITOR_ASSET_ORIGIN が無いと公開に失敗し、あれば その origin の URL で公開版を作る", async () => {
+  it("写真のあるページは EDITOR_ASSET_ORIGIN が無いと、もう一度とは言わない失敗（422）。シートでは先に押せない。あれば その origin の URL で公開版を作る", async () => {
     const image = { type: "image", attrs: { assetId: "asset-photo-01", alt: "Boats", caption: null } };
     const photo = { id: "asset-photo-01", kind: "image", bytes: 1000, sha256: "b".repeat(64), contentType: "image/jpeg", alt: "Boats", credit: null, consent: true };
     const missing = world();
     missing.store.putPage(page(PAGE, ME, { content: [...READY, image] }));
     missing.store.putAsset(PAGE, photo);
     const before = missing.store.dump();
-    expect((await post(missing.deps, to("niho"))).status).toBe(503);
+    const refused = await post(missing.deps, to("niho"));
+    expect(refused.status).toBe(422);
+    expect(await refused.json()).toEqual({
+      error: "failed",
+      retryable: false,
+      detail: "photos_unavailable",
+      message: "写真の置き場所がまだ設定されていないので、写真のあるページは公開できません",
+    });
     expect(missing.store.dump()).toBe(before);
+    const blocked = await sheetOf(await getSheet(missing.deps, PAGE, "?handle=niho"));
+    expect(blocked.problems.map((problem) => problem.id)).toEqual(["photos-unavailable"]);
+    expect(blocked.primary).toBeNull();
+    // カバー写真だけでも同じ
+    missing.store.putPage(page(PAGE, ME, { coverAssetId: "asset-photo-01" }));
+    expect((await post(missing.deps, to("niho"))).status).toBe(422);
+    // 写真の無いページは出せる
+    missing.store.putPage(page(PAGE, ME));
+    expect((await post(missing.deps, to("niho"))).status).toBe(200);
 
     const set = world({ env: { EDITOR_ASSET_ORIGIN: "https://assets.example.com" } });
     set.store.putPage(page(PAGE, ME, { content: [...READY, image] }));

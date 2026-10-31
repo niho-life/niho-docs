@@ -8,7 +8,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageSummary } from "@niho/editor-store";
 import { EditorShell, ShellHeader, ShellSidebar, shellAccountItems, type NewPageKind } from "niho-docs-ui/shell";
 import { listPagesRequest } from "@/lib/pages-client";
-import { arrangeSidebarItems, type SidebarPage, type SidebarPublication } from "@/lib/sidebar-items";
+import { arrangeSidebarItems, type SidebarPublication } from "@/lib/sidebar-items";
 import { usePagePublish } from "./PagePublish";
 
 /** shell.css と同じ境目（これ以下は一覧・ページのどちらかを全画面で出す）。 */
@@ -45,11 +45,20 @@ export type EditorFrameApi = {
   pageSaved: (id: string) => void;
   /** 新しいページを作った。一覧の上に足す。 */
   pageCreated: (id: string, title: string) => void;
+  /** 開いているページのエディタの「今すぐ保存して待つ」（公開のシートが、開く前と送る前に使う）。返す関数で外す。 */
+  registerPageSaver: (saveNow: () => Promise<boolean>) => () => void;
 };
 
 const noop = () => undefined;
 
-const FrameContext = createContext<EditorFrameApi>({ narrow: false, pageOpened: noop, pageTitleChanged: noop, pageSaved: noop, pageCreated: noop });
+const FrameContext = createContext<EditorFrameApi>({
+  narrow: false,
+  pageOpened: noop,
+  pageTitleChanged: noop,
+  pageSaved: noop,
+  pageCreated: noop,
+  registerPageSaver: () => noop,
+});
 
 export function useEditorFrame(): EditorFrameApi {
   return useContext(FrameContext);
@@ -68,6 +77,10 @@ function subscribeNarrow(onChange: () => void): () => void {
 
 /** 一覧（読み込んだ分）と、開いているページ（一覧に無いこともある）。 */
 type ListState = { pages: PageSummary[]; next: string | null; opened: PageSummary | null };
+
+function samePublication(a: SidebarPublication | null, b: SidebarPublication | null): boolean {
+  return a === b || (a !== null && b !== null && a.dest === b.dest && a.handle === b.handle && a.range === b.range && a.stopped === b.stopped);
+}
 
 function toTop(pages: PageSummary[], page: PageSummary): PageSummary[] {
   return [page, ...pages.filter((item) => item.id !== page.id)];
@@ -92,9 +105,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
-  // 開いたページのシートが読んだ公開の状態（一覧の 2 行目。段 2 までは一覧の行に公開の状態が無いので、ここで重ねる）
-  const [publications, setPublications] = useState<Record<string, SidebarPublication | null>>({});
   const publishSaved = useRef<(id: string) => void>(() => undefined);
+  const pageSaver = useRef<(() => Promise<boolean>) | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
@@ -160,16 +172,18 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         const page: PageSummary = { id, kind: "note", title, lang: "ja", parent: null, stepStatus: null, createdAt: at, updatedAt: at, publication: null };
         setList((current) => ({ ...current, pages: toTop(current.pages, page) }));
       },
+      registerPageSaver: (saveNow) => {
+        pageSaver.current = saveNow;
+        return () => {
+          if (pageSaver.current === saveNow) pageSaver.current = null;
+        };
+      },
     }),
     [],
   );
   const frame = useMemo<EditorFrameApi>(() => ({ narrow, ...api }), [narrow, api]);
 
-  const rows = useMemo<SidebarPage[]>(
-    () => list.pages.map((page) => (page.id in publications ? { ...page, publication: publications[page.id] } : page)),
-    [list.pages, publications],
-  );
-  const items = useMemo(() => arrangeSidebarItems(rows, { now, query: search.value }), [rows, now, search.value]);
+  const items = useMemo(() => arrangeSidebarItems(list.pages, { now, query: search.value }), [list.pages, now, search.value]);
 
   const select = (id: string) => {
     if (id === currentId) setListFor(null);
@@ -205,8 +219,28 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
 
   // 公開の状態・ボタン・シートは、開いている（一覧か開いたページで分かっている）自分のページにだけ出す
   const openPage = currentId ? (list.opened?.id === currentId ? list.opened : list.pages.find((page) => page.id === currentId)) : undefined;
-  const onPublication = useCallback((id: string, publication: SidebarPublication | null) => setPublications((current) => ({ ...current, [id]: publication })), []);
-  const publishing = usePagePublish({ pageId: openPage?.id ?? null, isArticle: openPage?.kind === "article", onPublication, onNavigate: (path) => router.push(path) });
+  // シートが読んだ公開の状態で、その行の 2 行目を替える（公開・やめる・発信先を変えたあと、読み直さずに）
+  const onPublication = useCallback(
+    (id: string, publication: SidebarPublication | null) =>
+      setList((current) => {
+        const row = current.pages.find((page) => page.id === id) ?? (current.opened?.id === id ? current.opened : undefined);
+        if (!row || samePublication(row.publication, publication)) return current;
+        return {
+          ...current,
+          pages: current.pages.map((page) => (page.id === id ? { ...page, publication } : page)),
+          opened: current.opened?.id === id ? { ...current.opened, publication } : current.opened,
+        };
+      }),
+    [],
+  );
+  const saveFirst = useCallback(() => pageSaver.current?.() ?? Promise.resolve(true), []);
+  const publishing = usePagePublish({
+    pageId: openPage?.id ?? null,
+    isArticle: openPage?.kind === "article",
+    onPublication,
+    onNavigate: (path) => router.push(path),
+    saveFirst,
+  });
   useEffect(() => {
     publishSaved.current = publishing.pageSaved;
   }, [publishing.pageSaved]);

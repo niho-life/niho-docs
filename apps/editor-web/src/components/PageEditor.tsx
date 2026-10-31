@@ -53,6 +53,11 @@ export type PageEditorEvents = {
   onTitleChange?: (title: string) => void;
   /** 保存が終わった（作った・PATCH のどちらも）。 */
   onSaved?: () => void;
+  /**
+   * 「今すぐ保存して、届き終わるまで待つ」を枠へ渡す（公開の前に使う。#39）。返す関数で外す。
+   * 渡す関数は、全てサーバーにあれば true、保存できなければ（オフライン・失敗・競合・変換中）false。
+   */
+  registerSaveNow?: (saveNow: () => Promise<boolean>) => () => void;
 };
 
 /** 右上の保存状態（`conflict` は競合の帯が出ていて、自動保存を止めている）。 */
@@ -192,6 +197,7 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
     saverRef.current = saver;
     autosaveRef.current = autosave;
     keeperRef.current = keeper;
+    const unregisterSaveNow = eventsRef.current.registerSaveNow?.(() => autosave.saveNow());
 
     // タブを閉じる・隠れる瞬間。下書きの書き込みを先に起こし（終わりを待たない）、保存を keepalive で試す。
     // どちらも完了の保証は無い。閉じたあとに届かなかった分は、次に開いたときに下書きから戻す。
@@ -213,6 +219,7 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("keydown", onKeyDown);
     return () => {
+      unregisterSaveNow?.();
       window.removeEventListener("pagehide", hide);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("keydown", onKeyDown);

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
@@ -16,6 +16,10 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+/** 操作の順（エディタの保存・GET・POST）と、エディタの「今すぐ保存」の結果。 */
+const order: string[] = [];
+const editor = { saved: true };
+
 let root: Root | null = null;
 let container: HTMLElement | null = null;
 
@@ -26,6 +30,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   nav.pathname = `/p/${PAGE}`;
+  order.length = 0;
+  editor.saved = true;
 });
 
 afterEach(async () => {
@@ -107,6 +113,7 @@ function server(options: { sheets: PublishSheetDto[]; post?: Response | (() => R
   const fetchMock = vi.fn(async (url: string, init: RequestInit = {}) => {
     const method = init.method ?? "GET";
     calls.push({ method, url, body: typeof init.body === "string" ? JSON.parse(init.body) : undefined });
+    order.push(method);
     if (method === "GET") {
       const next = queue.length > 1 ? queue.shift()! : queue[0]!;
       return new Response(JSON.stringify({ sheet: next }), { status: 200, headers: { "content-type": "application/json" } });
@@ -120,12 +127,21 @@ function server(options: { sheets: PublishSheetDto[]; post?: Response | (() => R
 }
 
 function summary(): PageSummary {
-  return { id: PAGE, kind: "article", title: "Morning walk", lang: "en", parent: null, stepStatus: null, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z" };
+  return { id: PAGE, kind: "article", title: "Morning walk", lang: "en", parent: null, stepStatus: null, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", publication: null };
 }
 
 /** ページの中身の代わり（題名と本文の欄だけ）。保存を知らせるボタンも持つ。 */
 function FakePage() {
   const frame = useEditorFrame();
+  const { registerPageSaver } = frame;
+  useEffect(
+    () =>
+      registerPageSaver(async () => {
+        order.push("save");
+        return editor.saved;
+      }),
+    [registerPageSaver],
+  );
   return (
     <>
       <textarea className="page-title" aria-label="タイトル" defaultValue="Morning walk" />
@@ -208,6 +224,31 @@ describe("公開のシート", () => {
     await click(byText("button", "見る"));
     expect(open).toHaveBeenCalledWith("https://niho.life/article/morning-walk", "_blank", "noopener,noreferrer");
     expect($(".es-pubbtn")!.textContent).toBe("公開中 ▾");
+  });
+
+  it("開く前と公開を送る前に、エディタの保存待ちを送り終える（最後の入力を公開版に入れる）", async () => {
+    server({ sheets: [sheet(), sheet(), nihoPlan(), sheet({ status: "published", publication: LIVE, canStop: true })] });
+    await mount();
+    order.length = 0;
+    await click($(".es-pubbtn"));
+    expect(order).toEqual(["save", "GET"]);
+    await click(dest("NIHO"));
+    order.length = 0;
+    await click(primary());
+    expect(order.slice(0, 2)).toEqual(["save", "POST"]);
+  });
+
+  it("保存できなければ公開を送らず、一言を出す（開くときは読むだけ読んで、一言を出す）", async () => {
+    editor.saved = false;
+    const { calls } = server({ sheets: [sheet(), sheet(), nihoPlan()] });
+    await mount();
+    await click($(".es-pubbtn"));
+    expect($('[role="alert"]')!.textContent).toBe("保存できていないので公開できません。保存の状態を確かめてから、もう一度お試しください");
+    await click(dest("NIHO"));
+    await click(primary());
+    expect(calls.some((call) => call.method === "POST")).toBe(false);
+    expect($('[role="alert"]')!.textContent).toBe("保存できていないので公開できません。保存の状態を確かめてから、もう一度お試しください");
+    expect(dialog()!.getAttribute("aria-label")).toBe("公開");
   });
 
   it("公開に失敗したら、シートの足もとに 1 行（role=alert）。シートは開いたまま", async () => {

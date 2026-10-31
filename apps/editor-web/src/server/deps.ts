@@ -11,6 +11,8 @@ import {
   updateRecording,
 } from "@niho/editor-store";
 import { getAuthProvider } from "../auth";
+import { pgDraftFingerprints, pgPublishStore } from "../publish/pg-store";
+import { wirePublishPorts } from "../publish/ports";
 import { getPool, getStore } from "./db";
 import type { PagesApiDeps } from "./pages-api";
 import type { PublishApiDeps } from "./publish-api";
@@ -66,11 +68,11 @@ export const recordingDeps: RecordingsApiDeps = {
   },
 };
 
-/**
- * 公開のシート（#39）の実行時の依存。段 2 で Postgres の store（src/publish/pg-store.ts の pgPublishStore）をつなぐまでは 503。
- * つなぐときは `ports: (session) => { const pool = getPool(); return pool ? wirePublishPorts(pgPublishStore(pool), session) : null; }`。
- */
+/** 公開のシート（#39）の実行時の依存（DB の接続は要求のたびに遅延して決める。Pool は getStore と共有）。 */
 export const publishDeps: PublishApiDeps = {
   auth: () => getAuthProvider(),
-  ports: () => null,
+  ports: (session) => {
+    const pool = getPool();
+    return pool ? wirePublishPorts(pgPublishStore(pool), session, { drafts: pgDraftFingerprints(pool) }) : null;
+  },
 };
