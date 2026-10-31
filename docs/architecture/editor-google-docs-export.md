@@ -9,6 +9,11 @@
 Google の側（OAuth クライアント・同意画面・本人ごとの接続と refresh token の保管・Markdown から Google ドキュメントへの変換）は **niho-app に既にあり、本番で動いています**。
 editor はそれの 2 番目の客になるだけです。**Google Cloud のコンソールでの作業も、client secret も、refresh token を預かる表も要りません。**
 
+> **依存：この機能は niho-app #19459（app-connect の契約）が出るまで実際には使えません。** #19459 は**いま本番のログインを塞いでいるものと同じ**で
+> （`/auth/login/start` が `error=unavailable`。[editor-deploy.md](../ops/editor-deploy.md) §5）、それまで editor は誰も入れません。
+> それでもこの方式を採ります（書き出しは今すぐ要る機能ではなく、ここで token の預かりとコンソール作業を増やす見返りが小さい）。
+> **先に使いたくなったときは §7 の予備案から作れます。**
+
 ## 1. 旧版の棚卸し（何が、どこに、生きているか）
 
 | 旧版の部品 | どこ | editor から |
@@ -149,6 +154,10 @@ niho-app の API を使えない事情（API を畳む・editor を独立させ�
   Docs API（`documents.batchUpdate`）は scope が増えるので使わない。Markdown の取り込みは受け付ける MIME が明記されていないので契約にできない。
 - 二重に作らない仕掛けは `appProperties.nihoExportId` を付けて作り、再試行では `files.list` で引き当ててから作る（変換を伴う upload には Drive の事前生成 ID が使えない）。
 - サービスアカウント＋共有ドライブは採らない（鍵 1 つで全員分の文書に手が届く。文書の持ち主も保存容量も NIHO 側になる）。
+- **同意の URL を editor が開く形になるので、`validate_authorization_url` と同じ検証を必ず持たせる**
+  （`https` ／ host が `accounts.google.com` と完全一致 ／ port 443 ／ path が `/o/oauth2/` で始まる ／ 資格情報なし。旧 Mac アプリの
+  `apps/docs/src-tauri/src/google_docs.rs` が良い先例で、この PR の `src/google-docs/niho.ts` も同じ検証を持っている）。
+  **任意の URL を開かせない。** 自分で組み立てる場合も、組み立てた URL を同じ検証に通してから使う。
 
 こちらを選ぶ場合は、オーナーに Google Cloud のコンソールでの作業（同意画面・公開状態を「本番」にする・scope の追加・OAuth クライアントの作成）と client secret の投入が発生します。
 

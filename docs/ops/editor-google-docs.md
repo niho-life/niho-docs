@@ -5,6 +5,9 @@
 **Google Cloud のコンソールでの作業はありません。鍵も Secret も増えません。** editor は Google を直接呼ばず、
 NIHO が既に動かしている `https://niho.life/api/me/docs-drive/*` を本人として呼びます（OAuth クライアント・同意画面・本人ごとの接続と refresh token・Markdown からの変換は、すべて niho-app 側にあります）。
 
+> **いつ使えるようになるか：niho-app #19459 が出てからです。** #19459 は**本番のログインを塞いでいるものと同じ**なので、
+> それが出るまで editor には誰も入れず、この機能も画面から試せません（[editor-deploy.md](editor-deploy.md) §5）。
+
 ## 1. 開く前に要るもの（niho-app 側）
 
 editor 側の配備だけでは開きません。**次の 3 つは niho-app に頼むことです。**
