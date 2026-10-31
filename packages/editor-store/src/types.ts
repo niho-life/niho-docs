@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 
 /** ページの種類（見た目と初期値を決めるだけで、あとから変えられる）。設計 §3。 */
-export const PAGE_KINDS = ["note", "journal", "rec", "article", "step"] as const;
+export const PAGE_KINDS = ["note", "rec", "article", "step"] as const;
 export type PageKind = (typeof PAGE_KINDS)[number];
 
 export const PAGE_LANGS = ["ja", "en"] as const;
@@ -36,8 +36,30 @@ export type Page = {
   updatedAt: string;
 };
 
-/** 一覧の 1 行（本文は含めない）。parent はサブページを親の下に並べるため、stepStatus は「作成中」を出すため。 */
-export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "parent" | "stepStatus" | "createdAt" | "updatedAt">;
+/** 公開の発信先（#39）。exp は NIHO Experience、niho は NIHO、site は本人のサイト。 */
+export const PUBLISH_DESTS = ["exp", "niho", "site"] as const;
+export type PublishDest = (typeof PUBLISH_DESTS)[number];
+
+/** 公開の範囲。unlisted（限定公開）は NIHO の面だけ。 */
+export const PUBLISH_RANGES = ["live", "unlisted"] as const;
+export type PublishRange = (typeof PUBLISH_RANGES)[number];
+
+/** 一覧の 2 行目に出す公開の状態（公開したことが無ければ null）。stopped は公開をやめたもの。 */
+export type PagePublicationSummary = {
+  dest: PublishDest;
+  /** exp / niho（面）か、本人のサイトの接続の handle。 */
+  handle: string;
+  range: PublishRange;
+  stopped: boolean;
+};
+
+/**
+ * 一覧の 1 行（本文は含めない）。parent はサブページを親の下に並べるため、stepStatus は「作成中」を出すため、
+ * publication は 2 行目の公開先を出すため。
+ */
+export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "parent" | "stepStatus" | "createdAt" | "updatedAt"> & {
+  publication: PagePublicationSummary | null;
+};
 
 /** 一覧のひと区切り。next は続きを読むときに cursor に渡す値（続きが無ければ null）。 */
 export type PageChunk = { pages: PageSummary[]; next: string | null };

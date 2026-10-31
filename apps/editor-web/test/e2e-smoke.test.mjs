@@ -430,15 +430,23 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.ok(!(await (await fetch(`${base}/api/trash`)).json()).pages.some((item) => item.id === page.id));
     assert.equal((await fetch(`${base}/api/trash/${page.id}/restore`, { method: "POST", headers: { origin: base } })).status, 404, "not in the trash any more");
 
-    // 公開中のページは削除しない
-    await pool.query("INSERT INTO page_versions (page_id, version, blocks, reason) VALUES ($1, 1, '[]', 'publish')", [page.id]);
-    await pool.query("INSERT INTO publications (page_id, dest, slug, range, published_version) VALUES ($1, 'synthetic', $2, 'live', 1)", [page.id, `e2e-${page.id}`]);
+    // 公開中のページは削除しない（0009 の形: NIHO への公開版 1 と、それを指す公開）
+    await pool.query(
+      "INSERT INTO publication_versions (page_id, version, handle, snapshot) VALUES ($1, 1, 'niho', jsonb_build_object('id', $2::text, 'version', 1, 'dest', 'niho'))",
+      [page.id, page.id],
+    );
+    await pool.query(
+      `INSERT INTO publications (page_id, dest, handle, slug, range, extras_app, extras_news, extras_xp, version, published_at, updated_at)
+       VALUES ($1, 'niho', 'niho', $2, 'live', false, false, false, 1, clock_timestamp(), clock_timestamp())`,
+      [page.id, `e2e-${page.id}`],
+    );
     try {
       const refused = await fetch(`${base}/api/pages/${page.id}`, { method: "DELETE", headers: { origin: base } });
       assert.equal(refused.status, 409);
       assert.equal(await refused.text(), '{"error":"published"}');
       assert.ok((await listIds()).includes(page.id));
     } finally {
+      // 公開の行を消せば、after のページの削除で公開版も一緒に消える（公開版だけを消すことはできない）
       await pool.query("DELETE FROM publications WHERE page_id = $1", [page.id]);
     }
   });
