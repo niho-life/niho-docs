@@ -34,26 +34,29 @@ function subOf(page: PageSummary): ShellListItem["sub"] {
   return undefined;
 }
 
-function rowOf(page: PageSummary, now: number, child: boolean): ShellListItem {
+function rowOf(page: PageSummary, now: number, depth: 0 | 1 | 2, folder: boolean, open: boolean): ShellListItem {
   const item: ShellListItem = { id: page.id, title: page.title, when: formatWhen(page.updatedAt, now) };
-  if (child) item.child = true;
+  if (depth > 0) item.depth = depth;
+  if (folder) {
+    item.folder = true;
+    item.open = open;
+  }
   const sub = subOf(page);
   if (sub) item.sub = sub;
   return item;
 }
 
-/** 読み込んだ中でいちばん上の祖先。親を辿れなくなったところ（未読み込み・循環）で止める。循環なら null（その行は上の段に出す）。 */
-function topAncestor(page: PageSummary, byId: ReadonlyMap<string, PageSummary>): PageSummary | null {
+/** 親を辿ると自分に戻る（壊れた親子）。親を読み込んでいないところで止まるのは循環ではない。 */
+function loops(page: PageSummary, byId: ReadonlyMap<string, PageSummary>): boolean {
   const seen = new Set([page.id]);
-  let top = page;
-  while (top.parent) {
-    const parent = byId.get(top.parent);
-    if (!parent) break;
-    if (seen.has(parent.id)) return null;
+  for (let at = page; at.parent !== null; ) {
+    const parent = byId.get(at.parent);
+    if (!parent) return false;
+    if (seen.has(parent.id)) return true;
     seen.add(parent.id);
-    top = parent;
+    at = parent;
   }
-  return top;
+  return false;
 }
 
 /**
@@ -81,30 +84,75 @@ function byCreated(a: PageSummary, b: PageSummary): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
+/** 木の段の上限（editor-store の `MAX_PAGE_DEPTH` と同じ。フォルダ › ページ › 録音のサブページ）。 */
+const MAX_DEPTH = 2;
+
 /**
- * サイドバーの行。上の段は渡した順（更新順）。親（か祖先）を読み込んである行は、いちばん上の祖先の直後に作った順で少し下げて並べる。
- * 親を読み込んでいない行は上の段に出す。検索の結果は `searchRows`（サーバーの検索）で出す。
+ * サイドバーの 1 本の木（フォルダ＝子を持てるページ。docs/architecture/editor-recipes-and-folders.md §3・§4）。
+ *
+ * - 上の段は渡した順（更新順）。その中の行は作った順（手順のサブページが段の順に並ぶ）。
+ * - 親を読み込んでいない行・親子が壊れている行は上の段に出す（行が消えない）。
+ * - `collapsed` のフォルダは、中の行を出さない（`folder` の行の `open` が false になる）。
+ * - 段は 2 まで（フォルダ › ページ › 録音のサブページ）。それより深い行は出さない（サーバーもその移動を断る）。
+ * - 検索の結果は `searchRows`（サーバーの検索）で出す。木にしない。
  */
-export function arrangeSidebarItems(pages: readonly PageSummary[], options: { now: number }): ShellListItem[] {
-  const { now } = options;
+export function arrangeSidebarItems(pages: readonly PageSummary[], options: { now: number; collapsed?: ReadonlySet<string> }): ShellListItem[] {
+  const { now, collapsed } = options;
   const byId = new Map(pages.map((page) => [page.id, page]));
   const children = new Map<string, PageSummary[]>();
   const tops: PageSummary[] = [];
   for (const page of pages) {
-    const top = topAncestor(page, byId);
-    if (top === null || top.id === page.id) {
+    if (page.parent === null || !byId.has(page.parent) || loops(page, byId)) {
       tops.push(page);
       continue;
     }
-    const list = children.get(top.id) ?? [];
+    const list = children.get(page.parent) ?? [];
     list.push(page);
-    children.set(top.id, list);
+    children.set(page.parent, list);
   }
   const items: ShellListItem[] = [];
-  for (const top of tops) {
-    items.push(rowOf(top, now, false));
-    const under = (children.get(top.id) ?? []).sort(byCreated);
-    for (const child of under) items.push(rowOf(child, now, true));
-  }
+  const shown = new Set<string>();
+  const walk = (page: PageSummary, depth: 0 | 1 | 2): void => {
+    if (shown.has(page.id)) return;
+    shown.add(page.id);
+    const under = depth < MAX_DEPTH ? (children.get(page.id) ?? []).toSorted(byCreated) : [];
+    const open = under.length > 0 && collapsed?.has(page.id) !== true;
+    items.push(rowOf(page, now, depth, under.length > 0, open));
+    if (!open) return;
+    for (const child of under) walk(child, (depth + 1) as 1 | 2);
+  };
+  for (const top of tops) walk(top, 0);
   return items;
+}
+
+/**
+ * そのページを入れられるフォルダ（情報パネルの「フォルダ」の選択肢）。上の段のページだけを出し、
+ * 自分自身・自分の子孫（読み込んである分）と、入れると段が深くなりすぎるものは出さない。
+ * サーバーも同じ規則で断る（`EditorStore.movePage`。深すぎる移動は `too_deep`、自分の中は `cycle`）。
+ */
+export function folderOptions(pages: readonly PageSummary[], id: string): { id: string; title: string }[] {
+  const children = new Map<string, PageSummary[]>();
+  for (const page of pages) {
+    if (page.parent === null) continue;
+    const list = children.get(page.parent) ?? [];
+    list.push(page);
+    children.set(page.parent, list);
+  }
+  const height = (pageId: string, left = MAX_DEPTH): number => {
+    const under = left <= 0 ? [] : (children.get(pageId) ?? []);
+    return under.length === 0 ? 0 : 1 + Math.max(...under.map((child) => height(child.id, left - 1)));
+  };
+  // 入れ先は 0 の段なので、入れたページは 1 の段。その下の高さを足して 2 を超えるなら入れられない
+  if (1 + height(id) > MAX_DEPTH) return [];
+  const inside = new Set([id]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const page of pages) {
+      if (page.parent !== null && inside.has(page.parent) && !inside.has(page.id)) {
+        inside.add(page.id);
+        grew = true;
+      }
+    }
+  }
+  return pages.filter((page) => page.parent === null && !inside.has(page.id)).map((page) => ({ id: page.id, title: page.title }));
 }

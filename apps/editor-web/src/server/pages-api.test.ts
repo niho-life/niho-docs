@@ -5,6 +5,7 @@ import {
   type Block,
   type CreatePageInput,
   type DeleteResult,
+  type MovePageResult,
   type Page,
   type PageChunk,
   type PageChunkOptions,
@@ -22,7 +23,7 @@ import {
 import { stubAuthProvider } from "../auth/stub";
 import type { AuthProvider } from "../auth/types";
 import { MAX_BODY_BYTES } from "./http";
-import { createPage, deletePage, getPage, listPages, patchPage, type PagesApiDeps, type PagesStore } from "./pages-api";
+import { createPage, deletePage, getPage, listPages, movePage, patchPage, type PagesApiDeps, type PagesStore } from "./pages-api";
 import { listTrash, restoreFromTrash } from "./trash-api";
 import { getVersion, listVersions, restoreVersion } from "./versions-api";
 
@@ -121,6 +122,31 @@ function memoryStore() {
       if (accepted === null) return { status: "unrestorable" };
       snapshot(row, "restore");
       return { status: "restored", page: write(row, { blocks: accepted }) };
+    },
+    /** EditorStore と同じ約束（段は 2 まで・循環は断る・変えるのは親だけ）。段の数え方は editor-store の DB のテストで確かめる。 */
+    async movePage(owner: string, id: string, parent: string | null): Promise<MovePageResult | null> {
+      const row = visible(owner, id);
+      if (!row) return null;
+      if (parent !== null && !UUID.test(parent)) return null;
+      if (parent === id) return "cycle";
+      if (parent !== null && !visible(owner, parent)) return null;
+      const depthOf = (start: string): number => {
+        let depth = 0;
+        for (let at = visible(owner, start); at?.parent; at = visible(owner, at.parent)) depth++;
+        return depth;
+      };
+      const heightOf = (start: string): number => {
+        const children = [...rows.values()].filter((item) => item.owner === owner && !item.deleted && item.parent === start);
+        return children.length === 0 ? 0 : 1 + Math.max(...children.map((child) => heightOf(child.id)));
+      };
+      const inside = (candidate: string): boolean => {
+        for (let at = visible(owner, candidate); at; at = at.parent ? visible(owner, at.parent) : null) if (at.id === id) return true;
+        return false;
+      };
+      if (parent !== null && inside(parent)) return "cycle";
+      if ((parent === null ? -1 : depthOf(parent)) + 1 + heightOf(id) > 2) return "too_deep";
+      row.parent = parent;
+      return "moved";
     },
     async deletePage(owner: string, id: string): Promise<DeleteResult | null> {
       const row = visible(owner, id);
@@ -465,6 +491,74 @@ describe("/api/pages", () => {
       expect(response.headers.get("x-content-type-options")).toBe("nosniff");
       expect(response.headers.get("content-type")).toBeNull();
     }
+  });
+});
+
+describe("/api/pages/{id}/parent", () => {
+  const move = (id: string, parent: string | null, store: MemoryStore | null, userId: string | null = "user-a", headers?: Record<string, string>) =>
+    movePage(request("PATCH", `/api/pages/${id}/parent`, { parent }, headers), id, deps(userId, store));
+
+  it("puts a page into a folder and takes it out again, changing nothing but the parent", async () => {
+    const store = memoryStore();
+    const folder = await store.createPage("user-a", { title: "鎌倉の記事" });
+    const note = await store.createPage("user-a", { title: "取材メモ" });
+
+    const inside = await move(note.id, folder.id, store);
+    expect(inside.status).toBe(200);
+    expect(await inside.json()).toEqual({ parent: folder.id });
+    expect(store.rows.get(note.id)).toMatchObject({ parent: folder.id, revision: note.revision, updatedAt: note.updatedAt });
+
+    const outside = await move(note.id, null, store);
+    expect(outside.status).toBe(200);
+    expect(store.rows.get(note.id)?.parent).toBe(null);
+    // 一覧には両方そのまま残る
+    const list = await listPages(request("GET", "/api/pages"), deps("user-a", store));
+    expect(((await list.json()) as { pages: PageSummary[] }).pages.length).toBe(2);
+  });
+
+  it("answers 401 without a session, 403 from another origin, 503 without a database, and 400 for a body the screen could not send", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", {});
+    expect((await move(page.id, null, store, null)).status).toBe(401);
+    expect((await move(page.id, null, store, "user-a", { origin: "http://evil.test" })).status).toBe(403);
+    expect((await move(page.id, null, null)).status).toBe(503);
+    for (const body of [{}, { parent: "" }, { parent: "not-a-uuid" }, { parent: page.id, extra: 1 }, { parent: 1 }]) {
+      const response = await movePage(request("PATCH", `/api/pages/${page.id}/parent`, body), page.id, deps("user-a", store));
+      expect(response.status, JSON.stringify(body)).toBe(400);
+    }
+  });
+
+  it("answers the same 404 for another person's page, a page that is not there, and a folder that is not the person's own", async () => {
+    const store = memoryStore();
+    const mine = await store.createPage("user-a", {});
+    const theirs = await store.createPage("user-b", {});
+    const expected = await snapshot(await move(randomUUID(), null, store));
+    expect(expected.status).toBe(404);
+    expect(await snapshot(await move(theirs.id, null, store))).toEqual(expected);
+    expect(await snapshot(await move("not-a-uuid", null, store))).toEqual(expected);
+    expect(await snapshot(await move(mine.id, theirs.id, store))).toEqual(expected);
+    expect(await snapshot(await move(mine.id, randomUUID(), store))).toEqual(expected);
+  });
+
+  it("refuses a move that would make a fourth 段 with 409 too_deep, and a move into itself with 409 cycle", async () => {
+    const store = memoryStore();
+    const folder = await store.createPage("user-a", { title: "フォルダ" });
+    const note = await store.createPage("user-a", { title: "ページ" });
+    const sub = await store.createPage("user-a", { title: "サブページ" });
+    const deeper = await store.createPage("user-a", { title: "その下" });
+    expect((await move(note.id, folder.id, store)).status).toBe(200);
+    expect((await move(sub.id, note.id, store)).status).toBe(200);
+
+    const tooDeep = await move(deeper.id, sub.id, store);
+    expect(tooDeep.status).toBe(409);
+    expect(await tooDeep.json()).toEqual({ error: "too_deep" });
+    expect(store.rows.get(deeper.id)?.parent).toBe(null);
+
+    const cycle = await move(folder.id, note.id, store);
+    expect(cycle.status).toBe(409);
+    expect(await cycle.json()).toEqual({ error: "cycle" });
+    expect((await move(folder.id, folder.id, store)).status).toBe(409);
+    expect(store.rows.get(folder.id)?.parent).toBe(null);
   });
 });
 

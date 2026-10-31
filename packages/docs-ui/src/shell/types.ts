@@ -27,15 +27,22 @@ export type ShellMenuItem = {
   current?: boolean;
 };
 
-/** 一覧の1行。2行目（sub）は公開先・録音・作成中のときだけ持つ。 */
+/**
+ * 一覧の1行。2行目（sub）は公開先・録音・作成中のときだけ持つ。
+ * 木は `depth` の並びで表す（深い行は、直前の浅い行の中に入る）。段はフォルダ（0）› ページ（1）› 録音のサブページ（2）まで。
+ */
 export type ShellListItem = {
   id: string;
   /** 空なら「無題」と薄く出す。 */
   title: string;
   /** 更新の時刻（「たった今」「昨日」「10月24日」）。 */
   when: string;
-  /** 録音から作ったサブページ（親の下に少し下げる）。 */
-  child?: boolean;
+  /** 木の段。省けば 0（上の段）。 */
+  depth?: 0 | 1 | 2;
+  /** 子を持つ行（フォルダ）。開閉のボタンを出す。 */
+  folder?: boolean;
+  /** フォルダを開いているか（`folder` のときだけ見る。閉じているあいだ、呼ぶ側は中の行を渡さない）。 */
+  open?: boolean;
   sub?: { text: string; dest?: ShellDest };
 };
 

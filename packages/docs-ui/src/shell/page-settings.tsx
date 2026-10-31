@@ -17,6 +17,17 @@ export type ShellPageSettingsProps = {
   category?: { options: string[]; value: string; onPick: (value: string) => void };
   /** NIHO Experience のときの、関連する体験（最大 3）。 */
   related?: { items: { id: string; title: string; by: string }[]; max?: number; onRemove?: (id: string) => void; onAdd?: () => void };
+  /**
+   * フォルダ（フォルダ＝子を持てるふつうのページ）。`value` はいまの入れ先（上の段なら null）、`options` は入れられる
+   * フォルダ。渡さなければ節を出さない（Mac の殻など、移動を持たない画面）。
+   */
+  folder?: {
+    value: string | null;
+    options: { id: string; title: string }[];
+    /** 入れられなかったときの短い一言。 */
+    note?: string;
+    onPick: (parent: string | null) => void;
+  };
   lang: ShellLang;
   onLang?: (lang: ShellLang) => void;
   /** 言語の下に出す短い一言（変えられなかったときなど）。無ければ出さない。 */
@@ -33,7 +44,7 @@ export type ShellPageSettingsProps = {
 };
 
 /** 右のレールの「ページ設定」の中身。上のバーが状態を言うので、ここは「どこに・何が足りないか」だけを置く。 */
-export function ShellPageSettings({ destination, category, related, lang, onLang, langNote, author, info, onExportMarkdown, onExportGoogle, onDelete }: ShellPageSettingsProps) {
+export function ShellPageSettings({ destination, category, related, folder, lang, onLang, langNote, author, info, onExportMarkdown, onExportGoogle, onDelete }: ShellPageSettingsProps) {
   return (
     <div className="es-ps">
       {destination && (
@@ -106,6 +117,24 @@ export function ShellPageSettings({ destination, category, related, lang, onLang
             <Icon name="plus" />
             体験を追加
           </button>
+        </section>
+      )}
+      {folder && (
+        <section className="es-psfolder">
+          <h3>フォルダ</h3>
+          <select aria-label="フォルダ" value={folder.value ?? ""} onChange={(event) => folder.onPick(event.target.value === "" ? null : event.target.value)}>
+            <option value="">フォルダに入れない</option>
+            {folder.options.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.title || "無題"}
+              </option>
+            ))}
+          </select>
+          {folder.note && (
+            <p role="alert" className="es-upnote">
+              {folder.note}
+            </p>
+          )}
         </section>
       )}
       <section>

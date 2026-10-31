@@ -8,6 +8,8 @@ export type ShellSidebarProps = {
   items: ShellListItem[];
   currentId?: string;
   onSelect?: (id: string) => void;
+  /** フォルダの行の開閉を押した（開いているかは呼ぶ側が持ち、閉じているフォルダの中の行は渡さない）。 */
+  onToggleFolder?: (id: string) => void;
   /** ＋の右隣の「一覧をしまう」。 */
   onCollapse?: () => void;
   newMenu?: { open: boolean; onToggle: () => void; onClose: () => void; onPick: (kind: NewPageKind) => void };
@@ -15,8 +17,8 @@ export type ShellSidebarProps = {
   /** 一覧の末尾（<ul> の直後、<nav> の中）に置くもの。段階読み込みの目印など。 */
   listEnd?: ReactNode;
   me: {
+    /** 本人の名前。左下には出さず、メニューの中に出す（`shellAccountItems(…, …, name)`）。 */
     name: string;
-    caption: string;
     /** アバターの面に出す1文字（写真は持ち込まない）。 */
     initial: string;
     /** 未処理の招待の数。 */
@@ -30,22 +32,95 @@ export type ShellSidebarProps = {
   };
 };
 
-/** 本人の行のメニュー（発信先／役割とつながり／設定／ログアウト）。current に id（dest / account / settings）を渡すと、その項目に現在地を示す。 */
-export function shellAccountItems(pendingInvites = 0, current?: string): ShellMenuItem[] {
+/**
+ * 本人の行のメニュー（発信先／本人の名前（役割とつながり）／設定／ログアウト）。
+ * current に id（dest / account / settings）を渡すと、その項目に現在地を示す。
+ * `name` を渡すと「役割とつながり」の行が本人の名前になる（左下は「設定」なので、名前はここに出す）。
+ */
+export function shellAccountItems(pendingInvites = 0, current?: string, name?: string): ShellMenuItem[] {
+  const who = name?.trim();
   const items: ShellMenuItem[] = [
     { id: "dest", label: "発信先", icon: "ship" },
-    { id: "account", label: "役割とつながり", icon: "people", badge: pendingInvites > 0 ? String(pendingInvites) : undefined },
+    {
+      id: "account",
+      label: who || "役割とつながり",
+      icon: "people",
+      ...(who ? { hint: "役割とつながり" } : {}),
+      badge: pendingInvites > 0 ? String(pendingInvites) : undefined,
+    },
     { id: "settings", label: "設定", icon: "gear" },
     { id: "logout", label: "ログアウト", icon: "back" },
   ];
   return items.map((item) => (item.id === current ? { ...item, current: true } : item));
 }
 
+/** 木の 1 つの行と、その中の行。 */
+type TreeNode = { item: ShellListItem; children: TreeNode[] };
+
+/**
+ * 段（`depth`）の並びから木を組む。深い行は直前の浅い行の中に入り、段が飛んでいる並び（親を読み込んでいない行など）は
+ * 届いているところまでで受ける。検索の結果のように `depth` が無い並びは、そのまま 1 段の一覧になる。
+ */
+export function nestListItems(items: readonly ShellListItem[]): TreeNode[] {
+  const roots: TreeNode[] = [];
+  const path: TreeNode[] = [];
+  for (const item of items) {
+    const node: TreeNode = { item, children: [] };
+    path.length = Math.min(item.depth ?? 0, path.length);
+    const parent = path[path.length - 1];
+    if (parent) parent.children.push(node);
+    else roots.push(node);
+    path.push(node);
+  }
+  return roots;
+}
+
+function ShellSidebarRows({ nodes, currentId, onSelect, onToggleFolder }: { nodes: TreeNode[] } & Pick<ShellSidebarProps, "currentId" | "onSelect" | "onToggleFolder">) {
+  return (
+    <ul>
+      {nodes.map(({ item, children }) => (
+        <li key={item.id}>
+          <div className="es-dirow">
+            {item.folder && onToggleFolder && (
+              <button
+                type="button"
+                className="es-ditw"
+                aria-label={`${item.title || "無題"} の中`}
+                aria-expanded={item.open ?? false}
+                onClick={() => onToggleFolder(item.id)}
+              >
+                <span aria-hidden="true">{item.open ? "▾" : "▸"}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className={`es-di${item.id === currentId ? " es-di--on" : ""}${item.sub ? "" : " es-di--one"}`}
+              aria-current={item.id === currentId ? "page" : undefined}
+              onClick={() => onSelect?.(item.id)}
+            >
+              <span className={`es-di-t${item.title ? "" : " es-di-t--untitled"}`}>{item.title || "無題"}</span>
+              <span className="es-when">{item.when}</span>
+              {item.sub && (
+                <span className="es-di-sub">
+                  {item.sub.dest && <i className={`es-dest es-dest--${item.sub.dest}`} aria-hidden="true" />}
+                  {item.sub.text}
+                </span>
+              )}
+            </button>
+          </div>
+          {children.length > 0 && <ShellSidebarRows nodes={children} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} />}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /**
  * 左の一覧。上は検索アイコンと＋（新しいページ）だけ。絞り込み（すべて／公開中／録音）は持たない。
  * 1行は題名と時刻。2行目は公開先・録音・作成中のときだけ。下は本人の行ひとつ。
+ * 一覧は 1 本の木（フォルダ＝子を持てるページ）。段は `items` の `depth` が決め、開閉の状態は呼ぶ側が持つ。
  */
-export function ShellSidebar({ items, currentId, onSelect, onCollapse, newMenu, search, listEnd, me }: ShellSidebarProps) {
+export function ShellSidebar({ items, currentId, onSelect, onToggleFolder, onCollapse, newMenu, search, listEnd, me }: ShellSidebarProps) {
   const newButton = useRef<HTMLButtonElement | null>(null);
   const meButton = useRef<HTMLButtonElement | null>(null);
   return (
@@ -102,30 +177,11 @@ export function ShellSidebar({ items, currentId, onSelect, onCollapse, newMenu, 
         )}
       </div>
       <nav className="es-sb-list" aria-label="ページの一覧">
-        <ul>
-          {items.map((item) => (
-            <li key={item.id}>
-              <button
-                type="button"
-                className={`es-di${item.id === currentId ? " es-di--on" : ""}${item.child ? " es-di--child" : ""}${item.sub ? "" : " es-di--one"}`}
-                aria-current={item.id === currentId ? "page" : undefined}
-                onClick={() => onSelect?.(item.id)}
-              >
-                <span className={`es-di-t${item.title ? "" : " es-di-t--untitled"}`}>{item.title || "無題"}</span>
-                <span className="es-when">{item.when}</span>
-                {item.sub && (
-                  <span className="es-di-sub">
-                    {item.sub.dest && <i className={`es-dest es-dest--${item.sub.dest}`} aria-hidden="true" />}
-                    {item.sub.text}
-                  </span>
-                )}
-              </button>
-            </li>
-          ))}
-        </ul>
+        <ShellSidebarRows nodes={nestListItems(items)} currentId={currentId} onSelect={onSelect} onToggleFolder={onToggleFolder} />
         {listEnd}
       </nav>
       <div className="es-sb-foot">
+        {/* 左下は「設定」。1 人しか使わないアプリで一番良い場所を名前が占める理由がないので、名前はメニューの中に出す（#37 T9） */}
         <button
           ref={meButton}
           type="button"
@@ -138,8 +194,7 @@ export function ShellSidebar({ items, currentId, onSelect, onCollapse, newMenu, 
             {me.initial}
           </span>
           <span className="es-sb-who">
-            <b>{me.name}</b>
-            <span>{me.caption}</span>
+            <b>設定</b>
           </span>
           {me.badge ? (
             <em className="es-badge" aria-label={`未処理の招待 ${me.badge} 件`}>
