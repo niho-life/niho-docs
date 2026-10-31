@@ -648,3 +648,43 @@ describe("exportMarkdown: a large but valid body", () => {
     expect(out.length).toBeGreaterThan(260_000);
   });
 });
+
+/*
+ * ---- 箱の書き方の変種（`{ boxes: "quote" }`）----
+ * Google ドキュメントへの書き出し（src/google-docs/）は `:::note` を知らない読み手に渡すので、箱を `> ` にする。
+ * ほかの記法はまったく同じであること（変えたのは箱だけ）を、上と同じ本文で確かめる。
+ */
+describe("exportMarkdown with { boxes: 'quote' }", () => {
+  it("writes boxes as blockquotes, keeping blank lines inside the quote", () => {
+    const body = [
+      quote(h(2, text("引用の見出し")), p(text("引用の段落")), ul([p(text("引用の項目"))], [p(text("次"))]), quote(p(text("引用の中の引用")))),
+      quote(p()),
+      { type: "callout", content: [p(text("囲み"))] },
+    ];
+    expect(exportMarkdown(body, { boxes: "quote" })).toBe(
+      "> 引用の見出し\n>\n> 引用の段落\n>\n> - 引用の項目\n> - 次\n>\n> 引用の中の引用\n\n> 囲み\n",
+    );
+    // 既定（.md の書き出し）は今まで通り :::note
+    expect(exportMarkdown(body)).toBe(":::note\n引用の見出し\n\n引用の段落\n\n- 引用の項目\n- 次\n\n引用の中の引用\n:::\n\n:::note\n囲み\n:::\n");
+    expect(exportMarkdown(body, { boxes: "note" })).toBe(exportMarkdown(body));
+  });
+
+  it("changes nothing outside boxes", () => {
+    const body = [
+      h(2, text("見出し")),
+      h(3, text("小見出し")),
+      p(text("段落と"), { type: "text", text: "太字", marks: [{ type: "bold" }] }),
+      ul([p(text("項目"))]),
+      ol([p(text("番号"))]),
+      p({ type: "text", text: "リンク", marks: [{ type: "link", attrs: { href: "https://example.com/a" } }] }),
+      { type: "horizontalRule" },
+      { type: "image", attrs: { src: "https://example.com/a.png" } },
+    ];
+    expect(exportMarkdown(body, { boxes: "quote" })).toBe(exportMarkdown(body));
+  });
+
+  it("writes an empty body as an empty string in both styles", () => {
+    expect(exportMarkdown([], { boxes: "quote" })).toBe("");
+    expect(exportMarkdown([quote(p())], { boxes: "quote" })).toBe("");
+  });
+});
