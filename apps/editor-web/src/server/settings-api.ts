@@ -35,8 +35,12 @@ export type SettingsApiDeps = {
   env?: Readonly<Record<string, string | undefined>>;
 };
 
-/** 画面に出す 1 つの手順。`isDefault` は既定の 3 つのどれか、`modified` は既定に手を入れているか（戻せる）。 */
-export type SettingsRecipeDto = RecipeDef & { isDefault: boolean; modified: boolean };
+/**
+ * 画面に出す 1 つの手順。`isDefault` は既定の 3 つのどれか、`modified` は既定に手を入れているか（戻せる）。
+ * `defaults` は既定の手順の元の定義（既定でない手順は null）。「既定に戻す」は、この値で置き換えた一覧を送る
+ * （既定の手順を一覧から外すのではない。PATCH は既定の 3 つが揃っていることを求める）。
+ */
+export type SettingsRecipeDto = RecipeDef & { isDefault: boolean; modified: boolean; defaults: Omit<RecipeDef, "id"> | null };
 
 export type SettingsDto = {
   aiLang: SettingsAiLang;
@@ -60,7 +64,12 @@ export function settingsDto(settings: EditorSettings): SettingsDto {
     glossary: settings.glossary,
     recipes: recipesOf(settings.recipes).map((recipe) => {
       const base = findRecipeIn(DEFAULT_RECIPES, recipe.id);
-      return { ...recipe, isDefault: base !== undefined, modified: base !== undefined && !sameRecipe(recipe, base) };
+      return {
+        ...recipe,
+        isDefault: base !== undefined,
+        modified: base !== undefined && !sameRecipe(recipe, base),
+        defaults: base ? { name: base.name, guide: base.guide, steps: base.steps.map((step) => ({ ...step })) } : null,
+      };
     }),
     limits: SETTINGS_LIMITS,
   };

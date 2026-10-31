@@ -123,6 +123,25 @@ describe("PATCH /api/settings", () => {
     expect(store.rows.size).toBe(0);
   });
 
+  it("hands the screen the default definition of every default 手順, so that 既定に戻す can send it back", async () => {
+    const store = memoryStore();
+    const d = deps(OWNER, store);
+    const before = await settingsOf(await read(d));
+    for (const recipe of before.recipes) {
+      expect(recipe.defaults, recipe.id).toEqual({ name: recipe.name, guide: recipe.guide, steps: recipe.steps });
+    }
+
+    // 1 つに手を入れてから、応答の `defaults` で置き換えて送ると、保存した写しが消えて既定に戻る
+    const edited = effective(before).map((recipe) => (recipe.id === "tpl-2" ? { ...recipe, name: "議事録（短め）" } : recipe));
+    const saved = await settingsOf(await write({ recipes: edited }, d));
+    expect(store.rows.get(OWNER)?.recipes.map((recipe) => recipe.id)).toEqual(["tpl-2"]);
+    const reset = effective(saved).map((recipe) => (recipe.id === "tpl-2" ? { id: recipe.id, ...saved.recipes[1]!.defaults! } : recipe));
+    const back = await settingsOf(await write({ recipes: reset }, d));
+    expect(back.recipes.map((recipe) => recipe.modified)).toEqual([false, false, false]);
+    expect(back.recipes[1]?.name).toBe("議事録");
+    expect(store.rows.get(OWNER)?.recipes).toEqual([]);
+  });
+
   it("keeps an edited 手順 and reports it as modified; sending the default values back clears the saved copy", async () => {
     const store = memoryStore();
     const d = deps(OWNER, store);
@@ -193,6 +212,6 @@ describe("PATCH /api/settings", () => {
   it("never hands the response a key the screen does not need", async () => {
     const dto = await settingsOf(await read(deps(OWNER, memoryStore())));
     expect(Object.keys(dto).sort()).toEqual(["aiLang", "glossary", "limits", "recipes"]);
-    expect(Object.keys(dto.recipes[0]!).sort()).toEqual(["guide", "id", "isDefault", "modified", "name", "steps"]);
+    expect(Object.keys(dto.recipes[0]!).sort()).toEqual(["defaults", "guide", "id", "isDefault", "modified", "name", "steps"]);
   });
 });

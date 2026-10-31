@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import type { EditorSettingsPatch, SettingsRecipe, SettingsTerm } from "@niho/editor-store";
-import { EditorSettingsPage, type EditorSettingsRecipe } from "niho-docs-ui/shell";
+import { formatVariants, parseVariants } from "@niho/docs-core";
+import { EditorSettingsPage, type EditorSettingsRecipe, type EditorSettingsTermDraft } from "niho-docs-ui/shell";
 import { loadAiUsage, saveSettings, type SettingsDto, type UsageSummary } from "@/lib/settings-client";
 import type { SettingsFacts } from "@/settings/facts";
 import { SETTINGS_MESSAGES } from "@/settings/messages";
@@ -36,7 +37,7 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
   const [settings, setSettings] = useState(initial);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
-  const [termsDraft, setTermsDraft] = useState<SettingsTerm[] | null>(null);
+  const [termsDraft, setTermsDraft] = useState<EditorSettingsTermDraft[] | null>(null);
   const [recipeDraft, setRecipeDraft] = useState<EditorSettingsRecipe | null>(null);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [usageNote, setUsageNote] = useState<string | null>(null);
@@ -80,10 +81,15 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
       onAiLang={(aiLang) => void apply({ aiLang })}
       glossary={settings.glossary}
       termsDraft={termsDraft}
-      onEditTerms={() => setTermsDraft(settings.glossary.map((entry) => ({ ...entry, variants: [...entry.variants] })))}
+      // 誤りやすい表記は 1 つの欄に「・」で並べて打つ（打っている間は文字列のまま。配列にするのは保存のとき）
+      onEditTerms={() => setTermsDraft(settings.glossary.map((entry) => ({ ...entry, variants: formatVariants(entry.variants) })))}
       onTermsDraft={setTermsDraft}
       onCancelTerms={() => setTermsDraft(null)}
-      onSaveTerms={() => termsDraft && void apply({ glossary: termsDraft }, () => setTermsDraft(null))}
+      onSaveTerms={() => {
+        if (!termsDraft) return;
+        const glossary: SettingsTerm[] = termsDraft.map((entry) => ({ ...entry, variants: parseVariants(entry.variants) }));
+        void apply({ glossary }, () => setTermsDraft(null));
+      }}
       recipes={settings.recipes}
       recipeDraft={recipeDraft}
       onEditRecipe={(id) => {
@@ -112,8 +118,17 @@ export function SettingsView({ initial, facts }: SettingsViewProps) {
         };
         saveRecipes([...effective(settings), copy]);
       }}
-      // 既定の値はサーバーが持っている。手を入れた写しを消すと、次の読みで既定に戻る
-      onResetRecipe={(id) => saveRecipes(effective(settings).filter((entry) => entry.id !== id))}
+      onResetRecipe={(id) => {
+        const recipe = recipeOf(id);
+        if (!recipe?.defaults) return;
+        // 一覧から外すのではなく、既定の定義（応答の `defaults`）で置き換えて送る
+        // （PATCH は既定の 3 つが揃っていることを求める。サーバーは既定と同じ中身の写しを保存しないので、これで既定に戻る）
+        const reset: SettingsRecipe = { id, ...recipe.defaults, steps: recipe.defaults.steps.map((step) => ({ ...step })) };
+        saveRecipes(
+          effective(settings).map((entry) => (entry.id === id ? reset : entry)),
+          () => setRecipeDraft((draft) => (draft?.id === id ? null : draft)),
+        );
+      }}
       onRemoveRecipe={(id) => {
         saveRecipes(
           effective(settings).filter((entry) => entry.id !== id),

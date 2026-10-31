@@ -27,6 +27,15 @@ const FACTS: SettingsFacts = {
 
 const STEP = { id: "k7m2q9xa", name: "文字起こし修正", instruction: "整える。" };
 
+type RecipeDefaults = NonNullable<SettingsDto["recipes"][number]["defaults"]>;
+
+/** 既定の手順 3 つの元の定義（応答の `defaults`。「既定に戻す」はこの値で置き換えた一覧を送る）。 */
+const DEFAULTS: Record<"tpl-1" | "tpl-2" | "tpl-3", RecipeDefaults> = {
+  "tpl-1": { name: "記事制作", guide: "お手本", steps: [STEP] },
+  "tpl-2": { name: "議事録", guide: "", steps: [{ id: "d9c3x7mf", name: "議事録", instruction: "" }] },
+  "tpl-3": { name: "インサイト整理", guide: "", steps: [{ id: "u3e7z6rh", name: "インサイト", instruction: "" }] },
+};
+
 // 上限の値そのものは editor-store が決める（`settings-api.test.ts` が応答と突き合わせる）。ここは形だけを合わせる
 const LIMITS: SettingsDto["limits"] = {
   glossary: 200,
@@ -45,11 +54,13 @@ function dto(patch: Partial<SettingsDto> = {}): SettingsDto {
   return {
     aiLang: "same",
     glossary: [],
-    recipes: [
-      { id: "tpl-1", name: "記事制作", guide: "お手本", steps: [STEP], isDefault: true, modified: false },
-      { id: "tpl-2", name: "議事録", guide: "", steps: [{ id: "d9c3x7mf", name: "議事録", instruction: "" }], isDefault: true, modified: false },
-      { id: "tpl-3", name: "インサイト整理", guide: "", steps: [{ id: "u3e7z6rh", name: "インサイト", instruction: "" }], isDefault: true, modified: false },
-    ],
+    recipes: (["tpl-1", "tpl-2", "tpl-3"] as const).map((id) => ({
+      id,
+      ...structuredClone(DEFAULTS[id]),
+      isDefault: true,
+      modified: false,
+      defaults: structuredClone(DEFAULTS[id]),
+    })),
     limits: LIMITS,
     ...patch,
   };
@@ -99,6 +110,7 @@ const field = (label: string) => {
   return input;
 };
 const labelFor = (input: HTMLInputElement | HTMLTextAreaElement) => [...(container?.querySelectorAll("label") ?? [])].find((item) => item.htmlFor === input.id);
+const valueOf = (label: string) => field(label).value;
 const type = async (label: string, value: string) => {
   const input = field(label);
   await act(async () => {
@@ -183,6 +195,46 @@ describe("SettingsView", () => {
     expect(container?.textContent).toContain("北鎌倉");
   });
 
+  it("lets the 誤りやすい表記 be typed one after another: the separator stays and the next word does not join the first", async () => {
+    await mount();
+    await click("固有名詞を編集");
+    await click("行を追加");
+    await type("1 行目の表記", "北鎌倉");
+    const field = "1 行目の誤りやすい表記（「・」で区切る）";
+    // 1 語 → 区切り → 続きの語を、打った順に入れる（区切りを打った時点で欄が描き直されると「・」が消えて繋がる）
+    await type(field, "北鎌");
+    expect(valueOf(field)).toBe("北鎌");
+    await type(field, "北鎌・");
+    expect(valueOf(field)).toBe("北鎌・");
+    await type(field, "北鎌・き");
+    expect(valueOf(field)).toBe("北鎌・き");
+    await type(field, "北鎌・きた鎌倉");
+    expect(valueOf(field)).toBe("北鎌・きた鎌倉");
+
+    const glossary = [{ term: "北鎌倉", reading: "", variants: ["北鎌", "きた鎌倉"], note: "" }];
+    save.mockResolvedValue({ ok: true, settings: dto({ glossary }) });
+    await click("固有名詞を保存");
+    // 配列に分けるのは保存のとき
+    expect(save).toHaveBeenCalledWith({ glossary });
+  });
+
+  it("re-opens the editor with the saved 誤りやすい表記 joined by the separator it asks for", async () => {
+    await mount(dto({ glossary: [{ term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌", "きた鎌倉"], note: "" }] }));
+    await click("固有名詞を編集");
+    expect(valueOf("1 行目の誤りやすい表記（「・」で区切る）")).toBe("北鎌・きた鎌倉");
+  });
+
+  it("drops a trailing separator and blank entries when it saves", async () => {
+    await mount();
+    await click("固有名詞を編集");
+    await click("行を追加");
+    await type("1 行目の表記", "円覚寺");
+    await type("1 行目の誤りやすい表記（「・」で区切る）", "えんがく ・ ・ 円覚 ・");
+    save.mockResolvedValue({ ok: true, settings: dto() });
+    await click("固有名詞を保存");
+    expect(save.mock.calls[0]?.[0]?.glossary?.[0]?.variants).toEqual(["えんがく", "円覚"]);
+  });
+
   it("leaves the 固有名詞 alone when the edit is cancelled", async () => {
     await mount(dto({ glossary: [{ term: "円覚寺", reading: "えんがくじ", variants: [], note: "" }] }));
     await click("固有名詞を編集");
@@ -215,7 +267,10 @@ describe("SettingsView", () => {
   it("duplicates a default 手順 with fresh 段階の id, and the copy can gain a 段階", async () => {
     await mount();
     save.mockImplementation(async (patch) => {
-      const recipes = (patch.recipes ?? []).map((recipe) => ({ ...recipe, isDefault: recipe.id.startsWith("tpl-"), modified: false }));
+      const recipes = (patch.recipes ?? []).map((recipe) => {
+        const base = recipe.id in DEFAULTS ? structuredClone(DEFAULTS[recipe.id as keyof typeof DEFAULTS]) : null;
+        return { ...recipe, isDefault: base !== null, modified: false, defaults: base };
+      });
       return { ok: true, settings: dto({ recipes }) };
     });
     await click("記事制作を複製");
@@ -237,7 +292,10 @@ describe("SettingsView", () => {
   it("adds a 手順 and opens it for editing, and removes one by leaving it out", async () => {
     await mount();
     save.mockImplementation(async (patch) => {
-      const recipes = (patch.recipes ?? []).map((recipe) => ({ ...recipe, isDefault: recipe.id.startsWith("tpl-"), modified: false }));
+      const recipes = (patch.recipes ?? []).map((recipe) => {
+        const base = recipe.id in DEFAULTS ? structuredClone(DEFAULTS[recipe.id as keyof typeof DEFAULTS]) : null;
+        return { ...recipe, isDefault: base !== null, modified: false, defaults: base };
+      });
       return { ok: true, settings: dto({ recipes }) };
     });
     await click("手順を追加");
@@ -249,14 +307,38 @@ describe("SettingsView", () => {
     expect(save.mock.calls[1]?.[0]?.recipes?.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3"]);
   });
 
-  it("offers 既定に戻す only for a default 手順 that was changed, and sends the list without it", async () => {
+  it("offers 既定に戻す only for a default 手順 that was changed, and sends the default definition back (never a list missing a default)", async () => {
     const modified = dto();
-    modified.recipes[1] = { ...modified.recipes[1]!, name: "議事録（短め）", modified: true };
+    modified.recipes[1] = {
+      ...modified.recipes[1]!,
+      name: "議事録（短め）",
+      guide: "短く",
+      steps: [{ id: "d9c3x7mf", name: "要点", instruction: "要点だけ。" }],
+      modified: true,
+    };
     await mount(modified);
     expect(button("記事制作を既定に戻す")).toBeUndefined();
     save.mockResolvedValue({ ok: true, settings: dto() });
     await click("議事録（短め）を既定に戻す");
-    expect(save.mock.calls[0]?.[0]?.recipes?.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-3"]);
+    const sent = save.mock.calls[0]?.[0]?.recipes;
+    // PATCH は既定の 3 つが揃っていることを求める（外すと 400 になる）
+    expect(sent?.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3"]);
+    // 戻した手順は、応答の `defaults` と同じ中身で送る（サーバーは既定と同じ写しを保存しないので、既定に戻る）
+    expect(sent?.[1]).toEqual({ id: "tpl-2", ...DEFAULTS["tpl-2"] });
+    expect(status()).toBe(SETTINGS_MESSAGES.saved);
+  });
+
+  it("closes the editor when the 手順 being edited is reset", async () => {
+    const modified = dto();
+    modified.recipes[1] = { ...modified.recipes[1]!, name: "議事録（短め）", modified: true };
+    await mount(modified);
+    save.mockResolvedValue({ ok: true, settings: dto() });
+    await click("議事録（短め）を編集");
+    expect(field("手順の名前").value).toBe("議事録（短め）");
+    // 編集を開いたままだとその行の「既定に戻す」は隠れるので、やめてから戻す
+    await click("議事録（短め）の編集をやめる");
+    await click("議事録（短め）を既定に戻す");
+    expect(save.mock.calls[0]?.[0]?.recipes?.[1]).toEqual({ id: "tpl-2", ...DEFAULTS["tpl-2"] });
   });
 
   it("names every control and labels every field (読み上げに名前がある)", async () => {

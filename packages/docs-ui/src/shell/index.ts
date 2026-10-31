@@ -82,6 +82,7 @@ export {
   type EditorSettingsStep,
   type EditorSettingsStorage,
   type EditorSettingsTerm,
+  type EditorSettingsTermDraft,
   type EditorSettingsTranscription,
   type EditorSettingsUsage,
 } from "./editor-settings";

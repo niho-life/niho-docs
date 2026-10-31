@@ -29,6 +29,13 @@ export type EditorSettingsEngine = "deepgram" | "fake" | "off";
 export type EditorSettingsStorage = "UNSET" | "CLOUD" | "CLOSING" | "LOCAL";
 
 export type EditorSettingsTerm = { term: string; reading: string; variants: string[]; note: string };
+
+/**
+ * 編集している固有名詞の 1 行。`variants`（誤りやすい表記）は**打ったままの文字列**で、区切りの文字そのものも残る
+ * （controlled な欄なので、ここで配列にして描き直すと「・」を打った瞬間に消えて続きが前の語に繋がる）。
+ * 配列に分けるのは保存のとき（呼ぶ側。editor-web は docs-core の `parseVariants`）。
+ */
+export type EditorSettingsTermDraft = { term: string; reading: string; variants: string; note: string };
 export type EditorSettingsStep = { id: string; name: string; instruction: string };
 
 export type EditorSettingsRecipe = {
@@ -74,9 +81,9 @@ export type EditorSettingsPageProps = {
 
   glossary: EditorSettingsTerm[];
   /** 編集している行（null のときは、まとめと「編集」だけを出す）。 */
-  termsDraft: EditorSettingsTerm[] | null;
+  termsDraft: EditorSettingsTermDraft[] | null;
   onEditTerms: () => void;
-  onTermsDraft: (terms: EditorSettingsTerm[]) => void;
+  onTermsDraft: (terms: EditorSettingsTermDraft[]) => void;
   onCancelTerms: () => void;
   onSaveTerms: () => void;
 
@@ -151,18 +158,6 @@ function hours(seconds: number): string {
 /** 使用量の金額（小さい額も 0 にしない）。 */
 function usd(value: number): string {
   return `$${value > 0 && value < 0.01 ? value.toFixed(4) : value.toFixed(2)}`;
-}
-
-/** 誤りやすい表記の 1 欄（docs-core の parseVariants・formatVariants と同じ区切り）。 */
-const VARIANT_SEPARATOR = /[・、,，]/;
-function joinVariants(variants: readonly string[]): string {
-  return variants.join("・");
-}
-function splitVariants(text: string): string[] {
-  return text
-    .split(VARIANT_SEPARATOR)
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
 }
 
 export function EditorSettingsPage(props: EditorSettingsPageProps) {
@@ -326,16 +321,16 @@ function TermsEditor({
   onCancel,
   onSave,
 }: {
-  terms: EditorSettingsTerm[];
+  terms: EditorSettingsTermDraft[];
   max: number;
   busy: boolean;
-  onChange: (next: EditorSettingsTerm[]) => void;
+  onChange: (next: EditorSettingsTermDraft[]) => void;
   onCancel: () => void;
   onSave: () => void;
 }) {
   const headingId = useId();
   const busyProps = busy ? { "aria-disabled": true as const, style: BUSY } : {};
-  const at = (index: number, patch: Partial<EditorSettingsTerm>) => onChange(terms.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
+  const at = (index: number, patch: Partial<EditorSettingsTermDraft>) => onChange(terms.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
   return (
     <div style={STACK} role="group" aria-labelledby={headingId}>
       <h3 id={headingId} style={SUBHEAD}>
@@ -348,7 +343,8 @@ function TermsEditor({
           <div className="es-form">
             <ShellField label={`${index + 1} 行目の表記`} value={entry.term} onChange={(term) => at(index, { term })} />
             <ShellField label={`${index + 1} 行目のよみ`} value={entry.reading} onChange={(reading) => at(index, { reading })} />
-            <ShellField label={`${index + 1} 行目の誤りやすい表記（「・」で区切る）`} value={joinVariants(entry.variants)} onChange={(value) => at(index, { variants: splitVariants(value) })} />
+            {/* 打ったままの文字列を持つ（区切りを打った時点で配列にすると、続きが前の語に繋がる） */}
+            <ShellField label={`${index + 1} 行目の誤りやすい表記（「・」で区切る）`} value={entry.variants} onChange={(variants) => at(index, { variants })} />
             <ShellField label={`${index + 1} 行目の補足`} value={entry.note} onChange={(note) => at(index, { note })} />
           </div>
           <div style={ROW}>
@@ -360,7 +356,7 @@ function TermsEditor({
       ))}
       <div style={ROW}>
         {terms.length < max && (
-          <button type="button" className="es-btn es-btn--outline es-btn--sm" onClick={() => onChange([...terms, { term: "", reading: "", variants: [], note: "" }])}>
+          <button type="button" className="es-btn es-btn--outline es-btn--sm" onClick={() => onChange([...terms, { term: "", reading: "", variants: "", note: "" }])}>
             行を追加
           </button>
         )}

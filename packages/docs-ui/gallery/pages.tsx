@@ -13,7 +13,7 @@ import {
   type AccountLink,
   type EditorSettingsAiLang,
   type EditorSettingsRecipe,
-  type EditorSettingsTerm,
+  type EditorSettingsTermDraft,
   type SettingsAiLang,
   type SettingsEngine,
   type SettingsSaveTo,
@@ -164,17 +164,20 @@ const WEB_RECIPES: EditorSettingsRecipe[] = [
   { id: "r-talk", name: "対談", guide: "二人の声を残す。", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。" }], isDefault: false, modified: false },
 ];
 
-const WEB_TERMS: EditorSettingsTerm[] = [
+const WEB_TERMS = [
   { term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌"], note: "駅名は「北鎌倉」" },
   { term: "円覚寺", reading: "えんがくじ", variants: [], note: "" },
 ];
+
+/** 編集の下書きは、誤りやすい表記を打ったままの文字列で持つ（配列に分けるのは保存のとき）。 */
+const webTermDrafts = (): EditorSettingsTermDraft[] => WEB_TERMS.map((entry) => ({ ...entry, variants: entry.variants.join("・") }));
 
 /** editor-web の設定（#108）。開いている編集は `?terms=1` / `?recipe=tpl-1` で決める。 */
 export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: boolean; recipe?: string } }) {
   const [aiLang, setAiLang] = useState<EditorSettingsAiLang>("same");
   const [glossary, setGlossary] = useState(WEB_TERMS);
   const [recipes, setRecipes] = useState(WEB_RECIPES);
-  const [termsDraft, setTermsDraft] = useState<EditorSettingsTerm[] | null>(forced.terms ? WEB_TERMS : null);
+  const [termsDraft, setTermsDraft] = useState<EditorSettingsTermDraft[] | null>(forced.terms ? webTermDrafts() : null);
   const opened = forced.recipe ? (WEB_RECIPES.find((recipe) => recipe.id === forced.recipe) ?? null) : null;
   const [recipeDraft, setRecipeDraft] = useState<EditorSettingsRecipe | null>(opened);
   let serial = 0;
@@ -187,11 +190,13 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
         onAiLang={setAiLang}
         glossary={glossary}
         termsDraft={termsDraft}
-        onEditTerms={() => setTermsDraft(glossary.map((entry) => ({ ...entry, variants: [...entry.variants] })))}
+        onEditTerms={() => setTermsDraft(glossary.map((entry) => ({ ...entry, variants: entry.variants.join("・") })))}
         onTermsDraft={setTermsDraft}
         onCancelTerms={() => setTermsDraft(null)}
         onSaveTerms={() => {
-          if (termsDraft) setGlossary(termsDraft);
+          if (termsDraft) {
+            setGlossary(termsDraft.map((entry) => ({ ...entry, variants: entry.variants.split("・").map((part) => part.trim()).filter((part) => part.length > 0) })));
+          }
           setTermsDraft(null);
         }}
         recipes={recipes}

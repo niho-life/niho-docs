@@ -124,17 +124,24 @@ describe("EditorSettingsPage", () => {
   });
 
   it("opens the 固有名詞 editor in the page, with a labelled field per column", () => {
-    const markup = html({ termsDraft: [{ term: "北鎌倉", reading: "きたかまくら", variants: ["北鎌", "きた鎌倉"], note: "駅名" }] });
+    const markup = html({ termsDraft: [{ term: "北鎌倉", reading: "きたかまくら", variants: "北鎌・きた鎌倉", note: "駅名" }] });
     expect(markup).toContain("1 行目の表記");
     expect(markup).toContain("1 行目のよみ");
     expect(markup).toContain("1 行目の補足");
-    // 誤りやすい表記は 1 欄に「・」で並ぶ
-    expect(markup).toContain("北鎌・きた鎌倉");
+    // 誤りやすい表記は 1 欄に「・」で並ぶ（打ったままの文字列を出す）
+    expect(markup).toContain('value="北鎌・きた鎌倉"');
     expect(markup).toContain('aria-label="固有名詞を保存"');
     expect(markup).toContain('aria-label="この行を削除（1 行目）"');
     // 編集しているあいだ、まとめの「編集」は出さない
     expect(markup).not.toContain('aria-label="固有名詞を編集"');
     expect(html({ termsDraft: [] })).toContain(EDITOR_SETTINGS_TEXT.empty);
+  });
+
+  it("keeps the 誤りやすい表記 field exactly as it was typed, separator and all", () => {
+    // 区切りを打った途中・末尾の区切り・空白つきも、打ったまま出す（配列にして描き直すと「・」が消えて続きが前の語に繋がる）
+    for (const typed of ["北鎌", "北鎌・", "北鎌・き", "北鎌 ・ きた鎌倉", "・"]) {
+      expect(html({ termsDraft: [{ term: "北鎌倉", reading: "", variants: typed, note: "" }] }), typed).toContain(`value="${typed}"`);
+    }
   });
 
   it("opens the 手順 editor, and lets a default change only its words (not the number of 段階)", () => {
@@ -159,7 +166,7 @@ describe("EditorSettingsPage", () => {
   it("names every button and labels every field, in every state", () => {
     for (const patch of [
       {},
-      { termsDraft: [{ term: "", reading: "", variants: [], note: "" }] },
+      { termsDraft: [{ term: "", reading: "", variants: "", note: "" }] },
       { recipeDraft: { ...RECIPES[0]! } },
       { recipeDraft: { ...RECIPES[2]! } },
       { usage: null, usageNote: "読めません" },
