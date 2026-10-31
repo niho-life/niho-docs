@@ -73,6 +73,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:gallery": "tsc --noEmit -p gallery/tsconfig.json",
     "lint": "eslint .",
     "test": "vitest run",
     "test:browser": "playwright test",
