@@ -71,7 +71,7 @@ scripts/editor-deploy/deploy.sh            # 現在の HEAD を配備する（cl
 scripts/editor-deploy/deploy.sh --no-build # いま動いている image のまま配備し直す（Secret の新しい版を読ませる）
 ```
 
-1. Cloud Build で web と migrate の image を作る（タグは git の SHA）
+1. Cloud Build で web と migrate の image を作る（タグは git の SHA）。送るのは `git archive HEAD`、つまり **commit 済みの木だけ**（5MB ほど）。この checkout を送ると `.claude/worktrees/` の別セッションの worktree や手元の build 出力まで入って 3.4 GiB になり、送っている最中にそのファイルが消えて落ちる。`--allow-dirty` のときだけディレクトリを送り、範囲は `.gcloudignore` が決める
 2. migrate ジョブを新しい image で実行して終わるまで待つ（失敗したら配備を止める）
 3. `niho-editor` を新しい image で配備（env と Secret も毎回渡す）
 4. smoke: `/`・`/api/pages`・`/robots.txt` が `X-Robots-Tag: noindex, nofollow` を返すこと、`/api/pages` がセッションなしで 401 を返すこと（`STEPS_MODE=cloud-tasks` なら、`/api/internal/steps/run`・`/sweep` が OIDC トークンなしで 401 を返すことも）
