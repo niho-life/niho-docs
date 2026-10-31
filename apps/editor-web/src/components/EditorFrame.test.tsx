@@ -11,6 +11,13 @@ import { COPIED_NOTE_MS } from "./ShareSheet";
 import { EditorFrame, useEditorFrame, type AttachedPage, type FrameInitial } from "./EditorFrame";
 import { PageEditor } from "./PageEditor";
 
+// 公開のシートの読み込み（#39）は PagePublish.test.tsx で本物の fetch の形で確かめる。ここでは、ページを開くたびに出る読み込みが
+// fetch の呼び出しの順や回数（複製・削除・書き出しの検査）を乱さないよう、読めなかったことにする
+vi.mock("@/lib/publish-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/publish-client")>()),
+  loadPublishSheet: vi.fn(async () => ({ ok: false as const, retryable: true, message: "合成: 読み込まない" })),
+}));
+
 const nav = vi.hoisted(() => ({ pathname: "/", search: "", push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: nav.push, replace: nav.replace, refresh: nav.refresh }),
@@ -417,35 +424,6 @@ describe("EditorFrame", () => {
     expect(dialog()).toBeNull();
   });
 
-  it("the sheet shows every destination as not connected, so nothing is selectable and 公開する cannot be pressed", async () => {
-    nav.pathname = `/p/${PAGE_ID}`;
-    await mount({ pages: [page(PAGE_ID, "合成の題名")] });
-    await act(async () => buttonByText("公開")!.click());
-    const sheet = dialog()!;
-    expect(sheet.querySelectorAll('[role="radio"][aria-checked]').length).toBe(0);
-    expect(sheet.textContent).not.toContain("条件はそろっています");
-    const connect = [...sheet.querySelectorAll("button")].filter((button) => button.textContent?.includes("接続する"));
-    expect(connect.map((button) => button.querySelector("b")?.textContent)).toEqual(["NIHO Experience", "NIHO", "自分のサイト"]);
-    expect(buttonByText("公開する", sheet)?.disabled).toBe(true);
-    expect(container!.querySelector("[data-publish-notice]")?.textContent).toBe("");
-  });
-
-  it("発信先を追加 and 接続する lead to the destinations settings", async () => {
-    nav.pathname = `/p/${PAGE_ID}`;
-    await mount({ pages: [page(PAGE_ID, "合成の題名")] });
-    await act(async () => buttonByText("公開")!.click());
-    await act(async () => [...dialog()!.querySelectorAll("button")].find((button) => button.textContent?.includes("発信先を追加"))!.click());
-    expect(dialog()?.getAttribute("aria-label")).toBe("発信先を追加");
-    await act(async () => [...dialog()!.querySelectorAll("button")].find((button) => button.textContent?.includes("WordPress"))!.click());
-    expect(dialog()).toBeNull();
-    expect(nav.push).toHaveBeenLastCalledWith("/destinations");
-
-    await act(async () => buttonByText("公開")!.click());
-    await act(async () => [...dialog()!.querySelectorAll("button")].find((button) => button.textContent?.includes("接続する"))!.click());
-    expect(dialog()).toBeNull();
-    expect(nav.push).toHaveBeenCalledTimes(2);
-  });
-
   it("a page opens the publish sheet through useEditorFrame().openPublish", async () => {
     function OpenFromPage() {
       const { openPublish } = useEditorFrame();
@@ -522,7 +500,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(dot()?.classList.contains("es-st--private")).toBe(true);
     expect(tip()).toBe("自分だけ · 保存済み");
     expect(container!.querySelector(".es-dt .es-st-wrap")?.getAttribute("aria-live")).toBe("polite");
-    // 公開ボタンは枠（#43）が出す。丸は公開の状態を出さない
+    // 公開ボタンは枠（#43）が出す。公開のシートが読めていない（この suite では読み込みを無効にしている）間は、丸は「自分だけ」
     expect(container!.querySelector(".es-pubbtn")).not.toBeNull();
 
     await rerender(<FakePage page={{ ...a, status: "saving" }} />);

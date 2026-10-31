@@ -6,18 +6,18 @@ import "niho-docs-ui/styles/shell.css";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageKind, PageSummary } from "@niho/editor-store";
-import { EditorShell, ShellHeader, ShellSheet, ShellSidebar, shellAccountItems, shellPublishButton, type NewPageKind } from "niho-docs-ui/shell";
+import { EditorShell, ShellHeader, ShellSheet, ShellSidebar, shellAccountItems, type NewPageKind } from "niho-docs-ui/shell";
 import { listPagesRequest } from "@/lib/pages-client";
 import { headerStatus } from "@/lib/save-status";
 import { useShortcuts } from "@/lib/shortcuts";
-import { arrangeSidebarItems, searchRows, withoutPageTree } from "@/lib/sidebar-items";
+import { arrangeSidebarItems, searchRows, withoutPageTree, type SidebarPublication } from "@/lib/sidebar-items";
 import { usePageHistory } from "@/lib/use-page-history";
 import { usePageMenu, type AttachedPage } from "@/lib/use-page-menu";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
 import { HistorySheet } from "./HistorySheet";
-import { FramePublishSheet, PublishNotice, type FramePublishKind } from "./FramePublish";
+import { usePagePublish } from "./PagePublish";
 import { BUSY_STYLE } from "./sheet-parts";
 import { ShareSheet } from "./ShareSheet";
 
@@ -64,6 +64,8 @@ export type EditorFrameApi = {
    * 保存の状態が変わるたびに登録し直し、画面を離れたら返す関数で外す（後から登録したページは外さない）。
    */
   attachPage: (page: AttachedPage) => () => void;
+  /** 開いているページのエディタの「今すぐ保存して待つ」（公開のシートが、開く前と送る前に使う）。返す関数で外す。 */
+  registerPageSaver: (saveNow: () => Promise<boolean>) => () => void;
   /** 公開のシートを開く（ページを開いている画面だけで出る）。 */
   openPublish: () => void;
 };
@@ -76,6 +78,7 @@ const FrameContext = createContext<EditorFrameApi>({
   pageTitleChanged: noop,
   pageSaved: noop,
   pageCreated: noop,
+  registerPageSaver: () => noop,
   pageRemoved: noop,
   attachPage: () => noop,
   openPublish: noop,
@@ -104,6 +107,10 @@ type ListState = {
   /** この画面でゴミ箱へ入れたページ（検索の結果からも外す。結果はサーバーの、削除の前の答えのことがある）。 */
   gone: ReadonlySet<string>;
 };
+
+function samePublication(a: SidebarPublication | null, b: SidebarPublication | null): boolean {
+  return a === b || (a !== null && b !== null && a.dest === b.dest && a.handle === b.handle && a.range === b.range && a.stopped === b.stopped);
+}
 
 function toTop(pages: PageSummary[], page: PageSummary): PageSummary[] {
   return [page, ...pages.filter((item) => item.id !== page.id)];
@@ -198,20 +205,14 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
+  const publishSaved = useRef<(id: string) => void>(() => undefined);
+  const publishOpen = useRef<() => void>(() => undefined);
+  const pageSaver = useRef<(() => Promise<boolean>) | null>(null);
   // ページを削除するたびに増やす。検索の結果は削除の前の答えのことがあり、読み込んでいない子ページはここでは分からないので、
   // サーバーにもう一度聞く（その間も、この画面で消したと分かっているページは結果から外す）
   const [removedTick, setRemovedTick] = useState(0);
   // ⌘K で検索の入力欄へフォーカスを移す回数（開いていても移す）
   const [searchFocus, setSearchFocus] = useState(0);
-  // 公開のシート（path が変われば閉じる）と、「公開はまだ使えません」の知らせ
-  const [sheet, setSheet] = useState<FramePublishKind | null>(null);
-  const [sheetPath, setSheetPath] = useState(pathname);
-  if (sheetPath !== pathname) {
-    setSheetPath(pathname);
-    setSheet(null);
-  }
-  const [notice, setNotice] = useState(0);
-  const hideNotice = useCallback(() => setNotice(0), []);
   const frameRoot = useRef<HTMLDivElement | null>(null);
   // ⌘N で移り始めた元の path（移り終わるまで二度は押さない）
   const newFrom = useRef<string | null>(null);
@@ -284,16 +285,25 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           pages: current.pages.map((page) => (page.id === id ? { ...page, title } : page)),
           opened: current.opened?.id === id ? { ...current.opened, title } : current.opened,
         })),
-      pageSaved: (id) =>
+      pageSaved: (id) => {
         setList((current) => {
           const page = current.pages.find((item) => item.id === id) ?? (current.opened?.id === id ? current.opened : undefined);
           return page ? { ...current, pages: toTop(current.pages, { ...page, updatedAt: new Date().toISOString() }) } : current;
-        }),
+        });
+        // 公開中なら「更新あり」を確かめ直す
+        publishSaved.current(id);
+      },
       pageCreated: (id, title, kind = "note") => {
         const at = new Date().toISOString();
         // 作ったばかりのページは公開していない
         const page: PageSummary = { id, kind, title, lang: "ja", parent: null, stepStatus: null, createdAt: at, updatedAt: at, publication: null };
         setList((current) => ({ ...current, pages: toTop(current.pages, page) }));
+      },
+      registerPageSaver: (saveNow) => {
+        pageSaver.current = saveNow;
+        return () => {
+          if (pageSaver.current === saveNow) pageSaver.current = null;
+        };
       },
       pageRemoved: (id) => {
         setRemovedTick((tick) => tick + 1);
@@ -313,7 +323,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           setAttached(null);
         };
       },
-      openPublish: () => setSheet("publish"),
+      openPublish: () => publishOpen.current(),
     }),
     [],
   );
@@ -395,9 +405,38 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const recordingStart = pathname === "/p/new" && searchParams.get("from") === "recording";
   const title = currentId ? (opened?.title ?? "") : recordingStart ? "録音から" : (settings?.title ?? "");
 
-  // 公開のシートはページを開いている画面だけ（一覧・設定・新しいページ・録音からでは出さない）
-  const sheetShown = currentId ? sheet : null;
-  const { openPublish } = api;
+  // 公開の状態・ボタン・シートは、開いている（一覧か開いたページで分かっている）自分のページにだけ出す
+  const openPage = currentId ? (list.opened?.id === currentId ? list.opened : list.pages.find((page) => page.id === currentId)) : undefined;
+  // シートが読んだ公開の状態で、その行の 2 行目を替える（公開・やめる・発信先を変えたあと、読み直さずに）
+  const onPublication = useCallback(
+    (id: string, publication: SidebarPublication | null) =>
+      setList((current) => {
+        const row = current.pages.find((page) => page.id === id) ?? (current.opened?.id === id ? current.opened : undefined);
+        if (!row || samePublication(row.publication, publication)) return current;
+        return {
+          ...current,
+          pages: current.pages.map((page) => (page.id === id ? { ...page, publication } : page)),
+          opened: current.opened?.id === id ? { ...current.opened, publication } : current.opened,
+        };
+      }),
+    [],
+  );
+  const saveFirst = useCallback(() => pageSaver.current?.() ?? Promise.resolve(true), []);
+  const publishing = usePagePublish({
+    pageId: openPage?.id ?? null,
+    isArticle: openPage?.kind === "article",
+    onPublication,
+    onNavigate: (path) => router.push(path),
+    saveFirst,
+  });
+  useEffect(() => {
+    publishSaved.current = publishing.pageSaved;
+    publishOpen.current = publishing.open;
+  }, [publishing.pageSaved, publishing.open]);
+
+  // 公開のシートはページを開いている画面だけ（一覧・設定・新しいページ・録音からでは出さない）。開いているあいだは ⌘N・⌘K を効かせない
+  const sheetShown = publishing.shown;
+  const openPublish = publishing.open;
 
   const openSearch = () => {
     if (sheetShown) return;
@@ -480,8 +519,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               plain={settings !== undefined}
               showListButton={!sidebarOpen}
               onToggleList={() => (narrow ? setListFor(pathname) : setCollapsed(false))}
-              // 公開の状態は出さない（公開の配線が無い間はいつも「自分だけ」）。読み上げはこの丸の aria-live が持つ
-              status={attached ? headerStatus(attached.status) : undefined}
+              status={attached ? headerStatus(attached.status, publishing.status) : publishing.status}
               trailing={
                 <>
                   {menu.note && (
@@ -501,28 +539,13 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 </>
               }
               more={menu.more}
-              publish={currentId ? { ...shellPublishButton({ pub: null, isArticle: opened?.kind === "article" }), onClick: openPublish } : null}
+              publish={publishing.publish}
             />
           }
           overlay={
             <>
               {menu.confirm ? <DeleteConfirm {...menu.confirm} /> : share.sheet ? <ShareSheet {...share.sheet} /> : history.sheet ? <HistorySheet {...history.sheet} now={now} /> : null}
-              {sheetShown && (
-                <FramePublishSheet
-                  kind={sheetShown}
-                  onKind={setSheet}
-                  onClose={() => setSheet(null)}
-                  onUnavailable={() => {
-                    setSheet(null);
-                    setNotice((count) => count + 1);
-                  }}
-                  onDestinations={() => {
-                    setSheet(null);
-                    router.push("/destinations");
-                  }}
-                />
-              )}
-              <PublishNotice shown={notice} onHide={hideNotice} />
+              {publishing.overlay}
             </>
           }
         >

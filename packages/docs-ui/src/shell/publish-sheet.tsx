@@ -14,9 +14,23 @@ export type PublishDestOption = {
   role: string;
   /** 接続できていない発信先（本人のサイト）は「接続する ›」になり、選べない。 */
   connected: boolean;
+  /** 選べない理由の一言（いまは公開できません など）。connected が false のとき「接続する ›」の代わりに出し、押せない行にする。 */
+  note?: string;
 };
 export type PublishRange = "live" | "unlisted";
 export type PublishExtras = { app: boolean; news: boolean; xp: boolean };
+
+/** 公開のシートの URL の欄。slug は初回の公開まで変えられる（公開したあとは固定）。 */
+export type PublishSlug = {
+  /** slug の前（{host}/{path}/）。 */
+  prefix: string;
+  value: string;
+  /** 初回の公開まで true。false なら URL を見せるだけ。 */
+  editable: boolean;
+  /** 使えない理由の一言（使われています・使えない文字 など）。 */
+  error?: string | null;
+  onChange?: (value: string) => void;
+};
 
 export type PublishFormProps = {
   /** 公開中の発信先があるか。あれば見出しは「公開の設定」（更新ありなら「更新を公開」）になり、「公開をやめる」が出る。 */
@@ -37,6 +51,30 @@ export type PublishFormProps = {
   onFix: (id: string) => void;
   onPublish: () => void;
   onUnpublish?: () => void;
+  onClose: () => void;
+  /** 主ボタンの文言。省略すると current から決める（公開する／更新を公開／保存）。発信先を変えるときなどに渡す。 */
+  action?: string;
+  /** true なら主ボタンを押せない（読み込み中・送っている途中・URL が使えない・することがない）。 */
+  submitDisabled?: boolean;
+  /** URL の欄。省略すると出さない（足もとの URL だけ）。 */
+  slug?: PublishSlug;
+  /** 公開に失敗したときなどの 1 行（role="alert"）。 */
+  error?: string | null;
+};
+
+/** 「公開をやめる」の確認（PublishForm の「公開をやめる」から呼ぶ側が切り替える）。 */
+export type PublishStopProps = {
+  /** 公開をやめる発信先の名前。 */
+  dest: string;
+  /** やめたあとのこと（自分だけに戻る・URL は一覧へ転送 など）。 */
+  detail: string;
+  /** 送っている途中（「公開をやめる」を押せない）。 */
+  busy?: boolean;
+  /** やめられなかったときの 1 行（role="alert"）。 */
+  error?: string | null;
+  onConfirm: () => void;
+  /** 「やめない」。公開のシートへ戻す。 */
+  onCancel: () => void;
   onClose: () => void;
 };
 
@@ -65,15 +103,18 @@ export const SHELL_ADD_DEST_OPTIONS: AddDestOption[] = [
 export type PublishSheetProps =
   | ({ kind: "publish" } & PublishFormProps)
   | ({ kind: "done" } & PublishDoneProps)
-  | ({ kind: "addDest" } & AddDestProps);
+  | ({ kind: "addDest" } & AddDestProps)
+  | ({ kind: "stop" } & PublishStopProps);
 
 /**
- * 公開のシート（モック v6 の SHEET）。kind で 3 種: publish（どこに出すか・範囲・あわせて・足りないもの）／done（公開しました）／addDest（発信先を追加）。
+ * 公開のシート（モック v6 の SHEET）。kind で 4 種: publish（どこに出すか・範囲・あわせて・足りないもの・URL）／done（公開しました）／
+ * addDest（発信先を追加）／stop（公開をやめる確認。モックに無いので #39 で足した）。
  * 状態はすべて props。EditorShell の overlay に渡す。
  */
 export function PublishSheet(props: PublishSheetProps) {
   if (props.kind === "done") return <PublishDone {...props} />;
   if (props.kind === "addDest") return <AddDestSheet {...props} />;
+  if (props.kind === "stop") return <PublishStop {...props} />;
   return <PublishForm {...props} />;
 }
 
@@ -83,11 +124,13 @@ function PublishForm(props: PublishFormProps) {
   const extraId = useId();
   const needId = useId();
   const noteId = useId();
-  const { current, dests, picked, missing, range, extras } = props;
+  const slugId = useId();
+  const slugNoteId = useId();
+  const { current, dests, picked, missing, range, extras, slug } = props;
   const chosen = dests.find((dest) => dest.id === picked);
-  const blocked = !chosen || !chosen.connected || missing.length > 0;
+  const blocked = !chosen || !chosen.connected || missing.length > 0 || Boolean(props.submitDisabled);
   const heading = current ? (current.updated ? "更新を公開" : "公開の設定") : "公開";
-  const action = current?.updated ? "更新を公開" : current ? "保存" : "公開する";
+  const action = props.action ?? (current?.updated ? "更新を公開" : current ? "保存" : "公開する");
   const focusId = chosen && chosen.connected ? chosen.id : dests.find((dest) => dest.connected)?.id;
   return (
     <ShellSheet label="公開" onClose={props.onClose}>
@@ -123,6 +166,17 @@ function PublishForm(props: PublishFormProps) {
                   </span>
                   <span className="es-tag-ok">{dest.role}</span>
                 </button>
+              ) : dest.note ? (
+                // 選べない（宣言が読めない など）。押してもすることが無いので、ボタンにしない
+                <div key={dest.id} className={`es-dst es-dst--${dest.id} es-dst--off`}>
+                  <i aria-hidden="true" />
+                  <span>
+                    <b>{dest.label}</b>
+                    <small>{dest.who}</small>
+                    {dest.url && <small>{dest.url}</small>}
+                  </span>
+                  <span className="es-tag-no">{dest.note}</span>
+                </div>
               ) : (
                 // 名前は見えている文字そのもの（発信先・説明・URL・「接続する」）。aria-label で別の文に置き換えない（WCAG 2.5.3。#43）
                 <button key={dest.id} type="button" className={`es-dst es-dst--${dest.id}`} onClick={() => props.onConnect?.(dest.id)}>
@@ -212,8 +266,50 @@ function PublishForm(props: PublishFormProps) {
             </div>
           </div>
         )}
+        {chosen && chosen.connected && slug && (
+          <div className="es-sh-sec">
+            {slug.editable ? (
+              <>
+                <h3>
+                  <label htmlFor={slugId}>URL</label>
+                </h3>
+                <div className="es-slug">
+                  <span>{slug.prefix}</span>
+                  <input
+                    id={slugId}
+                    className="es-input"
+                    value={slug.value}
+                    spellCheck={false}
+                    autoCapitalize="none"
+                    autoComplete="off"
+                    aria-invalid={slug.error ? true : undefined}
+                    aria-describedby={slugNoteId}
+                    onChange={(event) => slug.onChange?.(event.target.value)}
+                  />
+                </div>
+                <p id={slugNoteId} className={slug.error ? "es-sh-err" : "es-sh-sub"}>
+                  {slug.error || "公開するまで変えられます"}
+                </p>
+              </>
+            ) : (
+              <>
+                <h3>URL</h3>
+                <code className="es-sh-url">
+                  {slug.prefix}
+                  {slug.value}
+                </code>
+                <p className="es-sh-sub">公開したあとは変えられません</p>
+              </>
+            )}
+          </div>
+        )}
       </div>
       <div className="es-sh-foot">
+        {props.error && (
+          <p role="alert" className="es-sh-err">
+            {props.error}
+          </p>
+        )}
         {chosen ? (
           !chosen.connected ? (
             <span id={noteId} className="es-sh-note es-sh-left">
@@ -266,6 +362,37 @@ function PublishDone({ host, url, onView, onCopy, onClose }: PublishDoneProps) {
         <button type="button" className="es-btn es-btn--quiet" onClick={onClose}>
           閉じる
         </button>
+      </div>
+    </ShellSheet>
+  );
+}
+
+/** 公開をやめる確認。最初のフォーカスは「やめない」（Enter で取り消さない）。 */
+function PublishStop({ dest, detail, busy, error, onConfirm, onCancel, onClose }: PublishStopProps) {
+  return (
+    <ShellSheet label="公開をやめる" onClose={onClose}>
+      <div className="es-sh-hd">
+        <h2>{dest} での公開をやめますか</h2>
+      </div>
+      <div className="es-sh-body">
+        <div className="es-sh-sec">
+          <p className="es-sh-text">{detail}</p>
+        </div>
+      </div>
+      <div className="es-sh-foot">
+        {error && (
+          <p role="alert" className="es-sh-err">
+            {error}
+          </p>
+        )}
+        <span className="es-sh-acts">
+          <button type="button" className="es-btn es-btn--quiet" data-autofocus="" onClick={onCancel}>
+            やめない
+          </button>
+          <button type="button" className="es-btn es-btn--primary" disabled={busy} onClick={onConfirm}>
+            公開をやめる
+          </button>
+        </span>
       </div>
     </ShellSheet>
   );

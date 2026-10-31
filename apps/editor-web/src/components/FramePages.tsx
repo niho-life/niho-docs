@@ -41,6 +41,7 @@ export function OpenPage({ summary, blocks, revision, shared = null }: { summary
       shared={shared}
       onTitleChange={(value) => frame.pageTitleChanged(id, value)}
       onSaved={() => frame.pageSaved(id)}
+      registerSaveNow={frame.registerPageSaver}
     />
   );
   // 録音ページは、文字起こしの録音ブロックが本文の上に入る（設計 §7.1）
@@ -108,6 +109,7 @@ function NewPageEditor(props: { onCreated: (id: string) => void }) {
       onSaved={() => {
         if (createdRef.current) frame.pageSaved(createdRef.current);
       }}
+      registerSaveNow={frame.registerPageSaver}
     />
   );
 }

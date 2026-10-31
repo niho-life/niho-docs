@@ -50,6 +50,8 @@ export {
   type PublishFormProps,
   type PublishRange,
   type PublishSheetProps,
+  type PublishSlug,
+  type PublishStopProps,
 } from "./publish-sheet";
 export { LoginScreen, type LoginScreenProps } from "./login";
 export { PublishPreview, type PublishPreviewDest, type PublishPreviewProps } from "./preview";

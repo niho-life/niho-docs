@@ -458,6 +458,68 @@ describe("createAutosave", () => {
     expect(saves).toHaveLength(2);
   });
 
+  it("saveNow: sends what is pending at once, waits for it, and says whether everything reached the server (#39)", async () => {
+    const { autosave, saves } = setup();
+    expect(await autosave.saveNow()).toBe(true);
+    expect(saves).toEqual([]);
+    autosave.change({ title: "a" });
+    expect(await autosave.saveNow()).toBe(true);
+    expect(saves).toEqual([{ title: "a" }]);
+    expect(autosave.hasPending()).toBe(false);
+    // 時計の保存は送らない（もう届いている）
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(saves).toHaveLength(1);
+  });
+
+  it("saveNow: waits for the save in flight, then sends what was typed during it", async () => {
+    const saves: Patch[] = [];
+    let release: () => void = () => undefined;
+    const autosave = createAutosave<Patch>({
+      save: (patch) => {
+        saves.push(patch);
+        return saves.length === 1 ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve();
+      },
+      isComposing: () => false,
+      onState: () => undefined,
+      classify,
+    });
+    autosave.change({ title: "a" });
+    await vi.advanceTimersByTimeAsync(1000);
+    autosave.change({ title: "ab" });
+    let done: boolean | null = null;
+    void autosave.saveNow().then((value) => (done = value));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(done).toBeNull();
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(done).toBe(true);
+    expect(saves).toEqual([{ title: "a" }, { title: "ab" }]);
+  });
+
+  it("saveNow: false when the save fails, while composing, or when stopped by a conflict (the change stays pending)", async () => {
+    const failing = setup({ fail: true });
+    failing.autosave.change({ title: "a" });
+    expect(await failing.autosave.saveNow()).toBe(false);
+    expect(failing.autosave.hasPending()).toBe(true);
+    failing.setFail(false);
+    expect(await failing.autosave.saveNow()).toBe(true);
+
+    let composing = true;
+    const ime = setup({ composing: () => composing });
+    ime.autosave.change({ title: "か" });
+    expect(await ime.autosave.saveNow()).toBe(false);
+    expect(ime.saves).toEqual([]);
+    composing = false;
+
+    const conflict = setup();
+    conflict.setFail(new Conflict("conflict"));
+    conflict.autosave.change({ title: "a" });
+    expect(await conflict.autosave.saveNow()).toBe(false);
+    conflict.autosave.change({ title: "ab" });
+    expect(await conflict.autosave.saveNow()).toBe(false);
+    expect(conflict.saves).toHaveLength(1);
+  });
+
   describe("settle", () => {
     it("sends what is pending at once and resolves saved once it is on the server", async () => {
       const { autosave, saves } = setup();
