@@ -11,7 +11,8 @@ import type { Block, Database, OwnerId, PageLang, PublishDest, PublishRange, Que
  * - 書き込みの関数は transaction の中の接続（withTransaction の client）に渡す。失敗は例外のまま返し、呼び出し側が戻す。
  * - 行のロック: getDraftPage({ lock }) はページの行を FOR NO KEY UPDATE で押さえる（同じページの公開・ゴミ箱を直列にする）。
  *   getPublication({ lock }) と listPublicationsByHandle({ lock }) は公開の行を FOR UPDATE で、connectionLive は接続の行を
- *   FOR SHARE で押さえる（解除と公開がすれ違わない）。
+ *   FOR SHARE で押さえる（解除と公開がすれ違わない）。getConnection({ lock }) は接続の行を FOR NO KEY UPDATE で押さえる
+ *   （鍵の作り直しを直列にする。公開の transaction とは「公開の行 → 接続の行」の順を変えない: 押さえる側は公開の行を持たない）。
  * - 鍵・token は SHA-256 の 16 進だけを受け、平文は扱わない。例外にもページの中身や鍵を入れない。
  * - 時刻は ISO 8601 の UTC（ミリ秒）の文字列で受け渡す（PublishService の時計の値）。
  */
@@ -494,10 +495,16 @@ export async function connectionLive(db: Queryable, ownerId: OwnerId, handle: st
   return row !== undefined && row.owner === ownerId && row.live;
 }
 
-/** 接続 1 つ（解除したものも含む。無ければ null）。 */
-export async function getConnection(db: Queryable, connectionId: string): Promise<SiteConnectionRow | null> {
+/**
+ * 接続 1 つ（解除したものも含む。無ければ null）。`lock` は行を FOR NO KEY UPDATE で押さえる（同じ接続の鍵の作り直しを直列にする。
+ * 待った側は、先の transaction が済んだあとの鍵を読む）。
+ */
+export async function getConnection(db: Queryable, connectionId: string, options: { lock?: boolean } = {}): Promise<SiteConnectionRow | null> {
   if (!isPageId(connectionId)) return null;
-  const result = await db.query<ConnectionDbRow>(`SELECT ${CONNECTION_COLUMNS} FROM site_connections WHERE id = $1`, [connectionId]);
+  const result = await db.query<ConnectionDbRow>(
+    `SELECT ${CONNECTION_COLUMNS} FROM site_connections WHERE id = $1${options.lock === true ? "\n      FOR NO KEY UPDATE" : ""}`,
+    [connectionId],
+  );
   const row = result.rows[0];
   return row ? toConnection(row) : null;
 }

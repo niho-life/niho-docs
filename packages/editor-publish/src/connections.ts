@@ -87,7 +87,11 @@ export interface KeyRecord {
 export interface ConnectionTx extends PublishTx {
   /** The owner's connection to `handle` exists and is not removed. */
   connectionLive(actorId: string, handle: string): Promise<boolean>;
-  getConnection(connectionId: string): Promise<ConnectionRecord | null>;
+  /**
+   * `lock` holds the row until the transaction ends, so that two transactions that lock it run one after the other and the
+   * second reads what the first committed (rotating the keys of one connection). Without it, a plain read.
+   */
+  getConnection(connectionId: string, options?: { readonly lock?: boolean }): Promise<ConnectionRecord | null>;
   /** Removed connections included. */
   getConnectionByHandle(handle: string): Promise<ConnectionRecord | null>;
   /** Removed connections included. */
@@ -501,7 +505,9 @@ export class ConnectionService {
       const now = this.ports.clock.now();
       const minted = await this.mintKey(ref.connectionId, now);
       return await this.ports.store.transaction(async (tx): Promise<RotateKeyResult> => {
-        const connection = await this.owned(tx, ref);
+        // Two rotations of one connection run one after the other: the second lists the keys the first left, so its
+        // rotation revokes the first's new key too (one active key at the end).
+        const connection = await this.owned(tx, ref, { lock: true });
         if (!connection) return NOT_FOUND;
         if (connection.removedAt !== null) return DISCONNECTED;
         let revoked = 0;
@@ -703,8 +709,8 @@ export class ConnectionService {
 
   // --- internals ---
 
-  private async owned(tx: ConnectionTx, ref: ConnectionRef): Promise<ConnectionRecord | null> {
-    const connection = await tx.getConnection(ref.connectionId);
+  private async owned(tx: ConnectionTx, ref: ConnectionRef, options: { readonly lock?: boolean } = {}): Promise<ConnectionRecord | null> {
+    const connection = await tx.getConnection(ref.connectionId, options);
     return connection !== null && connection.id === ref.connectionId && connection.ownerId === ref.actorId ? connection : null;
   }
 
