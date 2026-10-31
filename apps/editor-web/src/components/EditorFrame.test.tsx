@@ -3,7 +3,11 @@ import { act, useEffect, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
+import { IDBFactory } from "fake-indexeddb";
+import { createIndexedDbDraftStorage } from "@/lib/drafts";
 import { SAVE_STATUS_TEXT, type SaveStatus } from "@/lib/save-status";
+import { isMacPlatform } from "@/lib/use-search-shortcut";
+import { COPIED_NOTE_MS } from "./ShareSheet";
 import { EditorFrame, useEditorFrame, type AttachedPage, type FrameInitial } from "./EditorFrame";
 import { PageEditor } from "./PageEditor";
 
@@ -473,7 +477,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     return <p>合成の本文</p>;
   }
   function fakePage(id: string | null, over: Partial<AttachedPage> = {}): AttachedPage {
-    return { id, status: "saved", flush: vi.fn(async () => true), ...over };
+    return { id, status: "saved", flush: vi.fn(async () => true), revision: () => 1, reopen: vi.fn(), shared: null, setShared: vi.fn(), ...over };
   }
   function deferred<T>() {
     let resolve: (value: T) => void = () => undefined;
@@ -539,21 +543,21 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(moreButton()).toBeNull();
   });
 
-  it("opens and closes the … menu with only 書き出し (.md), 複製 and 削除, moved by the keyboard; none for a page not created yet", async () => {
+  it("opens and closes the … menu with リンクで共有, 書き出し (.md), 履歴, 複製 and 削除, moved by the keyboard; none for a page not created yet", async () => {
     await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A)} />);
     expect(moreButton()?.getAttribute("aria-expanded")).toBe("false");
     await act(async () => moreButton()!.click());
     expect(moreButton()?.getAttribute("aria-expanded")).toBe("true");
-    // 共有・履歴は次の段、Google ドキュメントは出さない
-    expect(menuItems().map((item) => item.textContent)).toEqual(["書き出し.md", "複製", "削除"]);
-    const [exportItem, duplicateItem, deleteItem] = menuItems();
-    expect(document.activeElement).toBe(exportItem);
+    // Google ドキュメントは出さない。共有しているか分からないときは「共有中」を出さない
+    expect(menuItems().map((item) => item.textContent)).toEqual(["リンクで共有", "書き出し.md", "履歴", "複製", "削除"]);
+    const [shareItem, exportItem, , , deleteItem] = menuItems();
+    expect(document.activeElement).toBe(shareItem);
     await press(document.activeElement!, "ArrowDown");
-    expect(document.activeElement).toBe(duplicateItem);
+    expect(document.activeElement).toBe(exportItem);
     await press(document.activeElement!, "End");
     expect(document.activeElement).toBe(deleteItem);
     await press(document.activeElement!, "ArrowDown");
-    expect(document.activeElement).toBe(exportItem);
+    expect(document.activeElement).toBe(shareItem);
     await press(document.activeElement!, "Escape");
     expect(menu()).toBeNull();
     expect(document.activeElement).toBe(moreButton());
@@ -597,7 +601,7 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(nav.push).not.toHaveBeenCalled();
     await act(async () => moreButton()!.click());
     expect(headerAlert()).toBeUndefined();
-    await act(async () => menuItems()[1]!.click());
+    await act(async () => menuItems().find((item) => item.textContent === "複製")!.click());
     await tick();
     expect(headerAlert()).toBe("ログインし直してください");
   });
@@ -849,7 +853,435 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(nav.push).not.toHaveBeenCalled();
     // 移った先の「…」はふつうに使える
     await act(async () => moreButton()!.click());
-    expect(menuItems()).toHaveLength(3);
+    expect(menuItems()).toHaveLength(5);
+  });
+
+  describe("リンクで共有 (#34 第 2 段)", () => {
+    // 合成の値（実在の token・origin ではない）
+    const LINK = `https://editor.test/s/${"t".repeat(43)}`;
+    const LINK_2 = `https://editor.test/s/${"u".repeat(43)}`;
+    const PRIVATE = { share: { status: "PRIVATE", publicId: null, url: null, updatedAt: null } };
+    const shared = (url: string) => ({ share: { status: "PUBLIC", publicId: "p".repeat(22), url, updatedAt: UPDATED_AT } });
+    const sheetStatus = () => dialog()?.querySelector('[role="status"]')?.textContent;
+    const linkInput = () => dialog()?.querySelector<HTMLInputElement>("input") ?? null;
+    const heading = () => dialog()?.querySelector("h2")?.textContent;
+    const sends = (calls: string[], method: string) => calls.filter((call) => call.startsWith(`${method} `));
+
+    afterEach(() => {
+      delete (navigator as { clipboard?: unknown }).clipboard;
+    });
+
+    it("saves first, says 読み込み中 while reading, offers リンクを作る, sends it once, then shows the link with 共有中", async () => {
+      const calls: string[] = [];
+      const reading = deferred<Response>();
+      const starting = deferred<Response>();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init: RequestInit) => {
+          calls.push(`${init.method} ${url}`);
+          return init.method === "GET" ? reading.promise : starting.promise;
+        }),
+      );
+      const setShared = vi.fn();
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A, { flush: vi.fn(async () => (calls.push("flush"), true)), setShared })} />);
+      await choose("リンクで共有");
+      expect(calls).toEqual(["flush", `GET /api/pages/${A}/share`]);
+      expect(dialog()?.getAttribute("aria-label")).toBe("リンクで共有");
+      expect(dialog()?.getAttribute("aria-modal")).toBe("true");
+      expect(sheetStatus()).toBe("読み込み中");
+      expect(container!.querySelector(".es-ws")?.hasAttribute("inert")).toBe(true);
+
+      await act(async () => reading.resolve(json(200, PRIVATE)));
+      await tick();
+      expect(setShared).toHaveBeenLastCalledWith(false);
+      expect(heading()).toBe("リンクで共有");
+      expect(dialog()?.textContent).toContain("リンクを知っている人は、このページを読めます（ログイン不要・読み取り専用）。");
+      expect(linkInput()).toBeNull();
+      expect(sheetStatus()).toBe("");
+
+      const start = dialogButton("リンクを作る");
+      await act(async () => start.click());
+      await act(async () => start.click());
+      expect(sends(calls, "PUT")).toEqual([`PUT /api/pages/${A}/share`]);
+      expect(start.getAttribute("aria-disabled")).toBe("true");
+
+      await act(async () => starting.resolve(json(200, shared(LINK))));
+      await tick();
+      expect(setShared).toHaveBeenLastCalledWith(true);
+      expect(heading()).toBe("リンクで共有中");
+      const input = linkInput()!;
+      expect(input.readOnly).toBe(true);
+      expect(input.value).toBe(LINK);
+      expect(dialog()!.querySelector(`label[for="${input.id}"]`)?.textContent).toBe("共有のリンク");
+      expect(dialog()?.textContent).toContain("止めるとすぐに読めなくなります。");
+      expect(sheetStatus()).toBe("リンクを作りました");
+      // 押した「リンクを作る」は無くなったので、フォーカスは「コピー」へ
+      expect(document.activeElement).toBe(dialogButton("コピー"));
+      expect(dialogAlert()).toBeUndefined();
+
+      await act(async () => dialogButton("閉じる").click());
+      expect(dialog()).toBeNull();
+      expect(document.activeElement).toBe(moreButton());
+      expect(container!.querySelector(".es-ws")?.hasAttribute("inert")).toBe(false);
+    });
+
+    it("shows 共有中 in the … only when the page is known to be shared", async () => {
+      vi.stubGlobal("fetch", vi.fn());
+      const shareItem = async () => {
+        await act(async () => moreButton()!.click());
+        const text = menuItems()[0]!.textContent;
+        await act(async () => moreButton()!.click());
+        return text;
+      };
+      const a = fakePage(A, { shared: true });
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={a} />);
+      expect(await shareItem()).toBe("リンクで共有共有中");
+      await rerender(<FakePage page={{ ...a, shared: false }} />);
+      expect(await shareItem()).toBe("リンクで共有");
+      await rerender(<FakePage page={{ ...a, shared: null }} />);
+      expect(await shareItem()).toBe("リンクで共有");
+    });
+
+    it("copies the link, or selects it and says which key to press when the clipboard cannot be used", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => json(200, shared(LINK))));
+      const writeText = vi.fn<(text: string) => Promise<void>>(async () => undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A, { shared: true })} />);
+      await choose("リンクで共有");
+      expect(linkInput()!.value).toBe(LINK);
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        await act(async () => dialogButton("コピー").click());
+        expect(writeText).toHaveBeenCalledWith(LINK);
+        expect(sheetStatus()).toBe("コピーしました");
+        // 短く出して消す
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(COPIED_NOTE_MS);
+        });
+        expect(sheetStatus()).toBe("");
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const byKey = isMacPlatform() ? "⌘C でコピー" : "Ctrl+C でコピー";
+      writeText.mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"));
+      await act(async () => dialogButton("コピー").click());
+      const input = linkInput()!;
+      expect(document.activeElement).toBe(input);
+      expect([input.selectionStart, input.selectionEnd]).toEqual([0, LINK.length]);
+      expect(sheetStatus()).toBe(byKey);
+
+      // クリップボードが無い（http など）
+      Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+      dialogButton("コピー").focus();
+      await act(async () => dialogButton("コピー").click());
+      expect(document.activeElement).toBe(input);
+      expect(sheetStatus()).toBe(byKey);
+    });
+
+    it("作り直す asks first (やめる and Esc keep the link), then rotates once; 共有を止める stops and offers リンクを作る again", async () => {
+      const calls: string[] = [];
+      const rotating = deferred<Response>();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init: RequestInit) => {
+          calls.push(`${init.method} ${url}`);
+          if (init.method === "GET") return Promise.resolve(json(200, shared(LINK)));
+          if (init.method === "POST") return rotating.promise;
+          return Promise.resolve(json(200, PRIVATE));
+        }),
+      );
+      const setShared = vi.fn();
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A, { shared: true, setShared })} />);
+      await choose("リンクで共有");
+      const confirmText = "作り直すと、古いリンクは読めなくなります。";
+
+      await act(async () => dialogButton("作り直す").click());
+      expect(sends(calls, "POST")).toEqual([]);
+      expect(dialog()?.textContent).toContain(confirmText);
+      expect(dialog()?.querySelector('[role="group"]')?.getAttribute("aria-labelledby")).toBeTruthy();
+      expect(document.activeElement).toBe(dialogButton("やめる"));
+      await act(async () => dialogButton("やめる").click());
+      expect(dialog()?.textContent).not.toContain(confirmText);
+      expect(document.activeElement).toBe(dialogButton("作り直す"));
+      // 確かめている間の Esc は、確かめるのをやめるだけ（シートは閉じない）
+      await act(async () => dialogButton("作り直す").click());
+      await press(document.activeElement!, "Escape");
+      expect(dialog()).not.toBeNull();
+      expect(dialog()?.textContent).not.toContain(confirmText);
+      expect(sends(calls, "POST")).toEqual([]);
+
+      await act(async () => dialogButton("作り直す").click());
+      await act(async () => dialogButton("作り直す").click());
+      await act(async () => dialogButton("作り直す").click());
+      expect(sends(calls, "POST")).toEqual([`POST /api/pages/${A}/share/rotate`]);
+      await act(async () => rotating.resolve(json(200, shared(LINK_2))));
+      await tick();
+      expect(linkInput()!.value).toBe(LINK_2);
+      expect(sheetStatus()).toBe("リンクを作り直しました");
+
+      await act(async () => dialogButton("共有を止める").click());
+      await tick();
+      expect(calls.at(-1)).toBe(`DELETE /api/pages/${A}/share`);
+      expect(linkInput()).toBeNull();
+      expect(dialog()?.textContent).not.toContain(LINK_2);
+      expect(heading()).toBe("リンクで共有");
+      expect(sheetStatus()).toBe("共有を止めました");
+      expect(setShared).toHaveBeenLastCalledWith(false);
+      expect(document.activeElement).toBe(dialogButton("リンクを作る"));
+    });
+
+    it("a read failure offers 読み直す; a refused change says so in the sheet and keeps it open", async () => {
+      const answers = [json(500, { error: "internal" }), json(200, PRIVATE), json(500, { error: "internal" }), json(401, { error: "unauthorized" })];
+      vi.stubGlobal("fetch", vi.fn(async () => answers.shift()!));
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A)} />);
+      await choose("リンクで共有");
+      expect(dialogAlert()).toBe("共有の状態を読み込めませんでした");
+      expect(document.activeElement).toBe(dialogButton("読み直す"));
+      await act(async () => dialogButton("読み直す").click());
+      await tick();
+      expect(dialogAlert()).toBeUndefined();
+      await act(async () => dialogButton("リンクを作る").click());
+      await tick();
+      expect(dialogAlert()).toBe("リンクを作れませんでした");
+      expect(linkInput()).toBeNull();
+      await act(async () => dialogButton("リンクを作る").click());
+      await tick();
+      expect(dialogAlert()).toBe("ログインし直してください");
+      expect(dialog()).not.toBeNull();
+    });
+
+    it("can be closed while a change is being sent; opening it again waits for that change and sends no second one", async () => {
+      const calls: string[] = [];
+      const starting = deferred<Response>();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init: RequestInit) => {
+          calls.push(`${init.method} ${url}`);
+          return init.method === "GET" ? Promise.resolve(json(200, PRIVATE)) : starting.promise;
+        }),
+      );
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A)} />);
+      await choose("リンクで共有");
+      await act(async () => dialogButton("リンクを作る").click());
+      await act(async () => dialogButton("閉じる").click());
+      expect(dialog()).toBeNull();
+      await choose("リンクで共有");
+      expect(sends(calls, "GET")).toHaveLength(1);
+      expect(dialogButton("リンクを作る").getAttribute("aria-disabled")).toBe("true");
+      await act(async () => dialogButton("リンクを作る").click());
+      expect(sends(calls, "PUT")).toHaveLength(1);
+      await act(async () => starting.resolve(json(200, shared(LINK))));
+      await tick();
+      expect(linkInput()!.value).toBe(LINK);
+    });
+  });
+
+  describe("履歴 (#34 第 2 段)", () => {
+    const VERSIONS = [
+      { version: 5, reason: "restore", createdAt: "2026-10-31T02:59:30.000Z", blockCount: 4 },
+      { version: 4, reason: "ai", createdAt: "2026-10-31T02:30:00.000Z", blockCount: 1 },
+      { version: 3, reason: "overwrite", createdAt: "2026-10-31T00:00:00.000Z", blockCount: 2 },
+      { version: 2, reason: "autosave", createdAt: "2026-10-29T01:00:00.000Z", blockCount: 0 },
+      { version: 1, reason: "publish", createdAt: "2026-10-20T00:00:00.000Z", blockCount: 5 },
+    ];
+    const RESTORED = { id: A, kind: "note", title: "合成の題名", lang: "ja", blocks: [{ type: "paragraph", content: [{ type: "text", text: "戻した本文" }] }], revision: 8, createdAt: UPDATED_AT, updatedAt: "2026-10-31T02:59:59.000Z" };
+    const rowTexts = () => [...(dialog()?.querySelectorAll("ol li") ?? [])].map((row) => [...row.querySelectorAll("span[id] > span")].map((part) => part.textContent));
+    const rowButtons = () => [...(dialog()?.querySelectorAll<HTMLButtonElement>("ol li button") ?? [])];
+    const sheetStatus = () => dialog()?.querySelector('[role="status"]')?.textContent;
+    const headerStatus = () => container!.querySelector('.es-dt [role="status"]')?.textContent;
+
+    it("saves first, then lists the versions newest first with when, why and how many blocks; an empty history says so", async () => {
+      const calls: string[] = [];
+      const listing = deferred<Response>();
+      const answers = [listing.promise, Promise.resolve(json(200, { versions: [] }))];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init: RequestInit) => {
+          calls.push(`${init.method} ${url}`);
+          return answers.shift()!;
+        }),
+      );
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A, { flush: vi.fn(async () => (calls.push("flush"), true)) })} />);
+      await choose("履歴");
+      expect(calls).toEqual(["flush", `GET /api/pages/${A}/versions`]);
+      expect(dialog()?.getAttribute("aria-label")).toBe("履歴");
+      expect(sheetStatus()).toBe("読み込み中");
+      await act(async () => listing.resolve(json(200, { versions: VERSIONS })));
+      await tick();
+      expect(sheetStatus()).toBe("");
+      expect(dialog()?.querySelector("ol")?.getAttribute("aria-label")).toBe("版の一覧");
+      expect(rowTexts()).toEqual([
+        ["たった今", "戻す前 · 4 ブロック"],
+        ["30分前", "AI の提案の前 · 1 ブロック"],
+        ["3時間前", "上書きの前 · 2 ブロック"],
+        ["2日前", "自動保存 · 0 ブロック"],
+        ["10月20日", "公開 · 5 ブロック"],
+      ]);
+      // どの「この版に戻す」も、その行の時刻と理由で説明される
+      for (const button of rowButtons()) {
+        expect(button.textContent).toBe("この版に戻す");
+        expect(dialog()!.querySelector(`[id="${button.getAttribute("aria-describedby")}"]`)?.closest("li")).toBe(button.closest("li"));
+      }
+      await press(document.activeElement!, "Escape");
+      expect(dialog()).toBeNull();
+      expect(document.activeElement).toBe(moreButton());
+
+      await choose("履歴");
+      expect(sheetStatus()).toBe("まだ履歴がありません");
+      expect(dialog()?.querySelector("ol")).toBeNull();
+    });
+
+    it("この版に戻す asks first; 戻す saves again, sends the base revision once, closes, reopens the editor with the restored page and says so", async () => {
+      const calls: Array<{ call: string; body: unknown }> = [];
+      const restoring = deferred<Response>();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init: RequestInit) => {
+          calls.push({ call: `${init.method} ${url}`, body: init.body ? JSON.parse(String(init.body)) : null });
+          return init.method === "GET" ? Promise.resolve(json(200, { versions: VERSIONS })) : restoring.promise;
+        }),
+      );
+      const flush = vi.fn(async () => (calls.push({ call: "flush", body: null }), true));
+      const reopen = vi.fn();
+      await mount({ pages: [page(D, "別のページ"), page(A, "合成の題名")] }, <FakePage page={fakePage(A, { flush, reopen, revision: () => 7 })} />);
+      await choose("履歴");
+      await act(async () => rowButtons()[1]!.click());
+      expect(dialog()?.getAttribute("aria-label")).toBe("この版に戻す");
+      expect(dialog()?.querySelector("h2")?.textContent).toBe("この版に戻しますか？");
+      expect(dialog()?.textContent).toContain("30分前");
+      expect(dialog()?.textContent).toContain("AI の提案の前 · 1 ブロック");
+      expect(dialog()?.textContent).toContain("本文がこの版になります（題名はそのまま）。いまの本文は、戻したあとも履歴から戻せます。");
+      expect(document.activeElement).toBe(dialogButton("やめる"));
+      // やめる: 一覧へ戻り、押した行の「この版に戻す」へフォーカスが戻る（何も送らない）
+      await act(async () => dialogButton("やめる").click());
+      expect(dialog()?.getAttribute("aria-label")).toBe("履歴");
+      expect(document.activeElement).toBe(rowButtons()[1]);
+      // 確かめている間の Esc も一覧へ戻るだけ
+      await act(async () => rowButtons()[1]!.click());
+      await press(document.activeElement!, "Escape");
+      expect(dialog()?.getAttribute("aria-label")).toBe("履歴");
+      expect(calls.map((entry) => entry.call)).toEqual(["flush", `GET /api/pages/${A}/versions`]);
+
+      await act(async () => rowButtons()[1]!.click());
+      await act(async () => dialogButton("戻す").click());
+      await tick();
+      await act(async () => dialogButton("戻す").click());
+      await tick();
+      expect(calls.slice(2)).toEqual([
+        { call: "flush", body: null },
+        { call: `POST /api/pages/${A}/versions/4/restore`, body: { baseRevision: 7 } },
+      ]);
+      expect(dialogButton("戻す").getAttribute("aria-disabled")).toBe("true");
+      // 戻している間は閉じない
+      await press(document.activeElement!, "Escape");
+      await act(async () => dialogButton("やめる").click());
+      expect(dialog()).not.toBeNull();
+
+      await act(async () => restoring.resolve(json(200, { page: RESTORED })));
+      await tick();
+      expect(dialog()).toBeNull();
+      expect(reopen).toHaveBeenCalledTimes(1);
+      expect(reopen).toHaveBeenCalledWith({ id: A, title: "合成の題名", blocks: RESTORED.blocks, revision: 8, updatedAt: RESTORED.updatedAt });
+      expect(headerStatus()).toBe("この版の本文に戻しました");
+      expect(document.activeElement).toBe(moreButton());
+    });
+
+    it("a conflict, a version that cannot be restored and a failure say so in the sheet, which stays open; unsaved edits stop it", async () => {
+      const answers = [
+        json(200, { versions: VERSIONS }),
+        json(409, { error: "conflict", page: { ...RESTORED, revision: 9 } }),
+        json(422, { error: "unrestorable" }),
+        json(500, { error: "internal" }),
+      ];
+      const fetchMock = vi.fn(async () => answers.shift() ?? json(500, { error: "internal" }));
+      vi.stubGlobal("fetch", fetchMock);
+      let saves = true;
+      const reopen = vi.fn();
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A, { flush: vi.fn(async () => saves), reopen })} />);
+      await choose("履歴");
+      await act(async () => rowButtons()[0]!.click());
+      for (const said of ["別の画面で保存されました。開き直してからもう一度", "この版には戻せません", "戻せませんでした"]) {
+        await act(async () => dialogButton("戻す").click());
+        await tick();
+        expect(dialogAlert()).toBe(said);
+        expect(dialog()?.getAttribute("aria-label")).toBe("この版に戻す");
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      // 送る前に保存できなければ、送らない
+      saves = false;
+      await act(async () => dialogButton("戻す").click());
+      await tick();
+      expect(dialogAlert()).toBe("戻す前に変更を保存できませんでした");
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(reopen).not.toHaveBeenCalled();
+      expect(headerStatus()).toBe("");
+    });
+
+    it("a list that cannot be read offers 読み直す", async () => {
+      const answers = [json(500, { error: "internal" }), json(200, { versions: VERSIONS })];
+      vi.stubGlobal("fetch", vi.fn(async () => answers.shift()!));
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A)} />);
+      await choose("履歴");
+      expect(dialogAlert()).toBe("履歴を読み込めませんでした");
+      expect(document.activeElement).toBe(dialogButton("読み直す"));
+      await act(async () => dialogButton("読み直す").click());
+      await tick();
+      expect(dialogAlert()).toBeUndefined();
+      expect(rowButtons()).toHaveLength(5);
+    });
+  });
+
+  it("共有・履歴 stop without opening when the unsaved edits cannot be saved, and say why (nothing is sent)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A, { status: "offline", flush: vi.fn(async () => false) })} />);
+    await choose("リンクで共有");
+    expect(dialog()).toBeNull();
+    expect(headerAlert()).toBe("共有の前に変更を保存できませんでした");
+    await choose("履歴");
+    expect(dialog()).toBeNull();
+    expect(headerAlert()).toBe("履歴を開く前に変更を保存できませんでした");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("共有・履歴 belong to the page they were opened on: after moving to another page, an old result neither shows nor restores there", async () => {
+    const reading = deferred<Response>();
+    vi.stubGlobal("fetch", vi.fn(() => reading.promise));
+    const setSharedA = vi.fn();
+    await mount({ pages: [page(A, "合成の題名"), page(B, "次のページ")] }, <FakePage page={fakePage(A, { setShared: setSharedA })} />);
+    await choose("リンクで共有");
+    expect(dialog()).not.toBeNull();
+    nav.pathname = `/p/${B}`;
+    const reopenB = vi.fn();
+    const b = fakePage(B, { reopen: reopenB });
+    await rerender(<FakePage page={b} />);
+    expect(dialog()).toBeNull();
+    await act(async () => reading.resolve(json(200, { share: { status: "PUBLIC", publicId: "p".repeat(22), url: `https://editor.test/s/${"t".repeat(43)}`, updatedAt: UPDATED_AT } })));
+    await tick();
+    expect(dialog()).toBeNull();
+    expect(setSharedA).not.toHaveBeenCalled();
+    expect(b.setShared).not.toHaveBeenCalled();
+
+    // 履歴: 戻している間に別のページへ移ったら、戻った結果をそのページに入れない
+    const restoring = deferred<Response>();
+    vi.stubGlobal("fetch", vi.fn((_url: string, init: RequestInit) => (init.method === "GET" ? Promise.resolve(json(200, { versions: [{ version: 1, reason: "autosave", createdAt: UPDATED_AT, blockCount: 1 }] })) : restoring.promise)));
+    nav.pathname = `/p/${A}`;
+    const reopenA = vi.fn();
+    await rerender(<FakePage page={fakePage(A, { reopen: reopenA })} />);
+    await choose("履歴");
+    await act(async () => dialog()!.querySelector<HTMLButtonElement>("ol li button")!.click());
+    await act(async () => dialogButton("戻す").click());
+    await tick();
+    nav.pathname = `/p/${B}`;
+    await rerender(<FakePage page={b} />);
+    expect(dialog()).toBeNull();
+    await act(async () => restoring.resolve(json(200, { page: { id: A, title: "合成の題名", blocks: [], revision: 3, updatedAt: UPDATED_AT } })));
+    await tick();
+    expect(reopenA).not.toHaveBeenCalled();
+    expect(reopenB).not.toHaveBeenCalled();
+    expect(container!.querySelector('.es-dt [role="status"]')?.textContent).toBe("");
   });
 
   describe("with the real PageEditor", () => {
@@ -894,6 +1326,111 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       ]);
       expect(tip()).toBe("自分だけ · 保存済み");
       expect(nav.push).toHaveBeenCalledWith(`/p/${COPY}`);
+    });
+
+    const paragraph = (text: string) => [{ type: "paragraph", content: [{ type: "text", text }] }];
+    const body = () => container!.querySelector(".doc")?.textContent;
+    const titleValue = () => container!.querySelector<HTMLTextAreaElement>("textarea.page-title")?.value;
+    const saveNow = () => act(async () => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", metaKey: true, ctrlKey: !isMacPlatform(), bubbles: true, cancelable: true })));
+    async function until(condition: () => boolean) {
+      for (let attempt = 0; attempt < 50 && !condition(); attempt++) await tick();
+      expect(condition()).toBe(true);
+    }
+    /** 版の一覧・戻す・保存を受ける合成のサーバー（戻したあとの本文は「戻した本文」、revision は 5）。 */
+    function restoringServer(calls: Array<{ method: string; url: string; body: unknown }>) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit) => {
+          const sent = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+          calls.push({ method: String(init.method), url, body: sent });
+          if (url.endsWith("/versions")) return json(200, { versions: [{ version: 1, reason: "autosave", createdAt: UPDATED_AT, blockCount: 1 }] });
+          if (url.endsWith("/restore")) {
+            return json(200, { page: { id: A, kind: "note", title: "合成の題名", lang: "ja", blocks: paragraph("戻した本文"), revision: 5, createdAt: UPDATED_AT, updatedAt: "2026-10-31T02:59:00.000Z" } });
+          }
+          if (url.endsWith("/share")) return json(200, { share: { status: "PRIVATE", publicId: null, url: null, updatedAt: null } });
+          if (init.method === "PATCH") return json(200, { page: { id: A, revision: (sent!.baseRevision as number) + 1 } });
+          return json(500, { error: "internal" });
+        }),
+      );
+    }
+    async function restoreFirstVersion() {
+      await choose("履歴");
+      await act(async () => dialog()!.querySelector<HTMLButtonElement>("ol li button")!.click());
+      await act(async () => dialogButton("戻す").click());
+      await tick();
+    }
+
+    it("history: restoring puts the restored body into the open editor, keeps the title, and the next save builds on the restored revision", async () => {
+      const calls: Array<{ method: string; url: string; body: unknown }> = [];
+      restoringServer(calls);
+      // OpenPage と同じく、保存（戻したときも）を一覧へ知らせる
+      function Opened() {
+        const frame = useEditorFrame();
+        return <PageEditor page={{ id: A, title: "合成の題名", blocks: paragraph("今の本文"), revision: 4, updatedAt: UPDATED_AT }} drafts={null} onSaved={() => frame.pageSaved(A)} />;
+      }
+      await mount({ pages: [page(D, "別のページ"), page(A, "合成の題名")] }, <Opened />);
+      await tick();
+      expect(body()).toBe("今の本文");
+      await restoreFirstVersion();
+      expect(calls).toEqual([
+        { method: "GET", url: `/api/pages/${A}/versions`, body: null },
+        { method: "POST", url: `/api/pages/${A}/versions/1/restore`, body: { baseRevision: 4 } },
+      ]);
+      expect(dialog()).toBeNull();
+      expect(body()).toBe("戻した本文");
+      expect(titleValue()).toBe("合成の題名");
+      expect(tip()).toBe("自分だけ · 保存済み");
+      expect(container!.querySelector('.es-dt [role="status"]')?.textContent).toBe("この版の本文に戻しました");
+      // 戻したページは一覧の上へ
+      expect(rows()).toEqual(["合成の題名", "別のページ"]);
+      expect(document.activeElement).toBe(moreButton());
+
+      // 次の保存は、戻したあとの revision の上に送る（競合にしない）
+      await typeTitle("合成の題名 2");
+      await saveNow();
+      await tick();
+      expect(calls.at(-1)).toEqual({ method: "PATCH", url: `/api/pages/${A}`, body: { title: "合成の題名 2", baseRevision: 5 } });
+      expect(tip()).toBe("自分だけ · 保存済み");
+      expect(container!.querySelector("[data-save-state]")?.getAttribute("data-save-state")).toBe("saved");
+    });
+
+    it("history: with drafts on the device, the reopened editor reads them again, and the … comes back with the focus", async () => {
+      const calls: Array<{ method: string; url: string; body: unknown }> = [];
+      restoringServer(calls);
+      const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
+      await mount({ pages: [page(A, "合成の題名")] }, <PageEditor page={{ id: A, title: "合成の題名", blocks: paragraph("今の本文"), revision: 4, updatedAt: UPDATED_AT }} drafts={drafts} />);
+      await until(() => moreButton() !== null);
+      await restoreFirstVersion();
+      await until(() => moreButton() !== null && body() === "戻した本文");
+      expect(document.activeElement).toBe(moreButton());
+      expect(await drafts.get(A)).toBeNull();
+      await typeTitle("合成の題名 2");
+      await saveNow();
+      await until(() => calls.at(-1)?.method === "PATCH");
+      expect(calls.at(-1)?.body).toEqual({ title: "合成の題名 2", baseRevision: 5 });
+    });
+
+    it("share: the … says 共有中 from what the server read when the page opened, follows the sheet, and keeps it after a restore", async () => {
+      const calls: Array<{ method: string; url: string; body: unknown }> = [];
+      restoringServer(calls);
+      const shareItem = async () => {
+        await act(async () => moreButton()!.click());
+        const text = menuItems()[0]!.textContent;
+        await act(async () => moreButton()!.click());
+        return text;
+      };
+      await mount({ pages: [page(A, "合成の題名")] }, <PageEditor page={{ id: A, title: "合成の題名", blocks: [], revision: 4, updatedAt: UPDATED_AT }} drafts={null} shared />);
+      await tick();
+      expect(await shareItem()).toBe("リンクで共有共有中");
+      // 別の画面で止められていた: シートで読み直すと、印も替わる
+      await choose("リンクで共有");
+      expect(dialog()?.querySelector("h2")?.textContent).toBe("リンクで共有");
+      await act(async () => dialogButton("閉じる").click());
+      expect(await shareItem()).toBe("リンクで共有");
+      // 版に戻して開き直しても、開いたときの値（共有中）に戻らない
+      await restoreFirstVersion();
+      expect(body()).toBe("戻した本文");
+      expect(await shareItem()).toBe("リンクで共有");
     });
 
     it("a new page shows the state but no … until the first save has created it", async () => {

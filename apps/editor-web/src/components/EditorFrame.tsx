@@ -11,10 +11,15 @@ import { listPagesRequest } from "@/lib/pages-client";
 import { headerStatus } from "@/lib/save-status";
 import { useShortcuts } from "@/lib/shortcuts";
 import { arrangeSidebarItems, searchRows, withoutPageTree } from "@/lib/sidebar-items";
+import { usePageHistory } from "@/lib/use-page-history";
 import { usePageMenu, type AttachedPage } from "@/lib/use-page-menu";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
+import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
+import { HistorySheet } from "./HistorySheet";
 import { FramePublishSheet, PublishNotice, type FramePublishKind } from "./FramePublish";
+import { BUSY_STYLE } from "./sheet-parts";
+import { ShareSheet } from "./ShareSheet";
 
 export type { AttachedPage };
 
@@ -120,8 +125,20 @@ function searchMessage(found: PageSearchState, count: number): string {
 const SEARCH_NOTE_STYLE = { margin: 0, padding: "10px 16px", fontSize: 13, color: "var(--ed-ink-mute)" } as const;
 /** 「…」の左に出す、直前の操作の失敗（削除の確認の中の理由と同じ色。shell の色の token だけを使う）。 */
 const MENU_NOTE_STYLE = { fontSize: 12.5, lineHeight: 1.3, fontWeight: 600, color: "var(--ed-amber-ink)" } as const;
-/** 削除を送っている間のボタン（disabled にするとフォーカスが外れるので、aria-disabled と見た目だけ）。 */
-const BUSY_STYLE = { opacity: 0.4, cursor: "progress" } as const;
+/** 版に戻したことの見える知らせ（読み上げは下の、いつもある role="status" が持つ）。 */
+const RESTORED_NOTE_STYLE = { fontSize: 12.5, lineHeight: 1.3, fontWeight: 600, color: "var(--ed-accent-ink)" } as const;
+/** 見えないが読み上げる（ヘッダーの並びの間隔を取らないよう、絶対配置）。 */
+const VISUALLY_HIDDEN_STYLE = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  margin: -1,
+  padding: 0,
+  border: 0,
+  overflow: "hidden",
+  clipPath: "inset(50%)",
+  whiteSpace: "nowrap",
+} as const;
 
 /**
  * 削除の確認（docs-ui の ShellSheet。外は inert、Esc・外の押下・「やめる」で閉じ、閉じたら「…」へフォーカスが戻る）。
@@ -163,7 +180,8 @@ function DeleteConfirm(props: { busy: boolean; error: string | null; onConfirm: 
  * - 一覧は最初の区切りをサーバーから受け、末尾が近づいたら続きを読む。
  * - 900px 以下では `/` が一覧の画面。ページと設定は全画面で、ヘッダーの左のボタンで一覧を出す。
  * - ヘッダーの右上は、開いているページ（`attachPage` で登録されたもの）の状態の丸（いつも「自分だけ」＋保存の状態）と、
- *   「…」（書き出し・複製・削除。src/lib/use-page-menu.ts）。まだ作っていないページでは「…」を出さない。
+ *   「…」（リンクで共有・書き出し・履歴・複製・削除。src/lib/use-page-menu.ts・use-page-share.ts・use-page-history.ts）。
+ *   まだ作っていないページでは「…」を出さない。削除の確認・共有・履歴は ShellSheet で overlay に出す。
  * - ショートカット（設計 §11）: ⌘N 新しいページ、⌘K 検索、⌘⇧P 公開のシート（⌘S はページ、⌘/ は本文が持つ）。
  */
 export function EditorFrame({ initial, children }: { initial: FrameInitial; children: ReactNode }) {
@@ -200,6 +218,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // 開いているページ（ページの中の PageEditor が登録する）。ref は非同期の操作のあとに今の値を読むため（描画を待たない）
   const [attached, setAttached] = useState<AttachedPage | null>(null);
   const attachedRef = useRef<AttachedPage | null>(null);
+  // 版に戻して開き直したページ。そのページが登録し直したとき、フォーカスが外れていたら「…」へ戻す
+  const refocusRef = useRef<string | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
@@ -299,7 +319,26 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   );
   const frame = useMemo<EditorFrameApi>(() => ({ narrow, ...api }), [narrow, api]);
 
-  // 右上の「…」（書き出し・複製・削除）。操作の前に、開いているページのまだ届いていない変更を保存する
+  const focusMore = useCallback(() => frameRoot.current?.querySelector<HTMLButtonElement>('.es-dt button[aria-haspopup="menu"]')?.focus(), []);
+  // 「…」の「リンクで共有」と「履歴」のシート（保存してから開く）
+  const share = usePageShare({ page: attached, current: () => attachedRef.current });
+  const history = usePageHistory({
+    page: attached,
+    current: () => attachedRef.current,
+    onRestored: (id) => {
+      refocusRef.current = id;
+    },
+  });
+  // 開き直したエディタが端末の下書きを読む間は「…」を出さない。出し直したとき、フォーカスが外れていたら戻す
+  useEffect(() => {
+    const id = refocusRef.current;
+    if (id === null || !attached || attached.id === null) return;
+    refocusRef.current = null;
+    const active = document.activeElement;
+    if (attached.id === id && (!active || active === document.body || !active.isConnected)) focusMore();
+  }, [attached, focusMore]);
+
+  // 右上の「…」（リンクで共有・書き出し・履歴・複製・削除）。操作の前に、開いているページのまだ届いていない変更を保存する
   const menu = usePageMenu({
     page: attached,
     current: () => attachedRef.current,
@@ -312,8 +351,10 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
       // 最後に開いたページの cookie が消したページを指していても、`/` はサーバーで確かめて新しいページへ移す
       if (stillOpen) router.push("/");
     },
-    focusMore: () => frameRoot.current?.querySelector<HTMLButtonElement>('.es-dt button[aria-haspopup="menu"]')?.focus(),
+    openSheet: (sheet, owner) => (sheet === "share" ? share.open(owner) : history.open(owner)),
+    focusMore,
   });
+  const restoredNote = history.notice && history.notice.id === currentId ? history.notice.text : "";
 
   // 打つたびにサーバーで探す（題名と本文）。検索語が空のあいだは、ふつうの一覧のまま
   const searching = search.open && search.value.trim() !== "";
@@ -442,11 +483,22 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               // 公開の状態は出さない（公開の配線が無い間はいつも「自分だけ」）。読み上げはこの丸の aria-live が持つ
               status={attached ? headerStatus(attached.status) : undefined}
               trailing={
-                menu.note ? (
-                  <span role="alert" style={MENU_NOTE_STYLE}>
-                    {menu.note}
+                <>
+                  {menu.note && (
+                    <span role="alert" style={MENU_NOTE_STYLE}>
+                      {menu.note}
+                    </span>
+                  )}
+                  {restoredNote && (
+                    <span aria-hidden="true" style={RESTORED_NOTE_STYLE}>
+                      {restoredNote}
+                    </span>
+                  )}
+                  {/* 版に戻した（エディタの中身が替わった）ことを読み上げる。いつも置いておく（出したときに読まれるように） */}
+                  <span role="status" style={VISUALLY_HIDDEN_STYLE}>
+                    {restoredNote}
                   </span>
-                ) : undefined
+                </>
               }
               more={menu.more}
               publish={currentId ? { ...shellPublishButton({ pub: null, isArticle: opened?.kind === "article" }), onClick: openPublish } : null}
@@ -454,7 +506,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           }
           overlay={
             <>
-              {menu.confirm ? <DeleteConfirm {...menu.confirm} /> : null}
+              {menu.confirm ? <DeleteConfirm {...menu.confirm} /> : share.sheet ? <ShareSheet {...share.sheet} /> : history.sheet ? <HistorySheet {...history.sheet} now={now} /> : null}
               {sheetShown && (
                 <FramePublishSheet
                   kind={sheetShown}

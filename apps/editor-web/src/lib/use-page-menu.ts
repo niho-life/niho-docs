@@ -2,41 +2,33 @@
 
 import { useEffect, useRef, useState } from "react";
 import { shellMoreItems, type ShellHeaderProps, type ShellMenuItem } from "niho-docs-ui/shell";
+import { ownerOf, samePage, type AttachedPage, type PageOwner } from "./attached-page";
 import { PageActionError, deletePageRequest, duplicatePageRequest, pageExportUrl, type DuplicatedPage } from "./page-actions-client";
-import type { SaveStatus } from "./save-status";
+
+export type { AttachedPage, PageOwner };
 
 /**
- * 開いているページ（ページの中の PageEditor が枠に登録する。ヘッダーの状態の丸と「…」が使う）。
- * 枠はページの外にあり、保存の状態とエディタはページの中にあるので、この形で橋渡しする。
- */
-export type AttachedPage = {
-  /** ページの id。まだ作っていない新しいページと、端末の下書きを読み終える前は null（「…」を出さない）。 */
-  id: string | null;
-  status: SaveStatus;
-  /**
-   * まだ届いていない変更を今送り、全てサーバーに届いたら true（届かなければ false。その操作は止める）。
-   * 開いているあいだは同じ関数（同じ画面かどうかを、id とこの関数で見分ける）。
-   */
-  flush: () => Promise<boolean>;
-};
-
-/**
- * 「…」の項目（#34 第 1 段）: 書き出し（.md だけ）・複製・削除。リンクで共有と履歴は次の段で足す。
+ * 「…」の項目: リンクで共有・書き出し（.md だけ）・履歴・複製・削除（docs-ui の shellMoreItems の順）。
  * Google ドキュメントへの書き出しは NIHO の API 待ちなので、書き出しの補足は「.md」だけにする。
+ * リンクで共有の補足「共有中」は、共有していると分かっているときだけ出す（分からないときは出さない）。
  */
-export const PAGE_MENU_ITEMS: ShellMenuItem[] = shellMoreItems()
-  .filter((item) => item.id === "export" || item.id === "duplicate" || item.id === "delete")
-  .map((item) => (item.id === "export" ? { ...item, hint: ".md" } : item));
+export function pageMenuItems(shared: boolean | null): ShellMenuItem[] {
+  return shellMoreItems(shared === true).map((item) => (item.id === "export" ? { ...item, hint: ".md" } : item));
+}
+
+/** 「…」から開くシート（どちらも、まだ届いていない変更を保存してから開く）。 */
+export type PageSheet = "share" | "history";
 
 export const PAGE_MENU_TEXT = {
-  unsaved: (action: "書き出し" | "複製" | "削除") => `${action}の前に変更を保存できませんでした`,
+  unsaved: (action: "書き出し" | "複製" | "削除" | "共有" | "履歴") =>
+    action === "履歴" ? "履歴を開く前に変更を保存できませんでした" : `${action}の前に変更を保存できませんでした`,
   duplicateFailed: "複製できませんでした",
   deleteFailed: "削除できませんでした",
   published: "公開中のページは、先に公開をやめてください",
   signedOut: "ログインし直してください",
 } as const;
 
-type Owner = { id: string; flush: AttachedPage["flush"] };
+type Owner = PageOwner;
 
 type MenuState = {
   /** この状態を持つページ。別のページに替わったら、この状態は使わない（古い操作の結果を新しいページに出さない）。 */
@@ -56,7 +48,9 @@ export type PageMenuOptions = {
   onDuplicated: (copy: DuplicatedPage, stillOpen: boolean) => void;
   /** ゴミ箱へ入れた（`stillOpen` は同上）。 */
   onDeleted: (id: string, stillOpen: boolean) => void;
-  /** 「…」のボタンへフォーカスを戻す（項目を選んだあと。削除の確認を閉じたときの戻り先にもなる）。 */
+  /** 保存できたので、そのページのシートを開く（まだ同じページを開いているときだけ呼ぶ）。 */
+  openSheet: (sheet: PageSheet, owner: PageOwner) => void;
+  /** 「…」のボタンへフォーカスを戻す（項目を選んだあと。削除の確認・シートを閉じたときの戻り先にもなる）。 */
   focusMore: () => void;
   /** 書き出しのリンクを押す（既定は同じ origin の `<a href download>`）。 */
   download?: (url: string) => void;
@@ -69,14 +63,6 @@ export type PageMenu = {
   confirm: { busy: boolean; error: string | null; onConfirm: () => void; onCancel: () => void } | null;
 };
 
-function ownerOf(page: AttachedPage | null): Owner | null {
-  return page && page.id !== null ? { id: page.id, flush: page.flush } : null;
-}
-
-function samePage(a: Owner | null, b: Owner | null): boolean {
-  return a !== null && b !== null && a.id === b.id && a.flush === b.flush;
-}
-
 /** 同じ origin の `<a href download>` を押す（本文は fetch で読まない。ファイル名は応答の Content-Disposition）。 */
 export function clickDownload(url: string): void {
   const link = document.createElement("a");
@@ -87,7 +73,8 @@ export function clickDownload(url: string): void {
   link.remove();
 }
 
-function failureText(error: unknown, fallback: string): string {
+/** 操作の失敗の短い文言（ログイン切れ・公開中は理由を言い、それ以外は fallback）。 */
+export function failureText(error: unknown, fallback: string): string {
   if (error instanceof PageActionError) {
     if (error.status === 409 && error.code === "published") return PAGE_MENU_TEXT.published;
     if (error.status === 401) return PAGE_MENU_TEXT.signedOut;
@@ -96,7 +83,8 @@ function failureText(error: unknown, fallback: string): string {
 }
 
 /**
- * ヘッダーの「…」（書き出し・複製・削除）。どの操作も、まだ届いていない変更を先に保存し（`flush`）、保存できなければ止めて理由を出す。
+ * ヘッダーの「…」（リンクで共有・書き出し・履歴・複製・削除）。どの操作も、まだ届いていない変更を先に保存し（`flush`）、保存できなければ止めて理由を出す。
+ * リンクで共有と履歴は、保存できたらシートを開く（シートの中身は use-page-share.ts・use-page-history.ts）。
  * 操作は「…」を開いたときのページの id に対して行い、終わったときに別のページへ移っていたら、その画面には何も出さない・移動しない。
  * 同じページの操作は 1 つずつ（二重に送らない）。削除は確認のあとだけ。
  */
@@ -121,7 +109,7 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
   };
 
   /** 保存してから act を行う（同じページで 1 つずつ）。保存できなければ止めて理由を出す。 */
-  const run = async (target: Owner, action: "書き出し" | "複製", act: () => Promise<void>) => {
+  const run = async (target: Owner, action: "書き出し" | "複製" | "共有" | "履歴", act: () => Promise<void>) => {
     if (isRunning(target)) return;
     running.current = target;
     try {
@@ -150,6 +138,9 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
       void run(target, "書き出し", async () => {
         (latest.current.download ?? clickDownload)(pageExportUrl(target.id));
       });
+    } else if (item === "share" || item === "history") {
+      const sheet: PageSheet = item;
+      void run(target, sheet === "share" ? "共有" : "履歴", async () => latest.current.openSheet(sheet, target));
     } else if (item === "duplicate") {
       void run(target, "複製", async () => {
         let copy: DuplicatedPage;
@@ -196,7 +187,7 @@ export function usePageMenu(options: PageMenuOptions): PageMenu {
     more: owner
       ? {
           open: view?.open ?? false,
-          items: PAGE_MENU_ITEMS,
+          items: pageMenuItems(options.page?.shared ?? null),
           onToggle: () => update(owner, (current) => ({ ...current, open: !current.open, note: current.open ? current.note : null })),
           onClose: () => update(owner, (current) => ({ ...current, open: false })),
           onSelect: select,
