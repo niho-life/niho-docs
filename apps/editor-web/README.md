@@ -31,7 +31,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | `EDITOR_FACE_CREDENTIALS` | 任意（secret）。公開 API を NIHO の面が読むサービス間の資格。JSON の配列 `[{ "audience": "exp"\|"niho", "sha256": "<token の SHA-256 の小文字 hex>", "expiresAt": "<ISO 8601 UTC>" }]`。token の平文は置かない。未設定・不正（1 つでも形が違う）なら面は誰も読めない（不正は起動時と最初の要求で「不正」とだけログ）。署名つきのサービス間 token の契約ができるまでの暫定 |
 | `EDITOR_PUBLIC_API_RATE_LIMIT_PER_MINUTE` | 任意。公開 API の資格（の SHA-256）ごとの 1 分の要求数の上限（instance ごと）。未設定・不正は 600 |
 
-確認のコマンド: `typecheck`・`lint`・`test`（vitest）・`build`・`test:startup`（build の後。本番の起動の守り）・`test:e2e`（`DATABASE_URL` と migration が要る。`next dev` を起動して API と画面を確かめ、作った行は消す）。
+確認のコマンド: `typecheck`・`lint`・`test`（vitest。`TEST_DATABASE_URL` があれば `*.pg.test.ts` も専用の schema で動く）・`build`・`test:startup`（build の後。本番の起動の守り）・`test:e2e`（`DATABASE_URL` と migration、build が要る。`next dev` を起動して API と画面を確かめ、公開 API は本番の build で確かめる。作った行・schema は消す）。packages を入れ直したあとは `.next` を消してから（`rm -rf .next`）build・e2e をする。
 
 ## 決まっていること
 
@@ -103,16 +103,18 @@ const found = usePageSearch(find.open ? find.value : ""); // found.results を�
 - **表**: migration `0007_page_recordings.sql`（録音ページに 1 行。ページを消す（hard delete）と消える。ゴミ箱の間は残る）。コードは `packages/editor-store/src/recordings.ts`、段落と話者の操作（純粋な関数）は `src/recording/`。
 - **まだ**: 音声の取り込み・エンジン（段 2）、マイク録音・再生・タイムスタンプの画面（段 3）、検索への組み込み。
 
-## 公開 API v1（#40 段 1）
+## 公開 API v1（#40）
 
-発信先（NIHO Experience・NIHO・本人のサイト）が公開版を読む API。契約は [editor-publish-api-v1.md](../../docs/security/editor-publish-api-v1.md) と `@niho/editor-publish-contract`。**段 1 は handler と契約の差分テストまでで、DB はまだつないでいない（`/v1/*` は全て 503 `temporarily_unavailable`、プレビューの発行も 503）。**
+発信先（NIHO Experience・NIHO・本人のサイト）が公開版を読む API。契約は [editor-publish-api-v1.md](../../docs/security/editor-publish-api-v1.md) と `@niho/editor-publish-contract`。データは Postgres（`DATABASE_URL` が無ければ `/v1/*` もプレビューの発行も 503 `temporarily_unavailable`）。
 
 - **経路**: `src/app/v1/[...path]/route.ts`（GET・HEAD。他のメソッドも handler に渡して 400 ＋ `Allow: GET, HEAD`）。`/v1/{handle}/published.json`・`/v1/{handle}/published/{id}.json`・`/v1/preview/{token}.json`。`src/proxy.ts` は `/v1/` を通さない（CSP の nonce も戻り先の header も要らない。ログインへも移さない）。
 - **handler**（`src/public-api/handler.ts`）: 判定の順・404 の同一性・410 の `movedTo`・ETag と `If-None-Match`（認証が先）・header・requestId つきのエラー・query の検証・プレビューの規則を契約どおりにし、返す直前に契約の検証器（`requireProjection`）で自己検証する（通らなければ 503）。資格・token は SHA-256 にしてから引き、ログ・例外には入れない。cursor は不透明（位置と一覧の範囲に結んだ印つき。書き換え・別の handle や include の cursor は 400。印は鍵を使わないので偽造は防がないが、cursor は権限を持たない）。
-- **データの port**: `src/public-api/source.ts` の `PublicApiSource`（鍵 → handle、一覧の keyset、handle × id の公開版、プレビュー token の拘束、現在の下書き）。段 2 で packages/editor-store のクエリが実装する。面の資格は `EDITOR_FACE_CREDENTIALS`。
+- **データの port**: `src/public-api/source.ts` の `PublicApiSource`（鍵 → handle、一覧の keyset、handle × id の公開版、プレビュー token の拘束、現在の下書き）。Postgres の実装は `src/public-api/pg-source.ts`（SQL は packages/editor-store の `publications.ts`）。失効・解除・公開をやめた・移動は、記録されていれば時刻によらず効く（時計がずれても失効した鍵で読めない側に倒す）。期限は要求の時刻と比べる。面の資格は `EDITOR_FACE_CREDENTIALS`。
+- **プレビューの中身**: 現在の下書き（ページ・資産・公開・公開版を 1 つの読み取りの transaction で読む）から `buildSnapshot` で組み、version と時刻はページの保存の版（`revision`）と時刻（`updated_at`）。その handle に公開している（やめたものも含む）ページは、その公開の設定と、いまの公開版の URL・著者を使う。公開していない handle では、URL を発信先の宣言（本人のサイトは接続の設定）から作り、著者はいまの公開版から取る（どちらも無ければ 404）。**写真の URL（資産の置き場）・面の宣言・著者は公開のシート（#39）の配線をつなぐまで無い**ので、それまで写真のある下書きのプレビューは 503、面へのまだ公開していないページのプレビューは 404。
 - **rate limit**: 資格の SHA-256 ごとの 1 分の固定窓、instance ごと（instance が増えると全体の上限も増える）。超えたら 429 ＋ `Retry-After`。
-- **プレビューの発行**: `POST /api/pages/{id}/preview-token`（本文 `{ handle }`。本人だけ・同じ origin だけ）。201 `{ token, expiresAt, url }`。ページは本人の・ゴミ箱でないもの、handle は本人が役割で出せる面か本人の解除していない接続（どちらも満たさなければ同じ 404）。15 分、保存はハッシュだけ（`PreviewTokenStore`）。NIHO の役割は niho-app #19459 まで読めないので、今は面へのプレビューは出せない。
-- **テスト**: `src/public-api/handler.test.ts` が production の handler（＋メモリの `PublicApiSource`）と契約の参照モデル（テスト専用）を、cases.json の全シナリオと合成の world（400 個 × 60 要求、各一覧の cursor の全走査）で突き合わせ、status・header・本文がバイト単位で同じことを確かめる（cursor の文字列だけは違ってよい）。
+- **プレビューの発行**: `POST /api/pages/{id}/preview-token`（本文 `{ handle }`。本人だけ・同じ origin だけ）。201 `{ token, expiresAt, url }`。ページは本人の・ゴミ箱でないもの、handle は本人が役割で出せる面か本人の解除していない接続（どちらも満たさなければ同じ 404）。15 分、保存はハッシュだけ（`PreviewTokenStore`。表は `preview_tokens`）。NIHO の役割は公開のシート（#39）の RoleReader をつなぐまで空なので、今は面へのプレビューは出せない（本人のサイトの接続へは出せる）。
+- **テスト**: `src/public-api/handler.test.ts` が production の handler（＋メモリの `PublicApiSource`）と契約の参照モデル（テスト専用）を、cases.json の全シナリオと合成の world（400 個 × 60 要求、各一覧の cursor の全走査）で突き合わせ、status・header・本文がバイト単位で同じことを確かめる（cursor の文字列だけは違ってよい）。`src/public-api/pg-source.pg.test.ts` は同じ公開・接続の操作をメモリの store と Postgres の store で行い、両方の応答が同じことを確かめる。`test:e2e` は本番の build と実 DB で、鍵・面の資格・410・304・HEAD・プレビューの発行と読み取り・header を確かめる。
+- **Vary**: Next は App Router の全ての応答の Vary に自分の header（`rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch`）を足すので、実際の値はそれに `Authorization` を続けたもの（契約の文言は `Vary: Authorization`。オーナーの判断待ち）。
 
 ## まだやらないこと
 

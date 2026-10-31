@@ -1,4 +1,5 @@
 import "server-only";
+import { connectionSource } from "@niho/editor-publish";
 import {
   createRecordingPage,
   duplicatePage,
@@ -12,8 +13,10 @@ import {
 } from "@niho/editor-store";
 import { getAuthProvider } from "../auth";
 import { getPool, getStore } from "./db";
+import { pgPublishStore } from "../publish/pg-store";
 import { faceCredentialsFromEnv } from "../public-api/source";
 import type { PublicApiRouteDeps } from "../public-api/http";
+import { PREVIEW_ASSET_URLS_UNWIRED, pgPreviewTokenStore, pgPublicApiSource } from "../public-api/pg-source";
 import { createFixedWindowLimiter, rateLimitFromEnv, type RateLimiter } from "../public-api/rate-limit";
 import type { PagesApiDeps } from "./pages-api";
 import type { PreviewTokenApiDeps } from "./preview-token-api";
@@ -70,24 +73,35 @@ export const recordingDeps: RecordingsApiDeps = {
 };
 
 /**
- * 公開 API v1（`/v1/*`。#40）の実行時の依存。段 1 は handler と契約の差分テストだけで、DB の実装（packages/editor-store の
- * 公開の表のクエリ）は段 2 でつなぐ。それまでは全て 503 temporarily_unavailable。面の資格は `EDITOR_FACE_CREDENTIALS`（要求のたびに読み、
- * 値が変わらなければ読み直さない）。rate limit は instance に 1 つ（`EDITOR_PUBLIC_API_RATE_LIMIT_PER_MINUTE`。最初の要求のときに読む）。
+ * 公開 API v1（`/v1/*`。#40）の実行時の依存。データは Postgres（src/public-api/pg-source.ts。Pool は getStore と共有、DATABASE_URL が
+ * 無ければ 503 temporarily_unavailable）。面の資格は `EDITOR_FACE_CREDENTIALS`（要求のたびに読み、値が変わらなければ読み直さない）。
+ * rate limit は instance に 1 つ（`EDITOR_PUBLIC_API_RATE_LIMIT_PER_MINUTE`。最初の要求のときに読む）。
+ * プレビューの写真の URL・面の宣言・著者は公開のシート（#39）の配線でつなぐ。それまでは、写真のある下書きのプレビューは 503、
+ * 公開していない handle へのプレビューは本人のサイトの接続（URL）といまの公開版（著者）から組めるときだけ。
  */
 let publicApiLimiter: RateLimiter | null = null;
 export const publicApiDeps: PublicApiRouteDeps = {
-  source: () => null,
+  source: () => {
+    const pool = getPool();
+    return pool ? pgPublicApiSource(pool, { assetUrls: PREVIEW_ASSET_URLS_UNWIRED }) : null;
+  },
   faces: () => faceCredentialsFromEnv(process.env),
   limiter: () => (publicApiLimiter ??= createFixedWindowLimiter(rateLimitFromEnv(process.env))),
 };
 
 /**
- * プレビュー token の発行（`POST /api/pages/{id}/preview-token`。#40）の実行時の依存。保存先と接続は段 2 で DB につなぐ（それまで 503）。
- * NIHO の役割は niho-app #19459 の契約までは読めないので、誰も面の役割を持たない（面へのプレビューは 404）。
+ * プレビュー token の発行（`POST /api/pages/{id}/preview-token`。#40）の実行時の依存。保存先と接続は Postgres（DB が無ければ 503）。
+ * NIHO の役割は公開のシート（#39）の RoleReader をつなぐまで空（面へのプレビューは 404。本人のサイトの接続へは出せる）。
  */
 export const previewTokenDeps: PreviewTokenApiDeps = {
   auth: () => getAuthProvider(),
-  store: () => null,
+  store: () => {
+    const pool = getPool();
+    return pool ? pgPreviewTokenStore(pool) : null;
+  },
   roles: () => ({ read: async () => [] }),
-  connections: () => null,
+  connections: () => {
+    const pool = getPool();
+    return pool ? connectionSource(pgPublishStore(pool)) : null;
+  },
 };

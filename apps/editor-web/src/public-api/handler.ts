@@ -33,7 +33,7 @@ import {
 } from "@niho/editor-publish-contract";
 import { decodeCursor, encodeCursor, type CursorScope } from "./cursor";
 import type { RateLimiter } from "./rate-limit";
-import type { FaceCredentialSource, ListPosition, PublicApiSource, PublishedRow } from "./source";
+import type { FaceCredentialSource, ListPosition, PublicApiSource, PublishedListRow, PublishedRow } from "./source";
 
 /**
  * 公開 API v1（#40）の handler。仕様は docs/security/editor-publish-api-v1.md、型・検証・ETag・鍵の形は @niho/editor-publish-contract。
@@ -157,7 +157,7 @@ function single(query: Query, key: string): string | null | undefined {
 }
 
 /** 公開版の行 → 一覧の項目（契約の field だけ。range は公開の行の値）。 */
-function listItem(row: PublishedRow): PublishedListItem {
+function listItem(row: PublishedListRow): PublishedListItem {
   const { snapshot } = row;
   return {
     id: snapshot.id,
@@ -292,7 +292,7 @@ export function createPublicApi(options: PublicApiOptions): PublicApi {
 
   async function preview(api: PublicApiSource, principal: Principal, token: string, query: Query, now: string, context: Context) {
     if (!isPreviewToken(token)) return error("not_found", context);
-    const record = await api.previewTokenByHash(sha256Hex(token));
+    const record = await api.previewTokenByHash(sha256Hex(token), now);
     // 期限切れ・未知・15 分を超える有効期限・別の dest の資格は、全て同じ 404
     if (
       !record

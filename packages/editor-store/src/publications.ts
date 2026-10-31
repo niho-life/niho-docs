@@ -51,6 +51,9 @@ export type DraftPageRow = {
   lead: string | null;
   coverAssetId: string | null;
   content: Block[];
+  /** 保存の版（pages.revision）と保存の時刻（pages.updated_at）。公開 API のプレビューが下書きの version・時刻に使う。 */
+  revision: number;
+  savedAt: string;
 };
 
 /** ページの資産（公開に要る値だけ。bucket の位置は返さない）。 */
@@ -180,6 +183,8 @@ type DraftPageDbRow = {
   lead: string | null;
   cover: string | null;
   blocks: Block[];
+  revision: number;
+  updated_at: Date;
 };
 
 /**
@@ -189,7 +194,7 @@ type DraftPageDbRow = {
 export async function getDraftPage(db: Queryable, pageId: string, options: { lock?: boolean } = {}): Promise<DraftPageRow | null> {
   if (!isPageId(pageId)) return null;
   const result = await db.query<DraftPageDbRow>(
-    `SELECT id, owner, title, lang, lead, cover, blocks
+    `SELECT id, owner, title, lang, lead, cover, blocks, revision, updated_at
        FROM pages
       WHERE id = $1 AND deleted_at IS NULL${options.lock === true ? "\n      FOR NO KEY UPDATE" : ""}`,
     [pageId],
@@ -204,6 +209,8 @@ export async function getDraftPage(db: Queryable, pageId: string, options: { loc
     lead: row.lead,
     coverAssetId: row.cover,
     content: row.blocks,
+    revision: row.revision,
+    savedAt: iso(row.updated_at),
   };
 }
 

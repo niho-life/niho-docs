@@ -229,6 +229,7 @@ describe("PostgreSQL publications (0008)", { skip: databaseUrl === undefined }, 
       await pool.query("UPDATE pages SET lead = '合成のリード', cover = $2 WHERE id = $1", [pageId, assetId]);
 
       const page = await getDraftPage(pool, pageId);
+      const saved = await pool.query<{ revision: number; updated_at: Date }>("SELECT revision, updated_at FROM pages WHERE id = $1", [pageId]);
       assert.deepEqual(page, {
         id: pageId,
         ownerId: OWNER,
@@ -237,6 +238,8 @@ describe("PostgreSQL publications (0008)", { skip: databaseUrl === undefined }, 
         lead: "合成のリード",
         coverAssetId: assetId,
         content: [{ type: "paragraph", content: [{ type: "text", text: "合成" }] }],
+        revision: saved.rows[0]!.revision,
+        savedAt: saved.rows[0]!.updated_at.toISOString(),
       });
       assert.deepEqual(await listDraftAssets(pool, pageId), [
         { id: assetId, kind: "image", bytes: 120000, sha256: fakeSha("photo"), contentType: "image/jpeg", alt: "合成の写真", credit: null, consent: true },

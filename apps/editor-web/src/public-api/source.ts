@@ -13,8 +13,11 @@ import {
  * DB の形に近い最小限の問い合わせだけを持ち、認可（どの資格がどの handle を読めるか）・形の検査・応答の組み立ては handler が行う。
  * 実装は段 2 で packages/editor-store のクエリがする（テストはメモリの実装。src/public-api/testing/world-source.ts）。
  *
- * 時刻の比べ方は全て `now`（handler の時計。1 つの要求の中では同じ値）で行う:
- * - 失効・解除・公開をやめた時刻は `<= now` で効いている（未来の時刻はまだ効いていない）。
+ * 時刻は `now`（handler の時計。1 つの要求の中では同じ値）を渡す:
+ * - 期限（プレビュー token・面の資格）は `now` と比べる（期限が `<= now` なら切れている）。
+ * - 失効・解除・公開をやめた・移動で離れたは、時刻が `<= now` なら効いている。実装は、記録された時刻が `now` より後でも
+ *   効いている側に倒してよい（Postgres の実装はそうする。書き込みの時計が読み取りより進んでいても、失効した鍵で読めない）。
+ *   メモリの実装（testing/world-source.ts）は参照モデルどおり時刻で比べる。同じ時計で書き、`now` が書き込みの時刻以降なら同じ答え。
  * - 鍵・token の平文は渡さない。渡すのは SHA-256（小文字の hex）だけ。
  */
 
@@ -25,6 +28,12 @@ export type PublishedSnapshot = Omit<PublishedDoc, "range">;
 export interface PublishedRow {
   readonly range: PublicationRange;
   readonly snapshot: PublishedSnapshot;
+}
+
+/** 一覧の 1 件。本文（blocks・markdown・assets）は要らない（あっても使わない）。 */
+export interface PublishedListRow {
+  readonly range: PublicationRange;
+  readonly snapshot: Omit<PublishedSnapshot, "blocks" | "markdown" | "assets">;
 }
 
 /** 一覧の keyset の位置（前のページの最後の項目の updatedAt と id）。 */
@@ -83,14 +92,14 @@ export interface PublicApiSource {
    * handle の公開中の一覧。snapshot の dest が handle の発信先のもの・公開をやめていないもの・範囲が live（includeUnlisted なら unlisted も）だけ。
    * 並びは updatedAt の新しい順、同時刻は id の昇順。
    */
-  listPublished(query: ListPublishedQuery): Promise<readonly PublishedRow[]>;
+  listPublished(query: ListPublishedQuery): Promise<readonly PublishedListRow[]>;
   /** handle × pageId の公開版（snapshot の dest が handle の発信先のものだけを見る）。 */
   getPublished(handle: string, pageId: string, now: string): Promise<PublishedLookup>;
-  /** プレビュー token の SHA-256 → 拘束。未知は null。 */
-  previewTokenByHash(sha256: string): Promise<PreviewBinding | null>;
+  /** プレビュー token の SHA-256 → 拘束。未知は null（期限切れ・ページがゴミ箱のものも null にしてよい。handler も期限を見る）。 */
+  previewTokenByHash(sha256: string, now: string): Promise<PreviewBinding | null>;
   /**
    * プレビュー用の現在の下書き（packages/editor-publish の buildSnapshot で、その handle の公開の設定と現在の下書きから組む）。
-   * ページが無い・ゴミ箱・公開の形に組めない（未確認の画像など）ときは null。
+   * revision・savedAt はページの保存の版と時刻。ページが無い・ゴミ箱・公開の形に組めない（未確認の画像など）ときは null。
    */
   previewDraft(pageId: string, handle: string): Promise<PreviewDraft | null>;
 }
