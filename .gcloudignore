@@ -1,0 +1,18 @@
+# scripts/editor-deploy/deploy.sh の `gcloud builds submit … .` が Cloud Build へ送る source の範囲。
+# このファイルが無いと「リポジトリの全部」が送られ、`.claude/worktrees/`（別セッションの worktree）や
+# 手元の node_modules まで含めて 3.4 GiB になる。実際に 2026-11-01 の配備が、送っている最中に
+# 別セッションが worktree のファイルを消したため `gcloud crashed (FileNotFoundError)` で止まった。
+# image に何が入るかは各 Dockerfile の `<Dockerfile>.dockerignore` が決める。ここは「送る量」の話。
+.git/
+.claude/
+**/node_modules/
+**/.next/
+**/dist/
+**/target/
+**/.build/
+**/*.tsbuildinfo
+**/.env*
+**/.DS_Store
+*.log
+# 本番プロジェクトを特定する値（.gitignore でも除外している）
+scripts/editor-deploy/deploy.env
