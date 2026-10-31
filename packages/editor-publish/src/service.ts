@@ -30,11 +30,14 @@ import {
   destOf,
   handleOfTarget,
   roleAllows,
+  storageBlockOf,
   type AssetRecord,
   type DraftPage,
   type Notice,
   type Problem,
   type PublishSettings,
+  type StorageBlock,
+  type StorageMode,
   type Target,
 } from "./types.js";
 
@@ -116,6 +119,11 @@ export interface RoleReader {
   read(actorId: string): Promise<readonly string[]>;
 }
 
+/** The account's storage mode from NIHO, read on every operation that publishes, never stored (design §2.1). */
+export interface StorageModeReader {
+  read(actorId: string): Promise<StorageMode>;
+}
+
 /** Whether the actor has a live connection to the site with this handle (#41). */
 export interface ConnectionSource {
   has(actorId: string, handle: string): Promise<boolean>;
@@ -152,6 +160,7 @@ export interface Clock {
 export interface PublishPorts {
   readonly store: PublishStore;
   readonly roles: RoleReader;
+  readonly storage: StorageModeReader;
   readonly connections: ConnectionSource;
   readonly declarations: DeclarationSource;
   readonly authors: AuthorSource;
@@ -188,6 +197,8 @@ export type Failed = { readonly ok: false; readonly reason: "failed"; readonly r
 export type PublishFailure =
   | NotFound
   | { readonly ok: false; readonly reason: "forbidden_destination"; readonly detail: ForbiddenDetail }
+  /** The account keeps its pages only on the Mac (or is moving them there): nothing is published from the server. */
+  | { readonly ok: false; readonly reason: "storage_not_cloud"; readonly detail: StorageBlock }
   | { readonly ok: false; readonly reason: "not_ready"; readonly problems: readonly Problem[]; readonly notices: readonly Notice[] }
   | { readonly ok: false; readonly reason: "slug_locked"; readonly slug: string }
   | { readonly ok: false; readonly reason: "slug_taken"; readonly suggestion: string | null }
@@ -332,6 +343,8 @@ export class PublishService {
   private async prepare(mode: Mode, input: PlaceInput): Promise<PublishResult> {
     const { actorId, pageId } = input;
     if (!validIds(actorId, pageId)) return NOT_FOUND;
+    const storageBlock = storageBlockOf(await this.ports.storage.read(actorId));
+    if (storageBlock !== null) return { ok: false, reason: "storage_not_cloud", detail: storageBlock };
     const handle = handleOfTarget(input.target);
     const dest = handle === null ? null : destOf(handle);
     if (handle === null || dest === null) return forbidden("target");

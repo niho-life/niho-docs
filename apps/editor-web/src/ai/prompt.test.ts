@@ -73,7 +73,7 @@ describe("buildPrompt", () => {
   });
 
   it("sends each split request with only its own paragraphs", () => {
-    const blocks = [p("a".repeat(7000)), p("b".repeat(7000)), p("c".repeat(100))];
+    const blocks = [p("a".repeat(3000)), p("b".repeat(3000)), p("c".repeat(100))];
     const plan = buildRequest({ blocks, lang: "ja" }, { preset: "tidy" });
     if (!plan.ok) throw new Error("expected a plan");
     expect(plan.requests).toHaveLength(2);

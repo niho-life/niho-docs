@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import nextConfig from "../../next.config";
+import nextConfig, { ALL_BUT_PUBLIC_API } from "../../next.config";
 import { metadata, viewport } from "./layout";
 import manifest from "./manifest";
 
@@ -58,7 +58,7 @@ describe("install metadata and noindex", () => {
 
   it("sends noindex on the manifest, the service worker and the offline page too (they match the catch-all rule)", async () => {
     const rules = (await nextConfig.headers?.()) ?? [];
-    const catchAll = rules.find((rule) => rule.source === "/:path*");
+    const catchAll = rules.find((rule) => rule.source === ALL_BUT_PUBLIC_API);
     expect(catchAll?.headers).toEqual(expect.arrayContaining([{ key: "X-Robots-Tag", value: "noindex, nofollow" }]));
     expect(readFileSync(new URL("offline.html", publicDir), "utf8")).toContain('<meta name="robots" content="noindex, nofollow" />');
   });

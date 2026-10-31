@@ -17,7 +17,7 @@ import { isPageId } from "./store.ts";
 import type { OwnerId, PageLang, Queryable } from "./types.ts";
 
 /**
- * 録音の文字起こしの実行（#36 段 2b。migrations/0009_transcription_runs.sql）。手順（#37）の実行の表とは別の経路。
+ * 録音の文字起こしの実行（#36 段 2b。migrations/0012_transcription_runs.sql）。手順（#37）の実行の表とは別の経路。
  *
  * 流れ: 開始（enqueueTranscription）で run を queued で作る → 実行する側が claimRun で running にして世代を 1 つ進める →
  * 保存先の音声をエンジンに渡す → finishRun で段落を page_recordings に書き、run を succeeded にする（1 transaction）。
@@ -37,7 +37,7 @@ export type TranscriptionEngineName = (typeof TRANSCRIPTION_ENGINES)[number];
 export const TRANSCRIPTION_RUN_STATUSES = ["queued", "running", "succeeded", "failed"] as const;
 export type TranscriptionRunStatus = (typeof TRANSCRIPTION_RUN_STATUSES)[number];
 
-/** 失敗の理由（0009 の CHECK と同じ）。 */
+/** 失敗の理由（0012 の CHECK と同じ）。 */
 export const TRANSCRIPTION_ERROR_CODES = [
   "audio_missing",
   "audio_expired",
@@ -50,7 +50,7 @@ export const TRANSCRIPTION_ERROR_CODES = [
 ] as const;
 export type TranscriptionErrorCode = (typeof TRANSCRIPTION_ERROR_CODES)[number];
 
-/** 固有名詞の表記の数と、1 つの文字数の上限（0009 の CHECK と API の検査と同じ）。 */
+/** 固有名詞の表記の数と、1 つの文字数の上限（0012 の CHECK と API の検査と同じ）。 */
 export const TRANSCRIPTION_TERMS_MAX = 100;
 export const TRANSCRIPTION_TERM_MAX_CHARS = 64;
 

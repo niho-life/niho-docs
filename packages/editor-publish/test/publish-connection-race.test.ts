@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { PublishService, siteDeclarationSource, type ConnectionSource } from "../src/index.js";
-import { MemoryAuthors, MemoryFacts, MemoryRoles, memoryAssetUrls } from "../test-support/memory-store.js";
+import { MemoryAuthors, MemoryFacts, MemoryRoles, MemoryStorageMode, memoryAssetUrls } from "../test-support/memory-store.js";
 import { ACTOR, HANDLE, PAGE_ID, SITE_SETTINGS, createSiteWorld } from "./support/site-world.js";
 
 describe("publishing to a site whose connection was disconnected after the pre-check", () => {
@@ -20,6 +20,7 @@ describe("publishing to a site whose connection was disconnected after the pre-c
     const publisher = new PublishService({
       store: world.store,
       roles: new MemoryRoles(),
+      storage: new MemoryStorageMode(),
       connections: stale,
       declarations: { get: async () => staleDeclaration },
       authors,

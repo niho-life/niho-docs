@@ -11,7 +11,7 @@ export { ShellTools, ShellMobileToolbar, type ShellToolAction, type ShellToolsPr
 export { ShellHeader, shellMoreItems, type ShellHeaderProps } from "./header";
 export { ShellSidebar, shellAccountItems, type ShellSidebarProps } from "./sidebar";
 export { NewPageMenu, type NewPageKind } from "./new-page-menu";
-export { ShellRail, ShellRailSection, type ShellRailSectionProps } from "./rail";
+export { ShellRail, ShellRailSection, type ShellRailProps, type ShellRailSectionProps } from "./rail";
 export { ShellSteps, type ShellStep } from "./steps";
 export { ShellChat, type ShellChatAction, type ShellChatMessage, type ShellChatProps } from "./chat";
 export { ShellPageSettings, type ShellPageSettingsProps } from "./page-settings";
@@ -26,7 +26,16 @@ export {
   type ShellMetaItem,
   type ShellPageProps,
 } from "./page";
-export { ShellMakeFrom, ShellRecording, type ShellRecordingProps, type ShellSegment } from "./transcript";
+export {
+  SHELL_TONES,
+  ShellMakeFrom,
+  ShellRecording,
+  type ShellRecordingProps,
+  type ShellSegment,
+  type ShellSpeaker,
+  type ShellSpeakerResult,
+  type ShellTone,
+} from "./transcript";
 export { ShellProposal, type ShellDiffPart, type ShellProposalBlock, type ShellProposalProps } from "./proposal";
 export { RecordingStart, type RecordingHow, type RecordingNext, type RecordingStartProps } from "./recording-start";
 export { ShellSheet, type ShellSheetProps } from "./sheet";
@@ -41,6 +50,8 @@ export {
   type PublishFormProps,
   type PublishRange,
   type PublishSheetProps,
+  type PublishSlug,
+  type PublishStopProps,
 } from "./publish-sheet";
 export { LoginScreen, type LoginScreenProps } from "./login";
 export { PublishPreview, type PublishPreviewDest, type PublishPreviewProps } from "./preview";

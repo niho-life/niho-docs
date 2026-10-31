@@ -162,14 +162,14 @@ describe("transcription runs without a database", () => {
   });
 });
 
-describe("0009 on a database that has 0001 to 0008", { skip: databaseUrl === undefined }, () => {
+describe("0012 on a database that has 0001 to 0011", { skip: databaseUrl === undefined }, () => {
   let pool: PgPool;
   let drop: () => Promise<void>;
   let dir: string;
 
   before(async () => {
-    ({ pool, drop } = await withSchema("transcribe0009"));
-    dir = await mkdtemp(join(tmpdir(), "editor-store-0009-"));
+    ({ pool, drop } = await withSchema("transcribe0012"));
+    dir = await mkdtemp(join(tmpdir(), "editor-store-0012-"));
   });
 
   after(async () => {
@@ -182,7 +182,7 @@ describe("0009 on a database that has 0001 to 0008", { skip: databaseUrl === und
     const dirUrl = pathToFileURL(`${dir}/`);
     // 適用済みの一覧は readMigrations() から取る
     const names = (await readMigrations()).map((file) => file.name);
-    const earlier = names.filter((name) => name < "0009");
+    const earlier = names.filter((name) => name < "0012");
     assert.ok(earlier.includes("0001_editor_store.sql") && earlier.includes("0008_recording_audio.sql"));
     for (const name of earlier) await copyFile(join(migrations, name), join(dir, name));
     const client = await pool.connect();
@@ -198,9 +198,9 @@ describe("0009 on a database that has 0001 to 0008", { skip: databaseUrl === und
       });
       const before = [await recordingRow(pool, audioPage), await recordingRow(pool, vtt.page.id)];
 
-      await copyFile(join(migrations, "0009_transcription_runs.sql"), join(dir, "0009_transcription_runs.sql"));
+      await copyFile(join(migrations, "0012_transcription_runs.sql"), join(dir, "0012_transcription_runs.sql"));
       const second = await applyMigrations(client, dirUrl);
-      assert.deepEqual(second.applied, ["0009_transcription_runs.sql"]);
+      assert.deepEqual(second.applied, ["0012_transcription_runs.sql"]);
       assert.deepEqual(second.skipped, earlier);
       assert.deepEqual([await recordingRow(pool, audioPage), await recordingRow(pool, vtt.page.id)], before, "existing recordings are unchanged");
       assert.equal((await pool.query("SELECT count(*)::int AS n FROM transcription_runs")).rows[0].n, 0, "the migration records nothing");

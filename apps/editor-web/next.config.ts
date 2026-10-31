@@ -7,6 +7,13 @@ import { API_CSP } from "./src/security/csp";
  */
 export const ROBOTS_HEADERS = [{ key: "X-Robots-Tag", value: "noindex, nofollow" }];
 
+/**
+ * 公開 API v1（`/v1/*`。#40）を除く全ての path。`/` も含む（`/:path*` と同じ範囲から `/v1/` の下だけを外す）。
+ * Next は同じ名前の header が既にあると route の応答の値を捨てる（config の値が勝つ）ので、契約が値を決める header
+ * （`X-Robots-Tag: noindex`・`Cache-Control`・`Vary`・`Content-Type`）を `/v1` には config から付けない。値は src/public-api/handler.ts が付ける。
+ */
+export const ALL_BUT_PUBLIC_API = "/:path((?!v1/).*)";
+
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   // 更新系の要求の Origin 検査のため same-origin（no-referrer だと Origin: null になる画面がある）
@@ -31,7 +38,7 @@ const nextConfig: NextConfig = {
   // Cloud Run の container 用の自己完結の server（Dockerfile）
   output: "standalone",
   // packages/* は TypeScript のまま（install-links で node_modules に複製される）
-  transpilePackages: ["@niho/docs-core", "@niho/editor-store", "niho-docs-ui", "niho-ui"],
+  transpilePackages: ["@niho/docs-core", "@niho/editor-publish", "@niho/editor-publish-contract", "@niho/editor-store", "niho-docs-ui", "niho-ui"],
   poweredByHeader: false,
   reactStrictMode: true,
   outputFileTracingRoot: process.cwd(),
@@ -41,11 +48,13 @@ const nextConfig: NextConfig = {
     extensionAlias: { ".js": [".ts", ".tsx", ".js"] },
   },
   async headers() {
-    // `/:path*` は `/` も含む全ての path（ページ・API・404・robots.txt・静的ファイル）。
+    // ALL_BUT_PUBLIC_API は `/` も含む全ての path（ページ・API・404・robots.txt・静的ファイル）から `/v1/` の下を除いたもの。
     // ページの CSP は nonce が要るので src/proxy.ts が付ける。API は何も読み込まないので固定の CSP。
     return [
-      { source: "/:path*", headers: [...ROBOTS_HEADERS, ...securityHeaders] },
+      { source: ALL_BUT_PUBLIC_API, headers: [...ROBOTS_HEADERS, ...securityHeaders] },
       { source: "/api/:path*", headers: [{ key: "Content-Security-Policy", value: API_CSP }] },
+      // 公開 API（#40）。契約の header と重ならないものだけ（noindex・Cache-Control・Vary は handler が契約どおりに付ける）
+      { source: "/v1/:path*", headers: [...securityHeaders, { key: "Content-Security-Policy", value: API_CSP }] },
       // service worker は更新がすぐ届くよう、ブラウザの HTTP cache に残さない（#49）
       { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }] },
       // 共有リンクのページ（#34）。private・no-store・no-referrer。全体の規則のあとに置いて、同じ key（Referrer-Policy）を上書きする

@@ -32,11 +32,13 @@ function errorCode(error: unknown): PageSearchError {
  * 打つたびに自分のページを探す（⌘K・サイドバーの検索）。
  * 打つのが SEARCH_DEBOUNCE_MS 止まってから 1 回だけ問い合わせ、検索語が変わったら前の要求は中止して捨てる。
  * 空（空白だけを含む）では問い合わせない。長すぎる語は問い合わせずに error（too_long）。
+ * `refresh` の値が変わると、同じ語でもう一度問い合わせる（ページを削除したあとなど、サーバーの答えが変わったとき。
+ * 新しい答えが来るまでは前の結果を出したまま）。
  */
-export function usePageSearch(query: string, options: { limit?: number } = {}): PageSearchState {
+export function usePageSearch(query: string, options: { limit?: number; refresh?: number } = {}): PageSearchState {
   const normalized = normalizeSearchInput(query);
   const tooLong = Array.from(normalized).length > SEARCH_QUERY_MAX_CHARS;
-  const { limit } = options;
+  const { limit, refresh } = options;
   const [settled, setSettled] = useState<Settled | null>(null);
 
   useEffect(() => {
@@ -57,7 +59,7 @@ export function usePageSearch(query: string, options: { limit?: number } = {}): 
       clearTimeout(timer);
       controller.abort();
     };
-  }, [normalized, tooLong, limit]);
+  }, [normalized, tooLong, limit, refresh]);
 
   return useMemo<PageSearchState>(() => {
     if (normalized === "") return IDLE;

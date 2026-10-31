@@ -56,8 +56,9 @@ prefix は `https://api.editor.niho.life`。メソッドは `GET` と `HEAD` だ
 
 ### プレビュー
 
-- 下書きの**現在の内容**を読む。token は page と handle（本人のサイトは接続）にだけ拘束し、下書きの版には拘束しない（自動保存で内容が変わっても、同じ token で読み直せる）。`preview` に `{ expiresAt, dest, noindex: true }` を持つ。公開前の下書きには公開日時がないので、`publishedAt`・`updatedAt` は下書きの保存時刻、`version` は下書きの版。
+- 下書きの**現在の内容**を読む。token は page と handle（本人のサイトは接続）と発行した本人の著者に拘束し、下書きの版には拘束しない（自動保存で内容が変わっても、同じ token で読み直せる）。`preview` に `{ expiresAt, dest, noindex: true }` を持つ。公開前の下書きには公開日時がないので、`publishedAt`・`updatedAt` は下書きの保存時刻、`version` は下書きの版。
 - 期限切れ・未知・形の不正・15 分を超える有効期限・別の dest の資格で読んだ token は、すべて同じ 404（サービス間の token や鍵の期限切れは、プレビューに限らず 401）。
+- `author` は token を発行したときの本人の著者（読み取りの要求には本人がいないので、発行のときに token に結ぶ）。token に著者が無ければ、そのページのいまの公開版の著者。どちらも無ければ組めないので 404。
 - 発信先は `noindex` のページとして描画する。見え方の正本は発信先側にある。
 
 ## 本文
