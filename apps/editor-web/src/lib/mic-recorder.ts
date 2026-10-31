@@ -5,6 +5,8 @@
  * - 形式: `audio/webm;codecs=opus` → `audio/webm` → `audio/mp4` → ブラウザの既定 の順に `isTypeSupported` で選ぶ。
  *   ファイル名は `録音 YYYY-MM-DD HH-mm.webm`（mp4 は `.m4a`。server が `.mp4` を受け付けないため）。日時は端末の時刻。
  * - 6 時間（取り込みの上限と同じ）で自動で止める。
+ * - 控え（keep。recording-keep.ts）を渡すと、塊が来るたびに端末へ書く（録音中に画面を閉じても失わない）。書けなくても
+ *   録音は続ける（控えは待たない・例外は呼び出し側の口が飲む）。控えの id は `keepId` で読める（取り込めたら消す）。
  * - 後片付け: 止めた・捨てた・画面を離れた（dispose）ときは、マイクのトラックを必ず止める（ブラウザの録音中の印を消す）。
  *   音量の表示は無いので AudioContext は作らない。
  * - 失敗は MicError（denied=許可されていない・no_device=マイクが無い・unsupported=このブラウザでは録音できない・failed=その他）。
@@ -89,7 +91,17 @@ export function recordingFileName(at: Date, mimeType: string): string | null {
   return `録音 ${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}-${pad(at.getMinutes())}.${extension}`;
 }
 
-export type MicRecording = { file: File; durationSec: number; mimeType: string };
+export type MicRecording = { file: File; durationSec: number; mimeType: string; /** 端末の控えの id（控えなしなら null）。 */ keepId: string | null };
+
+/**
+ * 録音を端末に控える口（recording-keep.ts の RecordingKeep をつないだもの）。どれも待たない（戻り値を見ない）。
+ * 失敗はこの口の中で飲む（録音を止めない）。
+ */
+export type MicKeepSink = {
+  begin: (take: { id: string; name: string; mimeType: string; startedAt: string }) => void;
+  chunk: (id: string, seq: number, data: Blob, durationSec: number) => void;
+  finish: (id: string, durationSec: number) => void;
+};
 
 function micErrorOf(error: unknown): MicError {
   const name = typeof error === "object" && error !== null ? (error as { name?: unknown }).name : undefined;
@@ -101,6 +113,10 @@ function micErrorOf(error: unknown): MicError {
 
 export type MicRecorderOptions = {
   maxDurationMs?: number;
+  /** 端末の控え（無ければ控えない）。 */
+  keep?: MicKeepSink;
+  /** 控えの id を作る（既定は crypto.randomUUID。テストで差し替える）。 */
+  newKeepId?: () => string;
   /** 6 時間・トラックが切れた（マイクが外れた）などで、自分で止めた。録音は残す。 */
   onAutoStop?: (recording: MicRecording) => void;
   /** 録音中に失敗した（録音は残らない）。 */
@@ -120,6 +136,9 @@ export class MicRecorder {
   private startedDate = new Date(0);
   private mimeType = "";
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** 端末の控えの id（控えていないときは null）。 */
+  private keep: string | null = null;
+  private chunkSeq = 0;
   private stopping: { resolve: (recording: MicRecording) => void; reject: (error: MicError) => void } | null = null;
   private readonly now: () => number;
 
@@ -132,6 +151,11 @@ export class MicRecorder {
 
   get state(): Phase {
     return this.phase;
+  }
+
+  /** 端末の控えの id（控えていなければ null）。取り込めた・捨てたときに消すために使う。 */
+  get keepId(): string | null {
+    return this.keep;
   }
 
   /** 録音を始めた時からの経過（ms）。止めたあとは止めた時まで。 */
@@ -165,7 +189,10 @@ export class MicRecorder {
     try {
       recorder = new Recorder(stream, mimeType ? { mimeType } : undefined);
       recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) this.chunks.push(event.data);
+        if (!event.data || event.data.size === 0) return;
+        this.chunks.push(event.data);
+        // 端末の控えにも書く（待たない）。画面を閉じても、ここまでの塊は残る
+        if (this.keep !== null) this.options.keep?.chunk(this.keep, ++this.chunkSeq, event.data, this.elapsedMs() / 1000);
       };
       recorder.onstop = () => this.finish();
       recorder.onerror = () => this.fail(new MicError("failed"));
@@ -180,6 +207,12 @@ export class MicRecorder {
     this.startedAt = this.now();
     this.startedDate = new Date();
     this.phase = "recording";
+    // 控えの枠を先に作る（最初の塊が来る前に閉じられても、名前と時刻は残る）
+    const keepName = recordingFileName(this.startedDate, this.mimeType);
+    if (this.options.keep && keepName) {
+      this.keep = (this.options.newKeepId ?? (() => crypto.randomUUID()))();
+      this.options.keep.begin({ id: this.keep, name: keepName, mimeType: this.mimeType || "audio/webm", startedAt: this.startedDate.toISOString() });
+    }
     for (const track of stream.getTracks()) {
       // マイクが外れた・ほかの操作で止められた: 録音はそこまでで止める
       track.addEventListener?.("ended", () => {
@@ -253,7 +286,9 @@ export class MicRecorder {
     // 断られ、再試行も同じ値で断られ続けて取り込めなくなる。録音の長さの申告は、この録音の上限を超えない値にする。
     const limitSec = (this.options.maxDurationMs ?? MIC_MAX_DURATION_MS) / 1000;
     const elapsedSec = Math.max(0, this.stoppedAt - this.startedAt) / 1000;
-    const recording: MicRecording = { file, durationSec: Math.min(elapsedSec, limitSec), mimeType: type || "audio/webm" };
+    const durationSec = Math.min(elapsedSec, limitSec);
+    if (this.keep !== null) this.options.keep?.finish(this.keep, durationSec);
+    const recording: MicRecording = { file, durationSec, mimeType: type || "audio/webm", keepId: this.keep };
     if (pending) pending.resolve(recording);
     else this.options.onAutoStop?.(recording);
   }

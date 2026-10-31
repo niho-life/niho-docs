@@ -259,6 +259,45 @@ describe("MicRecorder", () => {
     expect(late.tracks[0]!.stopped).toBe(true);
   });
 
+  it("writes each chunk to the keep as it arrives, so a recording survives the page closing", async () => {
+    const written: { id: string; seq: number; size: number; durationSec: number }[] = [];
+    const keep = {
+      begin: vi.fn(),
+      chunk: vi.fn((id: string, seq: number, data: Blob, durationSec: number) => written.push({ id, seq, size: data.size, durationSec })),
+      finish: vi.fn(),
+    };
+    const { env, instances } = environment({ now: () => Date.now() });
+    const recorder = new MicRecorder(env, { keep, newKeepId: () => "keep-1" });
+    await recorder.start();
+    expect(keep.begin).toHaveBeenCalledWith({ id: "keep-1", name: "録音 2030-01-02 09-05.webm", mimeType: "audio/webm;codecs=opus", startedAt: new Date().toISOString() });
+    expect(recorder.keepId).toBe("keep-1");
+
+    // 塊が来るたびに控えへ（止めるのを待たない）
+    vi.advanceTimersByTime(1000);
+    instances[0]!.emit([1, 2, 3]);
+    vi.advanceTimersByTime(1000);
+    instances[0]!.emit([4]);
+    expect(written).toEqual([
+      { id: "keep-1", seq: 1, size: 3, durationSec: 1 },
+      { id: "keep-1", seq: 2, size: 1, durationSec: 2 },
+    ]);
+
+    const recording = await recorder.stop();
+    // 止めたら長さが決まる（最後の塊も控えに入っている）
+    expect(keep.finish).toHaveBeenCalledWith("keep-1", 2);
+    expect(written.at(-1)).toEqual({ id: "keep-1", seq: 3, size: 1, durationSec: 2 });
+    expect(recording.keepId).toBe("keep-1");
+  });
+
+  it("keeps nothing when no keep is given (the recording still works)", async () => {
+    const { env, instances } = environment();
+    const recorder = new MicRecorder(env);
+    await recorder.start();
+    expect(recorder.keepId).toBeNull();
+    instances[0]!.emit([1]);
+    expect((await recorder.stop()).keepId).toBeNull();
+  });
+
   it("reports a recorder error and stops the tracks", async () => {
     const onError = vi.fn();
     const { env, streams, instances } = environment();

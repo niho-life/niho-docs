@@ -14,6 +14,7 @@ vi.mock("@/lib/audio-duration", () => ({ probeAudioDuration: vi.fn(async () => n
 import { createHash } from "node:crypto";
 import { probeAudioDuration } from "@/lib/audio-duration";
 import { resetAudioLimitsCache } from "@/lib/audio-upload-client";
+import type { KeptTake, RecordingKeep } from "@/lib/recording-keep";
 import { RecordingStartScreen } from "./RecordingStartScreen";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -173,14 +174,45 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-async function mount() {
+async function mount(props: { keep?: RecordingKeep | null; limits?: typeof LIMITS } = {}) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
   await act(async () => {
-    root!.render(<RecordingStartScreen />);
+    root!.render(<RecordingStartScreen {...props} />);
   });
 }
+
+/** 端末の控えの偽物（IndexedDB は jsdom に無いので、画面には口だけを渡す）。 */
+function memoryKeep(takes: KeptTake[], files: Record<string, File> = {}) {
+  const removed: string[] = [];
+  const keep: RecordingKeep = {
+    begin: async () => undefined,
+    addChunk: async () => undefined,
+    finish: async () => undefined,
+    list: async () => takes,
+    load: async (id) => {
+      const take = takes.find((item) => item.id === id);
+      const file = files[id];
+      return take && file ? { take, file } : null;
+    },
+    remove: async (id) => {
+      removed.push(id);
+    },
+  };
+  return { keep, removed };
+}
+
+const keptTake = (overrides: Partial<KeptTake> = {}): KeptTake => ({
+  id: "33333333-3333-4333-8333-333333333333",
+  name: "録音 2030-01-02 09-05.webm",
+  mimeType: "audio/webm",
+  startedAt: "2030-01-02T00:05:00.000Z",
+  durationSec: 65,
+  bytes: 2048,
+  finished: false,
+  ...overrides,
+});
 
 const fileInput = () => container!.querySelector<HTMLInputElement>('input[type="file"]')!;
 const buttonByText = (text: string) => [...container!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(text))!;
@@ -481,6 +513,64 @@ describe("RecordingStartScreen（音声ファイル）", () => {
     expect(container!.textContent).not.toContain("storage.example.test");
     expect(container!.textContent).toContain("合成の会議.m4a");
     expect(router.push).not.toHaveBeenCalled();
+  });
+});
+
+describe("RecordingStartScreen（前回の録音・上限の案内）", () => {
+  it("録音中に画面を閉じた録音を出し、取り込んで、控えを消す", async () => {
+    const take = keptTake();
+    const { keep, removed } = memoryKeep([take], { [take.id]: new File([new Uint8Array([1, 2, 3])], take.name, { type: "audio/webm" }) });
+    const { fetchMock, calls } = audioApi();
+    vi.stubGlobal("fetch", fetchMock);
+    await mount({ keep });
+    await until(() => container!.querySelector("[data-mic-kept]") !== null);
+    const row = container!.querySelector("[data-mic-kept]")!;
+    expect(row.getAttribute("data-mic-kept")).toBe("interrupted");
+    // 色だけで示さない: 残っていること・長さ・大きさを文で出す
+    expect(row.textContent).toContain("前回の録音が残っています（録音中に画面が閉じました）");
+    expect(row.textContent).toContain("01:05");
+    expect(row.textContent).toContain("2 KB");
+
+    await act(async () => buttonByText("取り込む").click());
+    await until(() => router.push.mock.calls.length > 0);
+    const body = JSON.parse(calls("/api/recordings/audio/start")[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.name).toBe(take.name);
+    expect(body.durationSec).toBe(65);
+    // サーバーに入ったので端末には残さない
+    expect(removed).toEqual([take.id]);
+    expect(router.push).toHaveBeenCalledWith(`/p/${PAGE_ID}`);
+  });
+
+  it("「消す」で控えを消し、欄を閉じる", async () => {
+    const take = keptTake({ finished: true });
+    const { keep, removed } = memoryKeep([take]);
+    vi.stubGlobal("fetch", audioApi().fetchMock);
+    await mount({ keep });
+    await until(() => container!.querySelector("[data-mic-kept]") !== null);
+    expect(container!.querySelector("[data-mic-kept]")!.getAttribute("data-mic-kept")).toBe("stopped");
+    await act(async () => buttonByText("消す").click());
+    expect(removed).toEqual([take.id]);
+    expect(container!.querySelector("[data-mic-kept]")).toBeNull();
+  });
+
+  it("控えが読めなくなっていたら、欄を閉じて知らせる", async () => {
+    const take = keptTake();
+    const { keep } = memoryKeep([take]);
+    vi.stubGlobal("fetch", audioApi().fetchMock);
+    await mount({ keep });
+    await until(() => container!.querySelector("[data-mic-kept]") !== null);
+    await act(async () => buttonByText("取り込む").click());
+    await until(() => alertText() !== "");
+    expect(alertText()).toBe("前回の録音が読み出せませんでした。");
+    expect(container!.querySelector("[data-mic-kept]")).toBeNull();
+  });
+
+  it("長さ・容量の上限と、クラウドの音声が消える日数を出す（server から渡った値。要求を増やさない）", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => respond(200, LIMITS));
+    vi.stubGlobal("fetch", fetchMock);
+    await mount({ limits: LIMITS });
+    expect(container!.textContent).toContain("音声は 1 つ 6 時間・2 GiB まで。クラウドの音声は 30 日で消えます（文字起こしは残ります）");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

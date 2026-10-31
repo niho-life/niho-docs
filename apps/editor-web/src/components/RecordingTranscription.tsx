@@ -18,6 +18,7 @@ const ROW_STYLE: CSSProperties = { display: "flex", alignItems: "center", flexWr
  * 録音ページの文字起こしの開始と状態（#36 段 3b-1。音声のある録音だけ）。
  * - 音声がアップロード済みで段落が空なら「文字起こしをはじめる」。状態（待機中・文字起こし中）は読み上げ、失敗は理由と「もう一度」。
  * - 段落があるときに始める（「もう一度文字起こしする」・失敗の「もう一度」）は、置き換えることを 1 回確かめてから `replace: true`。
+ *   文字起こしするのはこのページの音声だけなので、あとから足した分（RecordingAppend）も置き換えで消える。確かめる欄でそう言う。
  * - 音声の期限（30 日で削除）を小さく出し、過ぎていたら「音声は削除されました」（段落は残る）。
  * - 外部のエンジンに音声が渡ることは、始めるボタンの近くに 1 行だけ（文言はオーナー確認待ちの仮置き。transcription-view.ts）。
  */
@@ -124,7 +125,7 @@ export function RecordingTranscription({
             }
           }}
         >
-          <span>いまの文字起こしは置き換えられます</span>
+          <span>いまの文字起こしは、足した分も含めて置き換えられます</span>
           <button
             type="button"
             className="es-btn es-btn--primary es-btn--sm"

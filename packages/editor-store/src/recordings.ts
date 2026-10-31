@@ -45,8 +45,12 @@ export type RecordingAudioStatus = (typeof RECORDING_AUDIO_STATUSES)[number];
  */
 export type RecordingAudio = { status: RecordingAudioStatus; bytes: number; contentType: string; expiresAt: string | null };
 
-/** 書き換えられる部分。speakerNames のキーは話者番号の 10 進の文字列（"1"）で、segments に出てくる話者だけ。 */
-export type RecordingData = { segments: RecordingSegment[]; speakerNames: Record<string, string> };
+/**
+ * 書き換えられる部分。speakerNames のキーは話者番号の 10 進の文字列（"1"）で、segments に出てくる話者だけ。
+ * durationSec は録音の長さ（秒）。**書き換えでは省略できる**（省くと今の長さのまま）。音声・字幕を足して録音が長くなるとき
+ * （editor-web の appendTranscript）だけ、新しい長さを入れて返す。
+ */
+export type RecordingData = { segments: RecordingSegment[]; speakerNames: Record<string, string>; durationSec?: number | null };
 
 export type Recording = {
   revision: number;
@@ -162,13 +166,18 @@ export function recordingTextBytes(segments: readonly Pick<RecordingSegment, "te
 
 /**
  * 保存する前の形の検査。問題が無ければ null、あれば短い理由（segments・segment・time・text・size・speaker・speaker_names・name）。
- * segments は上限の数まで、各段落は start・end・text・speaker の 4 つだけ、本文の合計は 8 MiB まで。speakerNames のキーは
+ * segments は上限の数まで、各段落は start・end・text・speaker の 4 つだけ、本文の合計は 8 MiB まで。長さ（durationSec）は
+ * 省略できて、入れるなら 0 以上か null（duration）。speakerNames のキーは
  * segments に出てくる話者だけで、名前は前後に空白の無い 1〜60 文字（制御文字なし）。名前の規則の全体（「話者N」の形・同名の衝突）は
  * 呼び出し側（docs-core）が見る。
  */
 export function recordingDataProblem(data: unknown): string | null {
   if (!isPlainObject(data) || !Array.isArray(data.segments) || !isPlainObject(data.speakerNames)) return "segments";
   if (data.segments.length > RECORDING_SEGMENTS_MAX) return "segments";
+  // 長さは省略できる（書き換えないとき）。入れるなら 0 以上の有限な数か null
+  if (data.durationSec !== undefined && data.durationSec !== null) {
+    if (typeof data.durationSec !== "number" || !Number.isFinite(data.durationSec) || data.durationSec < 0) return "duration";
+  }
   const speakers = new Set<string>();
   for (const segment of data.segments) {
     const problem = segmentProblem(segment);
@@ -193,12 +202,14 @@ export function recordingDataProblem(data: unknown): string | null {
   return null;
 }
 
-/** 決まった 4 つの項目だけの複製（呼び出し側が足した項目・jsonb の並びに左右されない）。 */
+/** 決まった項目だけの複製（呼び出し側が足した項目・jsonb の並びに左右されない）。長さは、持っているときだけ写す。 */
 function copyData(data: RecordingData): RecordingData {
-  return {
+  const copy: RecordingData = {
     segments: data.segments.map(({ start, end, text, speaker }) => ({ start, end, text, speaker })),
     speakerNames: { ...data.speakerNames },
   };
+  if (data.durationSec !== undefined) copy.durationSec = data.durationSec;
+  return copy;
 }
 
 function assertData(data: unknown): asserts data is RecordingData {
@@ -314,10 +325,12 @@ SELECT p.id, p.owner, $3::text, $4::text, $5::text, $6::numeric, $7::text, $8::t
  WHERE p.id = $1 AND p.owner = $2
 RETURNING ${RECORDING_COLUMNS}`;
 
+// 長さ（$5）は、書き換えが新しい長さを返したときだけ値が変わる（返さなければ呼び出し側が今の値をそのまま渡す）
 const UPDATE_SQL = `
 UPDATE page_recordings AS r
    SET segments = $3::jsonb,
        speaker_names = $4::jsonb,
+       duration_sec = $5::numeric,
        revision = r.revision + 1,
        updated_at = GREATEST(clock_timestamp(), r.updated_at)
  WHERE r.owner = $1 AND r.page_id = $2
@@ -454,6 +467,8 @@ export async function updateRecording<R extends string>(
         pageId,
         JSON.stringify(clean.segments),
         JSON.stringify(clean.speakerNames),
+        // 長さを返さない書き換え（段落の文章・話者の操作）は、今の長さのまま
+        clean.durationSec === undefined ? current.durationSec : clean.durationSec,
       ]);
       const saved = updated.rows[0];
       if (!saved) throw new Error("editor-store: update returned no recording");
