@@ -140,6 +140,8 @@ jobs:
           cache-dependency-path: packages/docs-ui/package-lock.json
       - run: npm -C packages/docs-ui ci
       - run: npm -C packages/docs-ui run typecheck
+      # gallery は src の外（独自の tsconfig）なので、別に型検査する。
+      - run: npm -C packages/docs-ui run typecheck:gallery
       - run: npm -C packages/docs-ui run lint
       - run: npm -C packages/docs-ui test
 
