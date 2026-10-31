@@ -12,7 +12,15 @@ const ASSET_ID = "0b6f7d8e-1c2a-4b3c-8d4e-5f6a7b8c9d0e";
 const OBJECT = `audio/${ASSET_ID}`;
 const NOW = Date.parse("2030-01-01T00:00:00.000Z");
 
-function claimOf(extra: { audio?: Partial<NonNullable<ClaimedTranscription["audio"]>> | null; diarize?: boolean } = {}): ClaimedTranscription {
+function claimOf(
+  extra: {
+    audio?: Partial<NonNullable<ClaimedTranscription["audio"]>> | null;
+    diarize?: boolean;
+    /** 音声の列（#36 段 3b-4）。渡さなければ part 0 の 1 件（audio と同じもの）。 */
+    parts?: ClaimedTranscription["parts"];
+    candidateId?: string | null;
+  } = {},
+): ClaimedTranscription {
   const audio =
     extra.audio === null
       ? null
@@ -41,9 +49,11 @@ function claimOf(extra: { audio?: Partial<NonNullable<ClaimedTranscription["audi
       diarize: extra.diarize ?? true,
       replace: false,
       terms: ["合成語"],
+      candidateId: extra.candidateId ?? null,
     },
     generation: 1,
     audio,
+    parts: extra.parts ?? (audio ? [{ ...audio, partIndex: 0, offsetSec: 0, durationSec: null, sourceName: null }] : []),
   };
 }
 
@@ -124,6 +134,58 @@ describe("executeRun", () => {
     expect(finished[0]?.output.segments.map((segment) => segment.speaker)).toEqual([1, 2, 1]);
     expect(finished[0]?.output.durationSec).toBe(9);
     expect(failed).toEqual([]);
+  });
+
+  it("transcribes every audio of the recording and joins them with the stored offsets", async () => {
+    const second = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+    const secondObject = `audio/${second}`;
+    const claim = claimOf({
+      parts: [
+        { assetId: ASSET_ID, objectPath: OBJECT, status: "uploaded", bytes: 3, contentType: "audio/mp4", sha256: "c".repeat(64), expiresAt: null, partIndex: 0, offsetSec: 0, durationSec: 600, sourceName: "音声 1.m4a" },
+        { assetId: second, objectPath: secondObject, status: "uploaded", bytes: 2, contentType: "audio/mp4", sha256: "d".repeat(64), expiresAt: null, partIndex: 1, offsetSec: 600, durationSec: 300, sourceName: "音声 2.m4a" },
+      ],
+    });
+    const { store, finished, failed } = memoryStore(claim);
+    const storage = await storageWithAudio();
+    const ticket = await storage.startUpload({ objectPath: secondObject, contentType: "audio/mp4", sizeBytes: 2, origin: null });
+    expect(storage.putFakeObject(ticket.url.split("/").pop()!, new Uint8Array([4, 5]), "audio/mp4")).toBe("ok");
+    const seen: EngineInput[] = [];
+    const engine: TranscriptionEngine = {
+      name: "fake",
+      transcribe: async (input) => {
+        seen.push(input);
+        await input.audio.stream.cancel();
+        // それぞれの音声の先頭を 0 とした時刻で返る
+        return { segments: [{ start: 0, end: 5, text: `${seen.length} 本目`, speaker: 1 }], durationSec: 5 };
+      },
+    };
+    const outcome = await executeRun({ store, storage, engine, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW });
+    expect(outcome).toEqual({ status: "succeeded" });
+    // 音声は足した順に 1 本ずつ渡す
+    expect(seen.map((input) => input.audio.sizeBytes)).toEqual([3, 2]);
+    expect(finished[0]?.output.segments.map((item) => [item.start, item.end, item.text, item.speaker])).toEqual([
+      [0, 5, "1 本目", 1],
+      // 2 本目は記録してある 600 秒ぶんずれ、話者の番号は続く
+      [600, 605, "2 本目", 2],
+    ]);
+    expect(finished[0]?.output.durationSec).toBe(605);
+    expect(failed).toEqual([]);
+  });
+
+  it("fails without calling the engine when one of the audios is still uploading or has expired", async () => {
+    const ready = { assetId: ASSET_ID, objectPath: OBJECT, status: "uploaded" as const, bytes: 3, contentType: "audio/mp4", sha256: "c".repeat(64), expiresAt: null, partIndex: 0, offsetSec: 0, durationSec: 600, sourceName: null };
+    const engine: TranscriptionEngine = { name: "fake", transcribe: async () => expect.unreachable("the engine must not be called") };
+    const uploading = memoryStore(claimOf({ parts: [ready, { ...ready, partIndex: 1, status: "uploading", assetId: "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e" }] }));
+    expect(await executeRun({ store: uploading.store, storage: await storageWithAudio(), engine, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({
+      status: "failed",
+      errorCode: "audio_missing",
+    });
+    const expired = memoryStore(claimOf({ parts: [ready, { ...ready, partIndex: 1, expiresAt: new Date(NOW - 1000).toISOString() }] }));
+    expect(await executeRun({ store: expired.store, storage: await storageWithAudio(), engine, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW })).toEqual({
+      status: "failed",
+      errorCode: "audio_expired",
+    });
+    expectQuietLogs();
   });
 
   it("drops the speakers when the run does not diarize", async () => {

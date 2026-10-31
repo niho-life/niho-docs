@@ -1,7 +1,10 @@
 import "server-only";
 import { connectionSource } from "@niho/editor-publish";
 import {
+  addRecordingCandidate,
+  adoptRecordingCandidate,
   audioInfo,
+  completeAudioPart,
   completeAudioUpload,
   completeImageUpload,
   countPageImages,
@@ -12,12 +15,16 @@ import {
   failRun,
   findImageUploadByKey,
   getRecording,
+  getRecordingCandidate,
   getShare,
   imageAsset,
   latestRun,
+  listAudioParts,
+  listRecordingCandidates,
   rotateShare,
   searchPages,
   sharedImageAsset,
+  startAudioPart,
   startAudioRecording,
   startImageUpload,
   stopShare,
@@ -42,6 +49,7 @@ import { createFixedWindowLimiter, rateLimitFromEnv, type RateLimiter } from "..
 import type { PagesApiDeps } from "./pages-api";
 import type { PreviewTokenApiDeps } from "./preview-token-api";
 import type { PublishApiDeps } from "./publish-api";
+import type { CandidatesApiDeps } from "./recording-candidates-api";
 import type { RecordingsApiDeps } from "./recordings-api";
 import type { SearchApiDeps } from "./search-api";
 import type { ShareApiDeps } from "./share-api";
@@ -92,7 +100,32 @@ export const recordingDeps: RecordingsApiDeps = {
       getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
       updateRecording: (owner, pageId, baseRevision, mutate) => updateRecording(pool, owner, pageId, baseRevision, mutate),
       latestTranscription: (owner, pageId) => latestRun(pool, owner, pageId),
+      // 音声の列と文字起こしの案（#36 段 3b-4）
+      listAudioParts: (owner, pageId) => listAudioParts(pool, owner, pageId),
+      listCandidates: (owner, pageId) => listRecordingCandidates(pool, owner, pageId),
     };
+  },
+};
+
+/** 文字起こしの案（#36 段 3b-4）の実行時の依存（DB・実行の呼び出し口は要求のたびに遅延して決める）。 */
+export const candidatesDeps: CandidatesApiDeps = {
+  auth: () => getAuthProvider(),
+  store: () => {
+    const pool = getPool();
+    if (!pool) return null;
+    return {
+      getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
+      listCandidates: (owner, pageId) => listRecordingCandidates(pool, owner, pageId),
+      getCandidate: (owner, pageId, candidateId) => getRecordingCandidate(pool, owner, pageId, candidateId),
+      addCandidate: (owner, pageId, input) => addRecordingCandidate(pool, owner, pageId, input),
+      adoptCandidate: (owner, pageId, candidateId) => adoptRecordingCandidate(pool, owner, pageId, candidateId),
+      enqueue: (owner, pageId, input) => enqueueTranscription(pool, owner, pageId, input),
+      failRun: (runId, generation, errorCode) => failRun(pool, runId, generation, errorCode),
+    };
+  },
+  runner: () => {
+    const pool = getPool();
+    return pool ? getTranscriptionRunner(pool, process.env) : null;
   },
 };
 
@@ -153,6 +186,10 @@ export const audioDeps: AudioApiDeps = {
       completeAudioUpload: (owner, pageId, stored) => completeAudioUpload(pool, owner, pageId, stored),
       audioInfo: (owner, pageId) => audioInfo(pool, owner, pageId),
       getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
+      // 2 本目以降の音声（#36 段 3b-4）
+      startAudioPart: (owner, pageId, input) => startAudioPart(pool, owner, pageId, input),
+      completeAudioPart: (owner, pageId, partIndex, stored) => completeAudioPart(pool, owner, pageId, partIndex, stored),
+      listAudioParts: (owner, pageId) => listAudioParts(pool, owner, pageId),
     };
   },
   storage: () => getStorage(process.env),

@@ -52,8 +52,8 @@ const START_KEYS = ["lang", "diarize", "replace", "terms"] as const;
 
 export type TranscribeBadRequestReason = "body" | "lang" | "diarize" | "replace" | "terms";
 
-/** 開始できない理由（409）。 */
-export type TranscribeConflictReason = "audio_not_ready" | "audio_expired" | "has_transcript";
+/** 開始できない理由（409）。candidate_missing は、案に書く実行で案が見つからないとき（#36 段 3b-4）。 */
+export type TranscribeConflictReason = "audio_not_ready" | "audio_expired" | "has_transcript" | "candidate_missing";
 
 /** 応答に載せる run（決まった項目だけ。store が何を足しても他の値を出さない）。録音の GET（recordings-api.ts）も使う。 */
 export function transcriptionRunBody(run: TranscriptionRunView) {
@@ -157,6 +157,7 @@ export function startTranscriptionRoute(request: Request, id: string, deps: Tran
       case "audio_not_ready":
       case "audio_expired":
       case "has_transcript":
+      case "candidate_missing":
         return cannotStart(result.status);
       case "existing":
         // 有効な run が既にある: 積み直さない
