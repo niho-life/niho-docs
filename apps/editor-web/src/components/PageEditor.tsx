@@ -5,13 +5,17 @@ import "niho-docs-ui/styles/tokens.css";
 import "niho-docs-ui/styles/editor.css";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
+import type { PageKind, PageLang } from "@niho/editor-store";
 import { PageTitle } from "niho-docs-ui/components/BlockEditor";
+import { AiEntry, AiLayer, type AiOpenRequest } from "@/components/AiBox";
 import { ConflictBand } from "@/components/ConflictBand";
 import { useEditorFrame } from "@/components/EditorFrame";
 import { PageChrome } from "@/components/PageChrome";
-import { docFromBlocks } from "@/editor/doc";
+import { selectionRange } from "@/editor/ai-scope";
+import { docFromBlocks, replaceBlocks } from "@/editor/doc";
 import { buildPageExtensions } from "@/editor/page-extensions";
 import { normalizePastedHtml } from "@/editor/paste";
+import { prepareAi, replaceForAi, type AiBridge, type AiBridgeDeps } from "@/lib/ai-bridge";
 import { createAutosave, type Autosave, type SaveState } from "@/lib/autosave";
 import {
   NEW_PAGE_DRAFT_KEY,
@@ -36,6 +40,9 @@ export type { SaveStatus };
 export type EditablePage = {
   title: string;
   blocks: unknown[];
+  /** ページの種類と言語（AI の候補を選ぶ。無ければメモ・日本語＝新しいページ）。 */
+  kind?: PageKind;
+  lang?: PageLang;
 } & (
   | {
       id: string;
@@ -86,15 +93,7 @@ function isSaveShortcut(event: KeyboardEvent): boolean {
 
 /** 下書きの本文をエディタに載せる。今の schema で読めなければ載せずに false（下書きはそのまま残す）。 */
 function loadDraft(editor: Editor, draft: PageDraft): boolean {
-  const doc = docFromBlocks(draft.blocks);
-  try {
-    editor.schema.nodeFromJSON(doc).check();
-  } catch {
-    return false;
-  }
-  // 載せたこと自体は Undo の対象にしない（開いた直後の Undo で下書きを消さない）
-  editor.chain().setMeta("addToHistory", false).setContent(doc, { emitUpdate: false }).run();
-  return true;
+  return replaceBlocks(editor, draft.blocks);
 }
 
 /**
@@ -156,6 +155,9 @@ export function PageEditor(props: PageEditorProps) {
  * モック v6 の shell の部品をこの schema に合わせて繋いだもの（src/components/PageChrome.tsx・src/editor/slash-menu.ts）。
  * どちらも本文を変える操作は TipTap の transaction なので、新しいページ（id が null）でも、手で打った変更と同じく
  * 下書きと保存（最初の保存で作る）に乗る。
+ *
+ * AI の箱（src/components/AiBox.tsx）は、選んだ文字の上の「AI」（選んだ範囲）とページの上の「AI」（ページ全体）から開く。
+ * 頼む前に未保存の入力を保存し終え、採用の結果は本文を差し替えて revision を進める（自動保存は起こさない。src/lib/ai-bridge.ts）。
  */
 function EditorScreen(props: ScreenProps) {
   const { page, shared, setShared, reopen } = props;
@@ -186,6 +188,28 @@ function EditorScreen(props: ScreenProps) {
   const autosaveRef = useRef<Autosave<PageBody> | null>(null);
   const keeperRef = useRef<DraftKeeper | null>(null);
   const eventsRef = useRef<PageEditorEvents>(props);
+  // AI の箱（src/components/AiBox.tsx）。頼む前の保存と、結果を載せるのは保存の部品を通す（src/lib/ai-bridge.ts）
+  const [ai, setAi] = useState<AiOpenRequest | null>(null);
+  const aiDeps: AiBridgeDeps = {
+    editor: () => editorRef.current,
+    saver: () => saverRef.current,
+    autosave: () => autosaveRef.current,
+    usable: () => readyRef.current && !unreadableRef.current,
+    isComposing: () => composingRef.current || Boolean(editorRef.current?.view.composing),
+    currentTitle: () => titleRef.current,
+    showTitle: (value) => {
+      titleRef.current = value;
+      setTitle(value);
+      eventsRef.current.onTitleChange?.(value);
+    },
+    onSaved: () => eventsRef.current.onSaved?.(),
+  };
+  // 箱が開き直さないよう同じものを渡し続ける（どの部品も呼んだ時点の ref を読む）
+  const [aiBridge] = useState<AiBridge>(() => ({
+    prepare: () => prepareAi(aiDeps),
+    replace: (page, options) => replaceForAi(aiDeps, page, options),
+  }));
+  const openAi = (range: AiOpenRequest["range"]) => setAi((current) => ({ key: (current?.key ?? 0) + 1, range }));
 
   useEffect(() => {
     eventsRef.current = props;
@@ -367,7 +391,7 @@ function EditorScreen(props: ScreenProps) {
   // まだ届いていない変更を先に保存し、届かなければ止める。下書きを読み終えるまでと、まだ作っていないページは id を渡さない
   // （「…」を出さない。読み終える前に操作すると、あとから載せる下書きが操作に入らないため）。画面を離れたら外す。
   // 版に戻すときは revision（今の本文がもとにしている revision）を送り、戻したら reopen でこの画面ごと開き直す
-  const flush = useCallback(() => autosaveRef.current?.settle() ?? Promise.resolve(false), []);
+  const flush = useCallback(async () => (await autosaveRef.current?.settle()) === "saved", []);
   const revision = useCallback(() => {
     const saver = saverRef.current;
     return saver && saver.pageId !== null ? saver.revision : null;
@@ -420,6 +444,7 @@ function EditorScreen(props: ScreenProps) {
       <p data-save-state={status} data-drafts={hasStorage && draftsKept ? "kept" : "none"}>
         {SAVE_STATUS_TEXT[status]}
       </p>
+      <AiEntry expanded={ai !== null} onOpen={() => (ai?.range === null ? setAi(null) : openAi(null))} />
       {conflict && <ConflictBand page={conflict} overwriting={state === "saving"} container={root} onCopy={copyBody} onOverwrite={overwrite} />}
       <PageTitle
         value={title}
@@ -441,8 +466,9 @@ function EditorScreen(props: ScreenProps) {
       {unreadable && <p role="alert">本文を読み込めませんでした。この画面では本文を変更しません。</p>}
       <div className="be">
         <EditorContent editor={editor} />
-        <PageChrome editor={editor} />
+        <PageChrome editor={editor} onAi={() => editor && openAi(selectionRange(editor.state))} />
       </div>
+      <AiLayer editor={editor} bridge={aiBridge} kind={page.kind ?? "note"} lang={page.lang ?? "ja"} request={ai} onClose={() => setAi(null)} />
     </div>
   );
 }

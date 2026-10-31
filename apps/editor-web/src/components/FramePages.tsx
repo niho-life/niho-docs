@@ -34,7 +34,7 @@ export function OpenPage({ summary, blocks, revision, shared = null }: { summary
   }, [summary, pageOpened]);
   return (
     <PageEditor
-      page={{ id, title: summary.title, blocks, revision, updatedAt: summary.updatedAt }}
+      page={{ id, title: summary.title, blocks, revision, updatedAt: summary.updatedAt, kind: summary.kind, lang: summary.lang }}
       shared={shared}
       onTitleChange={(value) => frame.pageTitleChanged(id, value)}
       onSaved={() => frame.pageSaved(id)}
