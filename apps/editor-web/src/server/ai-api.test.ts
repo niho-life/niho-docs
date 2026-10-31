@@ -1252,3 +1252,76 @@ describe("POST /api/pages/{id}/ai/proposals/device（この Mac の CLI が作�
     expect((await deviceProposal(page.id, body({ conversationId: "someone-elses" }), d)).status).toBe(404);
   });
 });
+
+describe("会話に書けなくても、提案と採用は壊さない", () => {
+  /** 会話の store が投げる（大きすぎる提案・DB の一時的な失敗）。読む側はそのまま。 */
+  function throwingChats(chats: MemoryConversations): MemoryConversations {
+    return Object.assign({ ...chats, rows: chats.rows }, {
+      append: async () => {
+        throw new TypeError("editor-store: proposal must be a small JSON object");
+      },
+      adopt: async () => {
+        throw new Error("synthetic database failure");
+      },
+    });
+  }
+
+  it("returns the proposal even when the conversation cannot keep it", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: sample() });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const response = await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, deps("user-a", store, { conversations: throwingChats(memoryConversations(store)) }));
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as ProposalBody;
+      // 提案は使える（モデルを呼んだ分は課金済み）。会話に残せなかったことだけが null で分かる
+      expect(body.proposal.changes).toHaveLength(1);
+      expect(body.conversation).toBeNull();
+      // ログに出すのは route と失敗の名前だけ
+      expect(JSON.stringify(log.mock.calls)).not.toContain("合成の");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("keeps the saved page when the adoption cannot be written to the conversation", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("合成の  一段落目")] });
+    const chats = memoryConversations(store);
+    const d = deps("user-a", store, { conversations: chats });
+    const proposed = (await (await propose(page.id, { baseRevision: 1, intent: { preset: "tidy" } }, d)).json()) as ProposalBody;
+    const messageId = proposed.conversation!.messageId;
+    const change = proposed.proposal.changes[0]!;
+
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const broken = deps("user-a", store, { conversations: throwingChats(chats) });
+      const response = await adopt(page.id, { baseRevision: 1, changes: [{ index: change.index, text: change.after }], messageId }, broken);
+      // ページの保存は済んでいるので 200 のまま（成功したのに失敗に見せない）
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { page: Page; adopted: unknown };
+      expect(body.page.blocks).toEqual([p(change.after)]);
+      expect(body.adopted).toBeNull();
+      expect(store.writes).toEqual(["createVersion:ai", "savePage"]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("returns the Mac's proposal even when the conversation cannot keep it", async () => {
+    const store = memoryStore();
+    const page = await store.createPage("user-a", { blocks: [p("もとの一段落目")] });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const response = await deviceProposal(
+        page.id,
+        { baseRevision: 1, input: "短くして", reply: "短くしました。", engine: "cli:claude-code", changes: [{ index: 0, text: "短くした一段落目" }], inserts: [] },
+        deps("user-a", store, { conversations: throwingChats(memoryConversations(store)) }),
+      );
+      expect(response.status).toBe(200);
+      expect(((await response.json()) as { conversation: unknown }).conversation).toBeNull();
+    } finally {
+      log.mockRestore();
+    }
+  });
+});

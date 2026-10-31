@@ -533,12 +533,13 @@ describe("the chat never leaks what it is working on", () => {
     const page = store.add("user-a", { title: "秘密の題名", blocks: [p("秘密の本文")] });
     const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
+      // 作業場を読む所で落ちる（ここは書く前なので 500 で止めてよい）
       const broken: ChatConversationStore = {
-        workspace: async () => [{ id: page.id, title: page.title, kind: page.kind, parent: null, open: true }],
-        history: async () => ({ messages: [] }),
-        append: async () => {
+        workspace: async () => {
           throw new Error("合成の失敗");
         },
+        history: async () => ({ messages: [] }),
+        append: async () => null,
         changes: async () => null,
         undone: async () => 0,
       };
@@ -672,5 +673,57 @@ describe("POST /api/pages/{id}/ai/chat/turns (この Mac の CLI の結果)", ()
     const response = await deviceTurn(page.id, { ...body(page.id), conversationId: "someone-elses" }, deps("user-a", store, { conversations: chats }));
     expect(response.status).toBe(404);
     expect(store.versions).toEqual([]);
+  });
+});
+
+describe("会話に書けなくても、書いたページは返す", () => {
+  it("answers 200 with the page it wrote when the conversation cannot keep the turn", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
+    const chats = memoryConversations(store);
+    const broken: ChatConversationStore = {
+      ...chats,
+      append: async () => {
+        throw new Error("synthetic database failure");
+      },
+    };
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const response = await chat(page.id, { text: "直して" }, deps("user-a", store, { ai: stubBackend(writeTurn(page.id, "書き換え")), conversations: broken }));
+      // 書いた分と版は残っているので、500 にはしない（ページが変わったのに失敗に見せない）
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { conversation: unknown; page: Page | null };
+      expect(body.conversation).toBeNull();
+      expect(body.page?.blocks).toEqual([p("書き換え")]);
+      expect(store.rows.get(page.id)!.blocks).toEqual([p("書き換え")]);
+      expect(store.versions).toHaveLength(1);
+      expect(JSON.stringify(log.mock.calls)).not.toContain("書き換え");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("answers 200 for the CLI's write-back when the conversation cannot keep it", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
+    const chats = memoryConversations(store);
+    const broken: ChatConversationStore = {
+      ...chats,
+      append: async () => {
+        throw new Error("synthetic database failure");
+      },
+    };
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const response = await deviceTurn(
+        page.id,
+        { input: "直して", reply: "直しました。", engine: "cli:claude-code", writes: [{ pageId: page.id, markdown: "CLI が書いた本文" }] },
+        deps("user-a", store, { conversations: broken }),
+      );
+      expect(response.status).toBe(200);
+      expect(store.rows.get(page.id)!.blocks).toEqual([p("CLI が書いた本文")]);
+    } finally {
+      log.mockRestore();
+    }
   });
 });

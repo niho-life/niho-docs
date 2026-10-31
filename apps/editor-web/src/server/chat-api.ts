@@ -118,6 +118,22 @@ async function guarded(route: string, handler: () => Promise<Response>): Promise
   }
 }
 
+/**
+ * 会話への記録は、**ページを書き換えたあとのおまけ**。ここで失敗しても応答は壊さない
+ * （書いた分と版は既に残っている。500 を返すと、ページが変わったのに失敗に見える）。
+ * ログに出すのは route と失敗の名前だけ。
+ */
+async function recorded<T>(route: string, work: () => Promise<T | null>): Promise<T | null> {
+  try {
+    const result = await work();
+    if (result === null) console.error("editor-web: chat turn not recorded", { route });
+    return result;
+  } catch (error) {
+    console.error("editor-web: chat turn not recorded", { route, name: error instanceof Error ? error.name : "unknown" });
+    return null;
+  }
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -302,25 +318,26 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
     });
 
     const written = [...changes.values()];
-    const turn = await chats.append(owner, {
-      pageId: id,
-      conversationId,
-      input: input.value.text,
-      reply: run.reply,
-      items: itemsOf(run),
-      result: run.result,
-      resultCode: run.code,
-      author: { route: backend.route, engine: backend.engine },
-      changes: written.map((change) => ({
-        pageId: change.pageId,
-        change: change.change,
-        version: change.version ?? null,
-        revision: change.revision,
-        chars: change.chars,
-        delta: change.delta,
-      })),
-    });
-    if (!turn) console.error("editor-web: chat turn not recorded", { route });
+    const turn = await recorded(route, () =>
+      chats.append(owner, {
+        pageId: id,
+        conversationId,
+        input: input.value.text,
+        reply: run.reply,
+        items: itemsOf(run),
+        result: run.result,
+        resultCode: run.code,
+        author: { route: backend.route, engine: backend.engine },
+        changes: written.map((change) => ({
+          pageId: change.pageId,
+          change: change.change,
+          version: change.version ?? null,
+          revision: change.revision,
+          chars: change.chars,
+          delta: change.delta,
+        })),
+      }),
+    );
     // 開いているページが変わっていれば、画面に載せ替えるために今の本文を返す
     const page = written.some((change) => change.pageId === id) ? await store.getPage(owner, id) : null;
     const totals = await usage.get(owner, month);
@@ -412,27 +429,32 @@ export function recordDeviceChatTurn(request: Request, id: string, deps: ChatApi
     }
 
     const written = [...changes.values()];
-    const turn = await chats.append(owner, {
-      pageId: id,
-      conversationId,
-      input: input.value.input,
-      reply: input.value.reply,
-      items,
-      result: failed ? "stopped" : "done",
-      resultCode: failed ? "write_refused" : null,
-      author: { route: "device", engine: input.value.engine },
-      changes: written.map((change) => ({
-        pageId: change.pageId,
-        change: change.change,
-        version: change.version ?? null,
-        revision: change.revision,
-        chars: change.chars,
-        delta: change.delta,
-      })),
+    const turn = await recorded(route, () =>
+      chats.append(owner, {
+        pageId: id,
+        conversationId,
+        input: input.value.input,
+        reply: input.value.reply,
+        items,
+        result: failed ? "stopped" : "done",
+        resultCode: failed ? "write_refused" : null,
+        author: { route: "device", engine: input.value.engine },
+        changes: written.map((change) => ({
+          pageId: change.pageId,
+          change: change.change,
+          version: change.version ?? null,
+          revision: change.revision,
+          chars: change.chars,
+          delta: change.delta,
+        })),
+      }),
+    );
+    // 回数だけ数える（この Mac の CLI は利用者のサブスクなので金額は 0。月の上限では止めない）。
+    // ここも書いたあとのおまけなので、失敗しても応答は壊さない
+    await recorded(route, async () => {
+      await usage.record(owner, monthKeyJst(deps.now ? deps.now() : new Date()), { requests: 1, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 }, "device");
+      return true;
     });
-    if (!turn) console.error("editor-web: chat turn not recorded", { route });
-    // 回数だけ数える（この Mac の CLI は利用者のサブスクなので金額は 0。月の上限では止めない）
-    await usage.record(owner, monthKeyJst(deps.now ? deps.now() : new Date()), { requests: 1, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 }, "device");
     const page = written.some((change) => change.pageId === id) ? await store.getPage(owner, id) : null;
     return jsonResponse(200, {
       conversation: turn ? { id: turn.conversation.id, messageId: turn.result.id } : null,

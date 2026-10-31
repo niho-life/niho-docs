@@ -123,6 +123,22 @@ async function guarded(route: string, handler: () => Promise<Response>): Promise
   }
 }
 
+/**
+ * 会話への記録は、提案を返す・ページを保存するより**後のおまけ**。ここで失敗しても応答は壊さない
+ * （モデルを呼んだ分は課金済みで、保存は既に済んでいる。500 を返すと、成功したのに失敗に見える）。
+ * ログに出すのは route と失敗の名前だけ（本文・理由は出さない）。
+ */
+async function recorded<T>(route: string, work: () => Promise<T | null>): Promise<T | null> {
+  try {
+    const result = await work();
+    if (result === null) console.error("editor-web: conversation not recorded", { route });
+    return result;
+  } catch (error) {
+    console.error("editor-web: conversation not recorded", { route, name: error instanceof Error ? error.name : "unknown" });
+    return null;
+  }
+}
+
 type InputResult<T> = { ok: true; value: T } | { ok: false };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -297,15 +313,17 @@ export function createAiProposal(request: Request, id: string, deps: AiApiDeps):
       console.error("editor-web: ai output rejected", { route, reason: built.reason });
       return aiErrorResponse("ai_failed");
     }
-    // 会話に 1 回のやりとり（頼んだこと → 提案）を足す。ページが消えていれば足せないので、提案だけ返す
-    const turn = await chats.append(owner, {
-      pageId: id,
-      conversationId,
-      request: { text: intentLabel(input.value.intent), ...("preset" in input.value.intent ? { preset: input.value.intent.preset } : {}) },
-      result: { text: resultText(built.proposal), proposal: built.proposal },
-      author: { route: backend.route, engine: backend.engine },
-    });
-    if (!turn) console.error("editor-web: ai turn not recorded", { route });
+    // 会話に 1 回のやりとり（頼んだこと → 提案）を足す。**記録に失敗しても提案は返す**
+    // （ページが消えた・提案が会話の上限より大きい・DB が一時的に落ちた、のどれでも提案そのものは使える）
+    const turn = await recorded(route, () =>
+      chats.append(owner, {
+        pageId: id,
+        conversationId,
+        request: { text: intentLabel(input.value.intent), ...("preset" in input.value.intent ? { preset: input.value.intent.preset } : {}) },
+        result: { text: resultText(built.proposal), proposal: built.proposal },
+        author: { route: backend.route, engine: backend.engine },
+      }),
+    );
     return jsonResponse(200, {
       proposal: built.proposal,
       usage: summarize(totals, limitUsd),
@@ -358,9 +376,11 @@ export function adoptAiProposal(request: Request, id: string, deps: AiApiDeps): 
     // 採用を会話に書く（版の番号で履歴から辿れる）。書けなくてもページの保存は済んでいるので 200 のまま
     let adopted: { messageId: string; version: number } | null = null;
     if (messageId !== null) {
-      const recorded = await chats.adopt(owner, { pageId: id, messageId, version: version.version, adopted: { changes, inserts } });
-      if (recorded) adopted = { messageId, version: version.version };
-      else console.error("editor-web: adoption not recorded", { route: "POST /api/pages/[id]/ai/adoptions" });
+      // **ページの保存は済んでいる**ので、会話に書けなくても 200 のまま返す（成功したのに失敗に見せない）
+      const written = await recorded("POST /api/pages/[id]/ai/adoptions", async () =>
+        (await chats.adopt(owner, { pageId: id, messageId, version: version.version, adopted: { changes, inserts } })) ? true : null,
+      );
+      if (written) adopted = { messageId, version: version.version };
     }
     return jsonResponse(200, { page: result.page, adopted });
   });
@@ -442,14 +462,15 @@ export function recordDeviceProposal(request: Request, id: string, deps: AiApiDe
     const built = deviceProposal(page.blocks, input.value);
     if (!built.ok) return errorResponse("bad_request");
 
-    const turn = await chats.append(owner, {
-      pageId: id,
-      conversationId,
-      request: { text: input.value.input },
-      result: { text: input.value.reply || resultText(built.proposal), proposal: built.proposal },
-      author: { route: "device", engine: input.value.engine },
-    });
-    if (!turn) console.error("editor-web: ai turn not recorded", { route });
+    const turn = await recorded(route, () =>
+      chats.append(owner, {
+        pageId: id,
+        conversationId,
+        request: { text: input.value.input },
+        result: { text: input.value.reply || resultText(built.proposal), proposal: built.proposal },
+        author: { route: "device", engine: input.value.engine },
+      }),
+    );
     // 回数だけ数える（サブスクなので金額は 0。月の上限では止めない）
     const month = currentMonth(deps);
     await usage.record(owner, month, { requests: 1, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 }, "device");
