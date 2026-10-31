@@ -8,7 +8,6 @@ import { runAiChat, undoAiChat, type ChatApiDeps, type ChatConversationStore, ty
 
 const ORIGIN = "http://editor.test";
 const NOW = new Date("2026-11-01T03:00:00Z");
-const MONTH = "2026-11";
 const usage = { model: "claude-sonnet-5-5", inputTokens: 100, outputTokens: 20 };
 
 const p = (text: string): Block => ({ type: "paragraph", content: [{ type: "text", text }] });
@@ -215,7 +214,7 @@ function stubBackend(answers: Turn[]): AiComposeBackend & { calls: number } {
       },
     },
   };
-  return Object.defineProperty(backend, "calls", { get: () => index }) as AiComposeBackend & { calls: number };
+  return Object.defineProperty(backend, "calls", { get: () => index }) as unknown as AiComposeBackend & { calls: number };
 }
 
 type Options = {

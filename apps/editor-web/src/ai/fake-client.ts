@@ -42,24 +42,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** 最後に呼んだ道具の名前と、その結果（messages の並びから読む）。 */
+/** いちばん後ろの道具の結果と、それを出した道具の名前（messages の並びから読む）。 */
 function lastTool(messages: readonly unknown[]): { name: string; result: unknown } | null {
-  let name: string | null = null;
-  for (const message of messages) {
-    if (!isRecord(message) || !Array.isArray(message.content)) continue;
-    for (const block of message.content) {
-      if (!isRecord(block)) continue;
-      if (block.type === "tool_use" && typeof block.name === "string") name = block.name;
-      if (block.type === "tool_result" && name !== null) {
-        let result: unknown = null;
-        try {
-          result = JSON.parse(String(block.content));
-        } catch {
-          result = null;
-        }
-        return { name, result };
-      }
+  const blocks = messages.flatMap((message) => (isRecord(message) && Array.isArray(message.content) ? message.content : []));
+  const names = new Map<string, string>();
+  for (const block of blocks) {
+    if (isRecord(block) && block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") names.set(block.id, block.name);
+  }
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const block = blocks[index];
+    if (!isRecord(block) || block.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
+    const name = names.get(block.tool_use_id);
+    if (name === undefined) continue;
+    let result: unknown = null;
+    try {
+      result = JSON.parse(String(block.content));
+    } catch {
+      result = null;
     }
+    return { name, result };
   }
   return null;
 }

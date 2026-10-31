@@ -53,10 +53,43 @@ export type AiChatMessage = {
   hasProposal: boolean;
   /** 採用の前の本文が残った版の番号（採用していなければ null）。 */
   version: number | null;
+  /** AI チャットの依頼の結果（提案の発言は null）。 */
+  result: "done" | "failed" | "stopped" | null;
+  items: AiChatItem[];
+  changes: AiChatChange[];
 };
 
 export type AiChatSummary = { id: string; updatedAt: string; messages: number; lastText: string | null };
 export type AiChat = { conversation: AiChatSummary; messages: AiChatMessage[] };
+
+/** AI が直した・作ったページ（1 回の依頼ごと）。 */
+export type AiChatChange = {
+  pageId: string;
+  title: string;
+  change: "edited" | "created";
+  chars: number;
+  delta: number;
+  undoneAt: string | null;
+};
+
+/** AI チャットの 1 回の依頼の結果。 */
+export type AiChatResult = {
+  conversation: AiTurnRef | null;
+  reply: string;
+  items: AiChatItem[];
+  result: "done" | "failed" | "stopped";
+  resultCode: string | null;
+  changes: AiChatChange[];
+  /** 開いているページが変わったときの、今のページ（変わらなければ null）。 */
+  page: AiPage | null;
+  usage: { nearLimit: boolean };
+};
+
+/** 作業の 1 行（道具の名前とページの名前）。 */
+export type AiChatItem = { kind: "narration"; text: string } | { kind: "tool"; tool: string; page: string | null; ok: boolean };
+
+/** 「元に戻す」の結果。`kept` は戻さなかったページとその理由。 */
+export type AiUndoResult = { undone: string[]; kept: { pageId: string; reason: string }[]; page: AiPage | null };
 
 function codeOf(status: number, error: unknown): AiErrorCode {
   if (status === 401) return "signedOut";
@@ -151,6 +184,40 @@ function turnRefOf(value: unknown): AiTurnRef | null {
   return { id: value.id, messageId: value.messageId };
 }
 
+function chatItemOf(value: unknown): AiChatItem | null {
+  if (!isRecord(value)) return null;
+  if (value.kind === "narration" && typeof value.text === "string") return { kind: "narration", text: value.text };
+  if (value.kind !== "tool" || typeof value.tool !== "string") return null;
+  return { kind: "tool", tool: value.tool, page: typeof value.page === "string" ? value.page : null, ok: value.ok === true };
+}
+
+function chatItemsOf(value: unknown): AiChatItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(chatItemOf).filter((item): item is AiChatItem => item !== null);
+}
+
+function chatChangeOf(value: unknown): AiChatChange | null {
+  if (!isRecord(value) || typeof value.pageId !== "string") return null;
+  if (value.change !== "edited" && value.change !== "created") return null;
+  return {
+    pageId: value.pageId,
+    title: typeof value.title === "string" ? value.title : "",
+    change: value.change,
+    chars: isIndex(value.chars, 0) ? value.chars : 0,
+    delta: typeof value.delta === "number" && Number.isSafeInteger(value.delta) ? value.delta : 0,
+    undoneAt: typeof value.undoneAt === "string" ? value.undoneAt : null,
+  };
+}
+
+function chatChangesOf(value: unknown): AiChatChange[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(chatChangeOf).filter((change): change is AiChatChange => change !== null);
+}
+
+function chatResultOf(value: unknown): AiChatMessage["result"] {
+  return value === "done" || value === "failed" || value === "stopped" ? value : null;
+}
+
 function chatMessageOf(value: unknown): AiChatMessage | null {
   if (!isRecord(value) || typeof value.id !== "string" || !isIndex(value.seq, 1) || typeof value.text !== "string") return null;
   if (value.role !== "user" && value.role !== "assistant") return null;
@@ -162,6 +229,9 @@ function chatMessageOf(value: unknown): AiChatMessage | null {
     preset: typeof value.preset === "string" ? value.preset : null,
     hasProposal: isRecord(value.proposal),
     version: isIndex(value.version, 1) ? value.version : null,
+    result: chatResultOf(value.result),
+    items: chatItemsOf(value.items),
+    changes: chatChangesOf(value.changes),
   };
 }
 
@@ -234,4 +304,40 @@ export async function getAiChat(pageId: string, conversationId: string, options:
   const messages = data.messages.map(chatMessageOf);
   if (messages.some((item) => item === null)) throw new AiRequestError("failed");
   return { conversation, messages: messages as AiChatMessage[] };
+}
+
+/**
+ * AI チャットの 1 回の依頼（AI がページを直接書き換える。旧 NIHO docs と同じ動き）。
+ * 書いた分は版として残るので、`undoAiChat` で元に戻せる。
+ */
+export async function sendAiChat(pageId: string, body: { text: string; conversationId?: string }, options: { signal?: AbortSignal } = {}): Promise<AiChatResult> {
+  const data = await post(pagePath(pageId, "/ai/chat"), body, options.signal);
+  if (!isRecord(data) || !isRecord(data.message)) throw new AiRequestError("failed");
+  const message = data.message;
+  const result = chatResultOf(message.result);
+  if (result === null) throw new AiRequestError("failed");
+  return {
+    conversation: turnRefOf(data.conversation),
+    reply: typeof message.text === "string" ? message.text : "",
+    items: chatItemsOf(message.items),
+    result,
+    resultCode: typeof message.resultCode === "string" ? message.resultCode : null,
+    changes: chatChangesOf(message.changes),
+    page: data.page === null || data.page === undefined ? null : conflictPageOf(data),
+    usage: { nearLimit: isRecord(data.usage) && data.usage.nearLimit === true },
+  };
+}
+
+/** その依頼で書いた分を元に戻す（直したページは依頼の前へ、作ったページはゴミ箱へ）。 */
+export async function undoAiChat(pageId: string, messageId: string): Promise<AiUndoResult> {
+  const data = await post(pagePath(pageId, `/ai/chat/${encodeURIComponent(messageId)}/undo`), {});
+  if (!isRecord(data) || !Array.isArray(data.undone)) throw new AiRequestError("failed");
+  const kept = Array.isArray(data.kept)
+    ? data.kept.flatMap((item) => (isRecord(item) && typeof item.pageId === "string" ? [{ pageId: item.pageId, reason: String(item.reason) }] : []))
+    : [];
+  return {
+    undone: data.undone.filter((id): id is string => typeof id === "string"),
+    kept,
+    page: data.page === null || data.page === undefined ? null : conflictPageOf(data),
+  };
 }

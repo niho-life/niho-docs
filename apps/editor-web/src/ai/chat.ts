@@ -1,6 +1,9 @@
 import type { GlossaryEntry } from "@niho/docs-core";
 import { AnthropicError, type AnthropicClient, type ToolCall } from "./anthropic";
+import { MAX_CHAT_INPUT_CHARS } from "./chat-limits";
 import { wrapUntrusted } from "./prompt";
+
+export { MAX_CHAT_INPUT_CHARS };
 
 /**
  * AI チャット（#38）。旧アプリ（NIHO docs）の「修正の会話」と同じ動きにする: **AI がページを直接読み書きし、
@@ -17,8 +20,6 @@ import { wrapUntrusted } from "./prompt";
 export const MAX_CHAT_STEPS = 8;
 /** 1 回の依頼で許す道具の回数の上限。 */
 export const MAX_CHAT_TOOL_CALLS = 12;
-/** 人の指示の上限（文字）。 */
-export const MAX_CHAT_INPUT_CHARS = 2_000;
 /** モデルに渡す過去のやりとりの数（新しい方から）。 */
 export const CHAT_HISTORY_TURNS = 10;
 

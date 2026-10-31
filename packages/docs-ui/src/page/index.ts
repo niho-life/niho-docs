@@ -37,6 +37,7 @@ export {
 export { PageSlashMenu, SLASH_KEYS, SlashMenuStore, slashMenuStore, type SlashMenuSnapshot } from "./slash-menu";
 export { imageFilesFrom, normalizePastedHtml } from "./paste";
 export { buildPageExtensions, type PageExtensionsOptions } from "./page-extensions";
+export { buildMarkdownExtensions } from "./markdown-extensions";
 export { checkLinkInput, type LinkInputResult } from "./link-href";
 export { IMAGE_PROBLEM_TEXT, PageImage, showImageProblem, type PageImageOptions } from "./image-node";
 export {

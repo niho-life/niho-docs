@@ -18,7 +18,8 @@ import {
   type RestoreResult,
   type SaveResult,
 } from "@niho/editor-store";
-import { blocksToMarkdown, markdownToBlocks } from "niho-docs-ui/page";
+// 画面の部品に触れない Markdown の往復（docs-ui。Mac の保管庫と同じ変換を使う）
+import { blocksToMarkdown, markdownToBlocks } from "niho-docs-ui/page/markdown";
 import type { AiComposeBackend } from "../ai/config";
 import {
   MAX_CHAT_INPUT_CHARS,
@@ -116,12 +117,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(value).every((key) => allowed.includes(key));
-}
-
-/** 本文の字数（Markdown にできない本文は 0）。 */
-function charsOf(blocks: readonly Block[]): number {
-  const markdown = blocksToMarkdown(blocks);
-  return markdown.ok ? Array.from(markdown.markdown).length : 0;
 }
 
 /** 道具の結果の JSON（モデルが読む。短く、内部の情報を入れない）。 */

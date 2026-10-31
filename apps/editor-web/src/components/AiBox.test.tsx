@@ -4,6 +4,7 @@ import { TextSelection } from "@tiptap/pm/state";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { MAX_CHAT_INPUT_CHARS } from "@/ai/chat-limits";
 import { presetsFor } from "@/ai/presets";
 import { AI_ADOPT_REFUSED_TEXT, AI_BLOCKED_TEXT, AI_ERROR_TEXT, AI_NOTICE_MS, AI_TEXT, aiAdoptedText, aiDoneText } from "./AiBox";
 import { PageEditor, type EditablePage } from "./PageEditor";
@@ -60,7 +61,7 @@ type Handler = (body: Record<string, unknown>, init: RequestInit) => Response | 
  * サーバーの代わり。保存（PATCH）は revision を 1 つ進める（`save` で差し替え）。提案・採用は渡した応答。
  * 既定の提案は PROPOSAL（baseRevision は送られてきた値）、既定の採用は採用したものを当てた本文で revision を進める。
  */
-function fakeServer(options: { proposal?: Handler; adoption?: Handler; save?: Handler; chats?: ChatHistory } = {}) {
+function fakeServer(options: { proposal?: Handler; adoption?: Handler; save?: Handler; chats?: ChatHistory; chat?: Handler; undo?: Handler } = {}) {
   const calls: Call[] = [];
   let revision = 1;
   // 会話（開いたときに読む履歴）。渡さなければ会話なし
@@ -90,6 +91,36 @@ function fakeServer(options: { proposal?: Handler; adoption?: Handler; save?: Ha
       if (!conversations.some((item) => item.id === id)) conversations = [{ id, updatedAt: UPDATED_AT, messages: 2, lastText: null }, ...conversations];
       return json(200, { proposal: { ...PROPOSAL, baseRevision: body.baseRevision }, usage: USAGE, conversation: { id, messageId: MESSAGE_ID } });
     }
+    if (url === `/api/pages/${PAGE_ID}/ai/chat`) {
+      if (options.chat) return options.chat(body, init);
+      revision += 1;
+      return json(200, {
+        conversation: { id: CONVERSATION_ID, messageId: MESSAGE_ID },
+        message: {
+          id: MESSAGE_ID,
+          seq: 2,
+          role: "assistant",
+          text: "二段落目を短くしました。",
+          preset: null,
+          proposal: null,
+          version: null,
+          items: [
+            { kind: "tool", tool: "read_page", page: "合成の題名", ok: true },
+            { kind: "tool", tool: "write_page", page: "合成の題名", ok: true },
+          ],
+          result: "done",
+          resultCode: null,
+          changes: [{ pageId: PAGE_ID, title: "合成の題名", change: "edited", chars: 12, delta: 3, undoneAt: null }],
+        },
+        page: { id: PAGE_ID, title: "合成の題名", blocks: CHAT_WRITTEN, revision, updatedAt: UPDATED_AT },
+        usage: { nearLimit: false },
+      });
+    }
+    if (url === `/api/pages/${PAGE_ID}/ai/chat/${MESSAGE_ID}/undo`) {
+      if (options.undo) return options.undo(body, init);
+      revision += 1;
+      return json(200, { undone: [PAGE_ID], kept: [], page: { id: PAGE_ID, title: "合成の題名", blocks: BODY, revision, updatedAt: UPDATED_AT } });
+    }
     if (url === `/api/pages/${PAGE_ID}/ai/adoptions`) {
       if (options.adoption) return options.adoption(body, init);
       revision = (body.baseRevision as number) + 1;
@@ -107,8 +138,13 @@ function fakeServer(options: { proposal?: Handler; adoption?: Handler; save?: Ha
     adoptions: () => calls.filter((call) => call.url.endsWith("/ai/adoptions")),
     saves: () => calls.filter((call) => call.method === "PATCH"),
     chats: () => calls.filter((call) => call.url.includes("/ai/conversations")),
+    turns: () => calls.filter((call) => call.url.endsWith("/ai/chat")),
+    undos: () => calls.filter((call) => call.url.endsWith("/undo")),
   };
 }
+
+/** 既定の AI チャットが書いた本文。 */
+const CHAT_WRITTEN = [p("一つ目"), p("二つ目"), p("三つ目")];
 
 const CONVERSATION_ID = "00000000-0000-4000-8000-0000000000c1";
 const MESSAGE_ID = "00000000-0000-4000-8000-0000000000m1".replace("m", "a");
@@ -168,7 +204,7 @@ const dialog = () => container!.querySelector<HTMLElement>('[role="dialog"][aria
 const statusText = () => dialog()!.querySelector("[data-ai-status]")!.textContent;
 const presetLabels = () => [...dialog()!.querySelectorAll<HTMLButtonElement>('[role="group"][aria-label="候補"] button')].map((button) => button.textContent);
 const preset = (label: string) => [...dialog()!.querySelectorAll<HTMLButtonElement>('[role="group"][aria-label="候補"] button')].find((button) => button.textContent === label)!;
-const input = () => dialog()!.querySelector<HTMLInputElement>('input[aria-label="直したいこと"]')!;
+const input = () => dialog()!.querySelector<HTMLInputElement>('input[aria-label="直したいこと・作りたいもの"]')!;
 const buttonIn = (scope: Element, text: string | RegExp) =>
   [...scope.querySelectorAll<HTMLButtonElement>("button")].find((button) => (typeof text === "string" ? button.textContent === text : text.test(button.textContent ?? "")));
 const adoptButton = () => buttonIn(dialog()!, /^反映する/)!;
@@ -256,7 +292,7 @@ describe("the AI box: opening, candidates and focus", () => {
       await renderPage({ kind, lang });
       await openBox();
       expect(presetLabels(), `${kind}/${lang}`).toEqual(presetsFor(kind, lang).map((item) => item.label));
-      expect(input().placeholder).toBe("直したいこと…");
+      expect(input().placeholder).toBe("直したいこと・作りたいもの…");
       await act(async () => root?.unmount());
       container?.remove();
     }
@@ -328,7 +364,7 @@ describe("the AI box: asking", () => {
     expect(document.activeElement).toBe(editor.view.dom);
   });
 
-  it("sends the free input on Enter, but not on the Enter that confirms a Japanese conversion", async () => {
+  it("sends the free input to the chat on Enter, but not on the Enter that confirms a Japanese conversion", async () => {
     const server = fakeServer();
     await renderPage();
     await openBox();
@@ -337,20 +373,22 @@ describe("the AI box: asking", () => {
     await act(async () => setInputValue(field, "  です・ます調にする  "));
     await press(field, "Enter", { isComposing: true });
     await press(field, "Enter", { keyCode: 229 });
-    expect(server.proposals()).toEqual([]);
+    expect(server.turns()).toEqual([]);
     await press(field, "Enter");
     await advance(0);
-    expect(server.proposals().map((call) => call.body)).toEqual([{ baseRevision: 1, intent: { text: "です・ます調にする" } }]);
+    // 自由入力は提案ではなくチャット（AI がページを直接書き換える）
+    expect(server.proposals()).toEqual([]);
+    expect(server.turns().map((call) => call.body)).toEqual([{ text: "です・ます調にする" }]);
   });
 
-  it("does not send an empty request, and keeps the input to 500 characters", async () => {
+  it("does not send an empty request, and keeps the input to the chat's limit", async () => {
     const server = fakeServer();
     await renderPage();
     await openBox();
     await act(async () => setInputValue(input(), "   "));
     await press(input(), "Enter");
-    expect(server.proposals()).toEqual([]);
-    expect(input().maxLength).toBe(500);
+    expect(server.turns()).toEqual([]);
+    expect(input().maxLength).toBe(MAX_CHAT_INPUT_CHARS);
   });
 
   it("says it is thinking, and the stop button aborts the request and lets the user ask again", async () => {
@@ -734,16 +772,14 @@ describe("the AI box: the conversation of the page", () => {
       ["ai", "提案が 3 件あります"],
     ]);
 
-    // 自由入力も、頼んだ文のまま会話に残る（提案を閉じると候補と入力欄に戻る。ページは変わらない）
+    // 自由入力（チャット）も同じ会話に続く（提案を閉じると候補と入力欄に戻る）
     await click(buttonIn(dialog()!.querySelector(".es-prop")!, "閉じる")!);
     setInputValue(input(), "です・ます調にする");
     await press(input(), "Enter");
     await advance(0);
-    expect(server.proposals()[1]!.body.conversationId).toBe(CONVERSATION_ID);
-    expect(threadLines().slice(-2)).toEqual([
-      ["me", "です・ます調にする"],
-      ["ai", "提案が 3 件あります"],
-    ]);
+    expect(server.turns()[0]!.body.conversationId).toBe(CONVERSATION_ID);
+    expect(threadLines().slice(-2)[0]).toEqual(["me", "です・ます調にする"]);
+    expect(String(threadLines().slice(-1)[0]![1])).toContain("二段落目を短くしました。");
   });
 
   it("starts a new conversation on 新しい会話にする (the saved one stays on the server)", async () => {
@@ -804,11 +840,143 @@ describe("the AI box: the conversation of the page", () => {
     setInputValue(input(), "日本語の変換中");
     await press(input(), "Enter", { keyCode: 229 });
     await press(input(), "Enter", { isComposing: true } as KeyboardEventInit);
-    expect(server.proposals()).toEqual([]);
+    expect(server.turns()).toEqual([]);
     expect(threadLines()).toHaveLength(2);
     // 変換が終わった Enter では送る
     await press(input(), "Enter");
     await advance(0);
-    expect(server.proposals()).toHaveLength(1);
+    expect(server.turns()).toHaveLength(1);
+  });
+});
+
+describe("the AI box: the chat edits the page itself", () => {
+  const chatLine = () => String(threadLines().at(-1)?.[1] ?? "");
+  const undoButton = () => buttonIn(dialog()!.querySelector("[data-ai-changes]")!, "元に戻す");
+
+  async function sendChat(text = "二段落目を短くして") {
+    await openBox();
+    await advance(0);
+    setInputValue(input(), text);
+    await press(input(), "Enter");
+    await advance(0);
+  }
+
+  it("saves the unsaved text first, then puts the body the AI wrote into the editor without an autosave", async () => {
+    const server = fakeServer();
+    const onSaved = vi.fn();
+    const editor = await renderPage({}, { onSaved });
+    await type(editor, "書きかけ");
+    await sendChat();
+
+    // 頼む前に保存し終える（AI は保存された本文を読む）
+    expect(server.saves()).toHaveLength(1);
+    expect(server.turns()).toHaveLength(1);
+    // AI が書いた本文がそのまま画面に載る（採用のボタンは無い）
+    expect(editor.getJSON().content).toEqual(CHAT_WRITTEN);
+    expect(dialog()!.querySelector(".es-prop")).toBeNull();
+    // 載せ替えは自動保存を起こさない
+    await advance(2000);
+    expect(server.saves()).toHaveLength(1);
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  it("shows the work and the pages the turn changed, with the number of characters", async () => {
+    fakeServer();
+    await renderPage();
+    await sendChat();
+    expect(chatLine()).toContain("二段落目を短くしました。");
+    const work = [...dialog()!.querySelectorAll("[data-ai-work] li")].map((line) => line.textContent);
+    expect(work).toEqual(["合成の題名 を読みました", "合成の題名 を書き換えました"]);
+    expect([...dialog()!.querySelectorAll("[data-ai-change]")].map((line) => line.textContent)).toEqual(["合成の題名 を直しました（+3 字）"]);
+    expect(undoButton()).toBeDefined();
+  });
+
+  it("puts the body back on 元に戻す and says so", async () => {
+    const server = fakeServer();
+    const editor = await renderPage();
+    await sendChat();
+    expect(editor.getJSON().content).toEqual(CHAT_WRITTEN);
+
+    await click(undoButton()!);
+    await advance(0);
+    expect(server.undos()).toHaveLength(1);
+    expect(editor.getJSON().content).toEqual(BODY);
+    expect(statusText()).toBe(AI_TEXT.undone);
+    expect([...dialog()!.querySelectorAll("[data-ai-change]")].map((line) => line.textContent)).toEqual(["合成の題名 を直しました（+3 字）（元に戻しました）"]);
+    // 戻したあとは、同じ依頼を二度は戻せない
+    expect(undoButton()).toBeUndefined();
+  });
+
+  it("keeps a page the person changed afterwards, and says why", async () => {
+    const server = fakeServer({ undo: () => json(200, { undone: [], kept: [{ pageId: PAGE_ID, reason: "changed" }], page: null }) });
+    const editor = await renderPage();
+    await sendChat();
+    await click(undoButton()!);
+    await advance(0);
+    expect(server.undos()).toHaveLength(1);
+    expect(statusText()).toBe(AI_TEXT.undoKept);
+    // 画面の本文はそのまま（勝手に戻さない）
+    expect(editor.getJSON().content).toEqual(CHAT_WRITTEN);
+  });
+
+  it("says it was cut off when the turn stopped, and keeps what was written", async () => {
+    fakeServer({
+      chat: () =>
+        json(200, {
+          conversation: { id: CONVERSATION_ID, messageId: MESSAGE_ID },
+          message: {
+            id: MESSAGE_ID,
+            seq: 2,
+            role: "assistant",
+            text: "",
+            preset: null,
+            proposal: null,
+            version: null,
+            items: [{ kind: "tool", tool: "write_page", page: "合成の題名", ok: true }],
+            result: "stopped",
+            resultCode: "quota_exceeded",
+            changes: [{ pageId: PAGE_ID, title: "合成の題名", change: "edited", chars: 12, delta: 3, undoneAt: null }],
+          },
+          page: null,
+          usage: { nearLimit: true },
+        }),
+    });
+    await renderPage();
+    await sendChat();
+    expect(statusText()).toBe(AI_TEXT.stopped);
+    // 上限に近い一言も出る
+    expect(dialog()!.querySelector("[data-ai-near-limit]")?.textContent).toBe(AI_TEXT.nearLimit);
+    // 書いた分は会話に残り、元に戻せる
+    expect(undoButton()).toBeDefined();
+  });
+
+  it("says what happened when the chat fails, without the body or internals, and lets the user ask again", async () => {
+    const server = fakeServer({ chat: () => json(502, { error: "ai_failed" }) });
+    const editor = await renderPage();
+    const before = JSON.stringify(editor.getJSON());
+    await sendChat();
+    expect(statusText()).toBe(AI_ERROR_TEXT.aiFailed);
+    expect(JSON.stringify(editor.getJSON())).toBe(before);
+    expect(input().disabled).toBe(false);
+    expect(server.turns()).toHaveLength(1);
+  });
+
+  it("stops the candidates and the input on 503 ai_unavailable from the chat", async () => {
+    fakeServer({ chat: () => json(503, { error: "ai_unavailable" }) });
+    await renderPage();
+    await sendChat();
+    expect(statusText()).toBe(AI_BLOCKED_TEXT.aiUnavailable);
+    expect(input().disabled).toBe(true);
+    expect(preset("整える").disabled).toBe(true);
+  });
+
+  it("says the month's limit was reached without touching the page", async () => {
+    const server = fakeServer({ chat: () => json(429, { error: "quota_exceeded" }) });
+    const editor = await renderPage();
+    const before = JSON.stringify(editor.getJSON());
+    await sendChat();
+    expect(statusText()).toBe(AI_ERROR_TEXT.quota);
+    expect(JSON.stringify(editor.getJSON())).toBe(before);
+    expect(server.turns()).toHaveLength(1);
   });
 });
