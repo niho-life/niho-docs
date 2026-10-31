@@ -28,6 +28,8 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | `EDITOR_AI_MODE` | 任意。未設定・`off` は AI を使わない（提案・採用は 503 `ai_unavailable`）。`fake` は偽物のモデル（開発・CI だけ。`NODE_ENV=production` では 503） |
 | `EDITOR_AI_MONTHLY_LIMIT_USD` | 任意。owner ごとの月の上限（見込みの USD）。未設定は上限なし。0 以上の数でない値は 0（AI を止める） |
 | `EDITOR_STEPS_MODE` | 手順の実行の方式。`inline`（開発・CI だけ）。未設定・`off`・未知の値と、本番（`NODE_ENV=production`）の `inline` では手順の開始は 503 |
+| `EDITOR_FACE_CREDENTIALS` | 任意（secret）。公開 API を NIHO の面が読むサービス間の資格。JSON の配列 `[{ "audience": "exp"\|"niho", "sha256": "<token の SHA-256 の小文字 hex>", "expiresAt": "<ISO 8601 UTC>" }]`。token の平文は置かない。未設定・不正（1 つでも形が違う）なら面は誰も読めない（不正は起動時と最初の要求で「不正」とだけログ）。署名つきのサービス間 token の契約ができるまでの暫定 |
+| `EDITOR_PUBLIC_API_RATE_LIMIT_PER_MINUTE` | 任意。公開 API の資格（の SHA-256）ごとの 1 分の要求数の上限（instance ごと）。未設定・不正は 600 |
 
 確認のコマンド: `typecheck`・`lint`・`test`（vitest）・`build`・`test:startup`（build の後。本番の起動の守り）・`test:e2e`（`DATABASE_URL` と migration が要る。`next dev` を起動して API と画面を確かめ、作った行は消す）。
 
@@ -48,7 +50,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
   - 編集の対象は最上位の段落と見出しだけ（箇条書き・引用・囲み・画像などは文脈として送るだけ）。段落はブロックの位置で指す。**変更した段落の太字・斜体・リンクは外れてプレーンテキストになる**（v1 の制限）。変更しない段落には触れない。
   - 足すだけの候補（要約・見出しをつける・Add headings・記事にできそうな部分・Check facts to confirm）は、モデルが既存の文の変更を返しても捨てる。長いページは段落の切れ目で約 12,000 文字ずつに分けて頼み、20 万文字を超える範囲は 413 `too_large`。
   - 使用量は表 `ai_usage`（migration 0005。owner × 月）に原子的に足す。金額は docs-core の単価表の見込み（偽物・単価不明は 0）。上限以上はモデルを呼ぶ前に 429 `quota_exceeded`、上限の 80% 以上で `nearLimit`。モデルの失敗・検証に通らない出力は 502 `ai_failed`（使った分は記録する）。
-- **索引に載せない**: 全ての応答に `X-Robots-Tag: noindex, nofollow`（`next.config.ts`）、全ページに `<meta name="robots" content="noindex, nofollow">`。`robots.txt` は Disallow を付けない（クロールを止めると noindex が読まれない）。
+- **索引に載せない**: 全ての応答に `X-Robots-Tag: noindex, nofollow`（`next.config.ts`）、全ページに `<meta name="robots" content="noindex, nofollow">`。`robots.txt` は Disallow を付けない（クロールを止めると noindex が読まれない）。公開 API の `/v1/*` だけは契約どおり `X-Robots-Tag: noindex` を handler が付ける（Next は config の header があると route の値を捨てるので、全体の規則から `/v1/` を外している）。
 - **本文**: niho-docs-ui の `BlockEditor`（TipTap）を使い、`blocks` は TipTap の doc の `content`（ブロックの配列）をそのまま保存する。サーバーが見るのは「`type` を持つ object の配列で、大きさと深さが上限の内側」だけ。**限定 AST としての厳密な検証（許すブロックの種類・HTML の正規化）は #33。**
 - **React を 1 本にする**: `.npmrc` の `install-links=true` で packages/* を node_modules に複製して入れる。docs-ui の側の node_modules（React 18）を拾わず、react・TipTap はこの app の 1 本に解決する（`src/components/PageEditor.test.tsx` が確かめる）。packages を書き換えたら `npm install` し直し、`apps/editor-web/.next` も消す（packages の version が同じだと webpack の cache が古い版を使い続け、`next build` は警告だけで通って実行時に 500 になる。CI は毎回新しい checkout なので影響しない）。
 - **bundler は webpack**（`--webpack`）: docs-core は `./types.js` で `./types.ts` を指す書き方で、Turbopack は node_modules の中のこれを解決しないため。`experimental.extensionAlias` で `.js` を `.ts` にも当てる。
@@ -100,6 +102,17 @@ const found = usePageSearch(find.open ? find.value : ""); // found.results を�
 - **上限**: VTT は UTF-8 で 4 MiB（取り込みの要求の本文は 5 MiB まで。超えたら 413）、段落は 20,000 個・1 段落 5,000 文字・本文の合計 8 MiB（docs-core の文字起こしの同期上限と同じ）、1 回の `edits` は 200 件（`PATCH` の本文は 4 MiB まで）。
 - **表**: migration `0007_page_recordings.sql`（録音ページに 1 行。ページを消す（hard delete）と消える。ゴミ箱の間は残る）。コードは `packages/editor-store/src/recordings.ts`、段落と話者の操作（純粋な関数）は `src/recording/`。
 - **まだ**: 音声の取り込み・エンジン（段 2）、マイク録音・再生・タイムスタンプの画面（段 3）、検索への組み込み。
+
+## 公開 API v1（#40 段 1）
+
+発信先（NIHO Experience・NIHO・本人のサイト）が公開版を読む API。契約は [editor-publish-api-v1.md](../../docs/security/editor-publish-api-v1.md) と `@niho/editor-publish-contract`。**段 1 は handler と契約の差分テストまでで、DB はまだつないでいない（`/v1/*` は全て 503 `temporarily_unavailable`、プレビューの発行も 503）。**
+
+- **経路**: `src/app/v1/[...path]/route.ts`（GET・HEAD。他のメソッドも handler に渡して 400 ＋ `Allow: GET, HEAD`）。`/v1/{handle}/published.json`・`/v1/{handle}/published/{id}.json`・`/v1/preview/{token}.json`。`src/proxy.ts` は `/v1/` を通さない（CSP の nonce も戻り先の header も要らない。ログインへも移さない）。
+- **handler**（`src/public-api/handler.ts`）: 判定の順・404 の同一性・410 の `movedTo`・ETag と `If-None-Match`（認証が先）・header・requestId つきのエラー・query の検証・プレビューの規則を契約どおりにし、返す直前に契約の検証器（`requireProjection`）で自己検証する（通らなければ 503）。資格・token は SHA-256 にしてから引き、ログ・例外には入れない。cursor は不透明（位置と一覧の範囲に結んだ印つき。書き換え・別の handle や include の cursor は 400。印は鍵を使わないので偽造は防がないが、cursor は権限を持たない）。
+- **データの port**: `src/public-api/source.ts` の `PublicApiSource`（鍵 → handle、一覧の keyset、handle × id の公開版、プレビュー token の拘束、現在の下書き）。段 2 で packages/editor-store のクエリが実装する。面の資格は `EDITOR_FACE_CREDENTIALS`。
+- **rate limit**: 資格の SHA-256 ごとの 1 分の固定窓、instance ごと（instance が増えると全体の上限も増える）。超えたら 429 ＋ `Retry-After`。
+- **プレビューの発行**: `POST /api/pages/{id}/preview-token`（本文 `{ handle }`。本人だけ・同じ origin だけ）。201 `{ token, expiresAt, url }`。ページは本人の・ゴミ箱でないもの、handle は本人が役割で出せる面か本人の解除していない接続（どちらも満たさなければ同じ 404）。15 分、保存はハッシュだけ（`PreviewTokenStore`）。NIHO の役割は niho-app #19459 まで読めないので、今は面へのプレビューは出せない。
+- **テスト**: `src/public-api/handler.test.ts` が production の handler（＋メモリの `PublicApiSource`）と契約の参照モデル（テスト専用）を、cases.json の全シナリオと合成の world（400 個 × 60 要求、各一覧の cursor の全走査）で突き合わせ、status・header・本文がバイト単位で同じことを確かめる（cursor の文字列だけは違ってよい）。
 
 ## まだやらないこと
 

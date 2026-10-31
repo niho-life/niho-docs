@@ -206,6 +206,30 @@ describe("production start with the server entry (Dockerfile / npm start)", () =
       child.kill("SIGTERM");
     }
   });
+
+  it("serves the public API /v1 with the contract's headers, not the catch-all ones (#40)", async () => {
+    // Next は同じ名前の header が config にあると route の値を捨てるので、本番の server で値が契約どおりかを確かめる（DB が無いので 503）
+    const port = await freePort();
+    const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env: childEnv(port, "niho"), stdio: "ignore" });
+    try {
+      await waitForHttp(port);
+      const list = await fetch(`http://127.0.0.1:${port}/v1/exp/published.json`, { headers: { authorization: `Bearer ek_${"A".repeat(42)}Q` } });
+      assert.equal(list.status, 503);
+      assert.equal(list.headers.get("x-robots-tag"), "noindex");
+      assert.equal(list.headers.get("cache-control"), "no-store");
+      assert.equal(list.headers.get("content-type"), "application/json; charset=utf-8");
+      // Next は App Router の全応答の Vary に自分の header（rsc など）を足す。契約の Authorization が含まれることだけを確かめる
+      assert.match(list.headers.get("vary") ?? "", /(^|, )Authorization(,|$)/);
+      const body = await list.json();
+      assert.equal(body.error.code, "temporarily_unavailable");
+      assert.match(body.error.requestId, /^req_/);
+      const options = await fetch(`http://127.0.0.1:${port}/v1/exp/published.json`, { method: "OPTIONS" });
+      assert.equal(options.status, 400);
+      assert.equal(options.headers.get("allow"), "GET, HEAD");
+    } finally {
+      child.kill("SIGTERM");
+    }
+  });
 });
 
 describe("production start without the entry (defence in depth)", () => {
