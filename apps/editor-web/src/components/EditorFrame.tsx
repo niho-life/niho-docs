@@ -212,7 +212,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
 
   // 公開のシートはページを開いている画面だけ（一覧・設定・新しいページ・録音からでは出さない）
   const sheetShown = currentId ? sheet : null;
-  const openPublish = () => setSheet("publish");
+  const { openPublish } = api;
 
   const openSearch = () => {
     if (sheetShown) return;
