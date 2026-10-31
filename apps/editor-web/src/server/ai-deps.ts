@@ -1,5 +1,5 @@
 import "server-only";
-import { getAiUsage, getEditorSettings, recordAiUsage } from "@niho/editor-store";
+import { appendTurn, getAiUsage, getAssistantMessage, getConversation, getEditorSettings, listConversations, recordAdoption, recordAiUsage } from "@niho/editor-store";
 import { monthlyLimitUsd, resolveAiBackend } from "../ai/config";
 import { getAuthProvider } from "../auth";
 import type { AiApiDeps } from "./ai-api";
@@ -18,6 +18,18 @@ export const aiDeps: AiApiDeps = {
       ? {
           get: (owner, month) => getAiUsage(pool, owner, month),
           record: (owner, month, delta) => recordAiUsage(pool, owner, month, delta),
+        }
+      : null;
+  },
+  conversations: () => {
+    const pool = getPool();
+    return pool
+      ? {
+          append: (owner, input) => appendTurn(pool, owner, input),
+          list: (owner, pageId) => listConversations(pool, owner, pageId),
+          get: (owner, pageId, conversationId) => getConversation(pool, owner, pageId, conversationId),
+          message: (owner, pageId, messageId) => getAssistantMessage(pool, owner, pageId, messageId),
+          adopt: (owner, input) => recordAdoption(pool, owner, input),
         }
       : null;
   },

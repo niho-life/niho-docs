@@ -130,13 +130,15 @@ describe("resolveAiCompose", () => {
   });
 
   it("calls the fixed Anthropic URL with the key of the moment", async () => {
-    const fetch = vi.fn(async () =>
-      Response.json({ model: "claude-sonnet-5-5", content: [{ type: "text", text: "{}" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } }),
-    );
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void input;
+      void init;
+      return Response.json({ model: "claude-sonnet-5-5", content: [{ type: "text", text: "{}" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } });
+    });
     vi.stubGlobal("fetch", fetch);
     await resolveAiCompose(on)!.client.complete({ system: "s", user: "u" });
     const [input, init] = fetch.mock.calls[0]!;
     expect(String(input)).toBe(ANTHROPIC_MESSAGES_URL);
-    expect(new Headers((init as RequestInit).headers).get("x-api-key")).toBe(KEY);
+    expect(new Headers(init?.headers).get("x-api-key")).toBe(KEY);
   });
 });

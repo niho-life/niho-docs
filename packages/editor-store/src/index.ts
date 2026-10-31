@@ -1,6 +1,26 @@
 export * from "./types.ts";
 export * from "./ai-usage.ts";
 export {
+  CONVERSATION_LIST_LIMIT,
+  CONVERSATION_MESSAGE_LIMIT,
+  MESSAGE_JSON_MAX_BYTES,
+  MESSAGE_TEXT_MAX_CHARS,
+  appendTurn,
+  getAssistantMessage,
+  getConversation,
+  isMessageJson,
+  isMessageText,
+  listConversations,
+  recordAdoption,
+  type AdoptionInput,
+  type AiConversation,
+  type AiConversationSummary,
+  type AiMessage,
+  type AiMessageRole,
+  type AiTurn,
+  type AiTurnInput,
+} from "./ai-conversations.ts";
+export {
   DEFAULT_AUTOSAVE_VERSION_INTERVAL_MS,
   EditorStore,
   InvalidPageCursorError,

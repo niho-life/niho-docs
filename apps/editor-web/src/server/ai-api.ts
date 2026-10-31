@@ -1,10 +1,25 @@
 import { estimateTokenCostUsd } from "@niho/docs-core";
-import { DEFAULT_EDITOR_SETTINGS, isPositiveInteger, monthKeyJst, type AiUsageDelta, type AiUsageTotals, type EditorSettings, type EditorStore, type OwnerId } from "@niho/editor-store";
+import {
+  DEFAULT_EDITOR_SETTINGS,
+  isPositiveInteger,
+  monthKeyJst,
+  type AdoptionInput,
+  type AiConversation,
+  type AiConversationSummary,
+  type AiMessage,
+  type AiTurn,
+  type AiTurnInput,
+  type AiUsageDelta,
+  type AiUsageTotals,
+  type EditorSettings,
+  type EditorStore,
+  type OwnerId,
+} from "@niho/editor-store";
 import { AnthropicError } from "../ai/anthropic";
 import type { AiBackend } from "../ai/config";
-import { applyAdoptions, buildProposal, buildRequest, type Adoptions, type AiRun, type AiScope } from "../ai/engine";
+import { applyAdoptions, buildProposal, buildRequest, type Adoptions, type AiRun, type AiScope, type Proposal } from "../ai/engine";
 import type { AiInsertKind, AiUsageReport } from "../ai/model";
-import { parseIntent, type AiIntent } from "../ai/presets";
+import { intentLabel, parseIntent, type AiIntent } from "../ai/presets";
 import type { AuthProvider } from "../auth/types";
 import { conflictResponse, errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 import { parseBlocks } from "./page-input";
@@ -27,12 +42,23 @@ export type AiUsageStore = {
   record: (owner: OwnerId, month: string, delta: AiUsageDelta) => Promise<AiUsageTotals>;
 };
 
+/** 会話の読み書き（packages/editor-store の ai-conversations.ts に Pool を渡したもの）。 */
+export type AiConversationStore = {
+  append: (owner: OwnerId, input: AiTurnInput) => Promise<AiTurn | null>;
+  list: (owner: OwnerId, pageId: string) => Promise<AiConversationSummary[] | null>;
+  get: (owner: OwnerId, pageId: string, conversationId: string) => Promise<AiConversation | null>;
+  message: (owner: OwnerId, pageId: string, messageId: string) => Promise<AiMessage | null>;
+  adopt: (owner: OwnerId, input: AdoptionInput) => Promise<boolean>;
+};
+
 /** AI の route が使うもの。route から渡す（テストでは差し替える）。 */
 export type AiApiDeps = {
   auth: () => AuthProvider;
   /** DB が使えないときは null（503）。 */
   store: () => AiPagesStore | null;
   usage: () => AiUsageStore | null;
+  /** 会話（AI チャット）。DB が使えないときは null（503）。 */
+  conversations: () => AiConversationStore | null;
   /** 設定（固有名詞と提案の言語。#108）。渡さない・読めないときは既定値（語彙なし・本文の言語のまま）。 */
   settings?: () => ((owner: OwnerId) => Promise<EditorSettings>) | null;
   /** 使えるモデル。無効のときは null（503 `ai_unavailable`）。 */
@@ -101,14 +127,16 @@ function isNonNegativeIndex(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-type ProposalInput = { baseRevision: number; intent: AiIntent; scope: AiScope | undefined };
+type ProposalInput = { baseRevision: number; intent: AiIntent; scope: AiScope | undefined; conversationId: string | null };
 
-/** POST …/ai/proposals の本文。範囲が本文の内側かはページを読んでから確かめる。 */
+/** POST …/ai/proposals の本文。範囲が本文の内側か・会話がこのページのものかはページを読んでから確かめる。 */
 function parseProposalBody(body: unknown): InputResult<ProposalInput> {
-  if (!isPlainObject(body) || !hasOnlyKeys(body, ["baseRevision", "intent", "scope"])) return { ok: false };
+  if (!isPlainObject(body) || !hasOnlyKeys(body, ["baseRevision", "intent", "scope", "conversationId"])) return { ok: false };
   if (!isPositiveInteger(body.baseRevision)) return { ok: false };
   const intent = parseIntent(body.intent);
   if (!intent) return { ok: false };
+  if (body.conversationId !== undefined && body.conversationId !== null && typeof body.conversationId !== "string") return { ok: false };
+  const conversationId = typeof body.conversationId === "string" ? body.conversationId : null;
   let scope: AiScope | undefined;
   if (body.scope !== undefined) {
     const raw = body.scope;
@@ -116,15 +144,17 @@ function parseProposalBody(body: unknown): InputResult<ProposalInput> {
     if (!isNonNegativeIndex(raw.fromIndex) || !isNonNegativeIndex(raw.toIndex) || raw.fromIndex > raw.toIndex) return { ok: false };
     scope = { fromIndex: raw.fromIndex, toIndex: raw.toIndex };
   }
-  return { ok: true, value: { baseRevision: body.baseRevision, intent, scope } };
+  return { ok: true, value: { baseRevision: body.baseRevision, intent, scope, conversationId } };
 }
 
 const INSERT_KINDS: readonly string[] = ["paragraph", "heading", "callout"] satisfies readonly AiInsertKind[];
 
 /** POST …/ai/adoptions の本文（採用するものだけ。両方空は断る）。位置と文の中身は applyAdoptions が今の本文で確かめる。 */
-function parseAdoptionBody(body: unknown): InputResult<Adoptions & { baseRevision: number }> {
-  if (!isPlainObject(body) || !hasOnlyKeys(body, ["baseRevision", "changes", "inserts"])) return { ok: false };
+function parseAdoptionBody(body: unknown): InputResult<Adoptions & { baseRevision: number; messageId: string | null }> {
+  if (!isPlainObject(body) || !hasOnlyKeys(body, ["baseRevision", "changes", "inserts", "messageId"])) return { ok: false };
   if (!isPositiveInteger(body.baseRevision)) return { ok: false };
+  if (body.messageId !== undefined && body.messageId !== null && typeof body.messageId !== "string") return { ok: false };
+  const messageId = typeof body.messageId === "string" ? body.messageId : null;
   const rawChanges = body.changes ?? [];
   const rawInserts = body.inserts ?? [];
   if (!Array.isArray(rawChanges) || !Array.isArray(rawInserts)) return { ok: false };
@@ -142,7 +172,7 @@ function parseAdoptionBody(body: unknown): InputResult<Adoptions & { baseRevisio
     if (typeof raw.kind !== "string" || !INSERT_KINDS.includes(raw.kind) || typeof raw.text !== "string") return { ok: false };
     inserts.push({ afterIndex: raw.afterIndex, kind: raw.kind as AiInsertKind, text: raw.text });
   }
-  return { ok: true, value: { baseRevision: body.baseRevision, changes, inserts } };
+  return { ok: true, value: { baseRevision: body.baseRevision, changes, inserts, messageId } };
 }
 
 function count(value: number): number {
@@ -199,7 +229,8 @@ export function createAiProposal(request: Request, id: string, deps: AiApiDeps):
     if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
     const store = deps.store();
     const usage = deps.usage();
-    if (!store || !usage) return errorResponse("unavailable");
+    const chats = deps.conversations();
+    if (!store || !usage || !chats) return errorResponse("unavailable");
     const backend = deps.ai();
     if (!backend) return aiErrorResponse("ai_unavailable");
     // 本文の検査は id の有無より先（どの id でも同じ順に判定し、存在を漏らさない）
@@ -211,6 +242,9 @@ export function createAiProposal(request: Request, id: string, deps: AiApiDeps):
     const page = await store.getPage(owner, id);
     if (!page) return notFoundResponse();
     if (page.revision !== input.value.baseRevision) return conflictResponse(page);
+    // 続ける会話は、モデルを呼ぶ前に確かめる（他人の会話・このページでない会話は 404）
+    const conversationId = input.value.conversationId;
+    if (conversationId !== null && !(await chats.get(owner, id, conversationId))) return notFoundResponse();
     const settings = (await deps.settings?.()?.(owner)) ?? DEFAULT_EDITOR_SETTINGS;
     const plan = buildRequest(page, input.value.intent, input.value.scope, {
       glossary: settings.glossary,
@@ -249,8 +283,26 @@ export function createAiProposal(request: Request, id: string, deps: AiApiDeps):
       console.error("editor-web: ai output rejected", { route, reason: built.reason });
       return aiErrorResponse("ai_failed");
     }
-    return jsonResponse(200, { proposal: built.proposal, usage: summarize(totals, limitUsd) });
+    // 会話に 1 回のやりとり（頼んだこと → 提案）を足す。ページが消えていれば足せないので、提案だけ返す
+    const turn = await chats.append(owner, {
+      pageId: id,
+      conversationId,
+      request: { text: intentLabel(input.value.intent), ...("preset" in input.value.intent ? { preset: input.value.intent.preset } : {}) },
+      result: { text: resultText(built.proposal), proposal: built.proposal },
+    });
+    if (!turn) console.error("editor-web: ai turn not recorded", { route });
+    return jsonResponse(200, {
+      proposal: built.proposal,
+      usage: summarize(totals, limitUsd),
+      conversation: turn ? { id: turn.conversation.id, messageId: turn.result.id } : null,
+    });
   });
+}
+
+/** 会話に残す AI の返事の一言（件数だけ。本文は提案そのものが持つ）。 */
+function resultText(proposal: Proposal): string {
+  const items = proposal.changes.length + proposal.inserts.length;
+  return items === 0 ? "変えるところはありませんでした" : `提案が ${items} 件あります`;
 }
 
 /**
@@ -263,7 +315,8 @@ export function adoptAiProposal(request: Request, id: string, deps: AiApiDeps): 
     if (!session) return errorResponse("unauthorized");
     if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
     const store = deps.store();
-    if (!store || !deps.usage()) return errorResponse("unavailable");
+    const chats = deps.conversations();
+    if (!store || !deps.usage() || !chats) return errorResponse("unavailable");
     if (!deps.ai()) return aiErrorResponse("ai_unavailable");
     const body = await readJsonBody(request);
     if (!body.ok) return body.response;
@@ -272,8 +325,10 @@ export function adoptAiProposal(request: Request, id: string, deps: AiApiDeps): 
     const owner = session.userId;
     const page = await store.getPage(owner, id);
     if (!page) return notFoundResponse();
-    const { baseRevision, changes, inserts } = input.value;
+    const { baseRevision, changes, inserts, messageId } = input.value;
     if (page.revision !== baseRevision) return conflictResponse(page);
+    // 繋ぐ提案の発言は、何かを書く前に確かめる（他人の会話・このページでない会話は 404）
+    if (messageId !== null && !(await chats.message(owner, id, messageId))) return notFoundResponse();
     const applied = applyAdoptions(page.blocks, { changes, inserts });
     if (!applied.ok) return errorResponse("bad_request");
     // 保存のときと同じ大きさ・深さの検査
@@ -284,7 +339,47 @@ export function adoptAiProposal(request: Request, id: string, deps: AiApiDeps): 
     if (!version) return notFoundResponse();
     const result = await store.savePage(owner, id, { blocks: blocks.value }, { baseRevision });
     if (!result) return notFoundResponse();
-    return result.status === "saved" ? jsonResponse(200, { page: result.page }) : conflictResponse(result.page);
+    if (result.status !== "saved") return conflictResponse(result.page);
+    // 採用を会話に書く（版の番号で履歴から辿れる）。書けなくてもページの保存は済んでいるので 200 のまま
+    let adopted: { messageId: string; version: number } | null = null;
+    if (messageId !== null) {
+      const recorded = await chats.adopt(owner, { pageId: id, messageId, version: version.version, adopted: { changes, inserts } });
+      if (recorded) adopted = { messageId, version: version.version };
+      else console.error("editor-web: adoption not recorded", { route: "POST /api/pages/[id]/ai/adoptions" });
+    }
+    return jsonResponse(200, { page: result.page, adopted });
+  });
+}
+
+/**
+ * GET /api/pages/{id}/ai/conversations — そのページの会話の一覧（新しい順）。AI が無効でも答える（履歴は読める）。
+ * 他人のページ・無いページは同じ 404。
+ */
+export function listAiConversations(request: Request, id: string, deps: AiApiDeps): Promise<Response> {
+  return guarded("GET /api/pages/[id]/ai/conversations", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    const chats = deps.conversations();
+    if (!chats) return errorResponse("unavailable");
+    const conversations = await chats.list(session.userId, id);
+    if (!conversations) return notFoundResponse();
+    return jsonResponse(200, { conversations });
+  });
+}
+
+/**
+ * GET /api/pages/{id}/ai/conversations/{conversationId} — 1 つの会話とその発言（古い順）。
+ * 他人の会話・このページでない会話・無いページは同じ 404。
+ */
+export function getAiConversation(request: Request, id: string, conversationId: string, deps: AiApiDeps): Promise<Response> {
+  return guarded("GET /api/pages/[id]/ai/conversations/[conversationId]", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    const chats = deps.conversations();
+    if (!chats) return errorResponse("unavailable");
+    const found = await chats.get(session.userId, id, conversationId);
+    if (!found) return notFoundResponse();
+    return jsonResponse(200, found);
   });
 }
 
