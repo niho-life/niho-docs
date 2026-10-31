@@ -47,6 +47,8 @@ export type RecordingSnapshot = {
   speakers: RecordingSpeaker[];
   audios?: AudioPartView[];
   candidates?: RecordingCandidateSummary[];
+  /** いま使えるエンジン（2 つ以上あれば、案のエンジンを選べる）。 */
+  engines?: string[];
 };
 /** 取り込みで作った録音ページ。 */
 export type ImportedRecordingPage = { id: string; title: string; lang: "ja" | "en" };
@@ -121,6 +123,7 @@ function snapshotOf(data: unknown): RecordingSnapshot | null {
   const snapshot: RecordingSnapshot = { recording: data.recording, speakers: data.speakers };
   if (Array.isArray(data.audios)) snapshot.audios = data.audios.filter(isAudioPart);
   if (Array.isArray(data.candidates)) snapshot.candidates = data.candidates.filter(isCandidate);
+  if (Array.isArray(data.engines)) snapshot.engines = data.engines.filter((engine): engine is string => typeof engine === "string");
   return snapshot;
 }
 
@@ -240,9 +243,9 @@ export type AddedCandidate = {
   cannotStart: string | null;
 };
 
-/** 別のエンジンの案を作って、その案の文字起こしを始める。 */
-export async function addCandidate(pageId: string): Promise<AddedCandidate> {
-  const data = await request(candidatePath(pageId), "POST", {});
+/** 別のエンジンの案を作って、その案の文字起こしを始める（engine は使えるエンジンだけ。省けばサーバーの既定）。 */
+export async function addCandidate(pageId: string, engine?: string): Promise<AddedCandidate> {
+  const data = await request(candidatePath(pageId), "POST", engine === undefined ? {} : { engine });
   const candidates = candidatesOf(data);
   const candidate = isRecord(data) && isCandidate(data.candidate) ? data.candidate : null;
   if (!candidate) throw new RecordingRequestError(500);

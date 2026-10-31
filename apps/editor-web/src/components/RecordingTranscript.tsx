@@ -336,6 +336,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
         <RecordingCandidates
           pageId={pageId}
           candidates={snapshot.candidates ?? []}
+          engines={snapshot.engines ?? []}
           onSnapshot={(next) => {
             applyDrafts({});
             applySnapshot(next);

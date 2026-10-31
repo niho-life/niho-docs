@@ -57,7 +57,10 @@ function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-async function mount(candidates: RecordingCandidateSummary[], handlers: { onSnapshot?: (snapshot: RecordingSnapshot) => void; onChanged?: () => void } = {}) {
+async function mount(
+  candidates: RecordingCandidateSummary[],
+  handlers: { onSnapshot?: (snapshot: RecordingSnapshot) => void; onChanged?: () => void; engines?: string[] } = {},
+) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -66,6 +69,7 @@ async function mount(candidates: RecordingCandidateSummary[], handlers: { onSnap
       <RecordingCandidates
         pageId={PAGE_ID}
         candidates={candidates}
+        engines={handlers.engines ?? []}
         onSnapshot={handlers.onSnapshot ?? (() => undefined)}
         onChanged={handlers.onChanged ?? (() => undefined)}
       />,
@@ -92,6 +96,32 @@ describe("RecordingCandidates（文字起こしの案）", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(statusText()).toContain("開発の偽物 の案を作っています");
+  });
+
+  it("エンジンが 2 つ使えるときは、どちらで作るかを選べる", async () => {
+    const created = candidate({ id: SECOND, name: "Gemini", engine: "gemini", engineLabel: "Gemini", adopted: false, state: "pending", segmentCount: 0, preview: [] });
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toEqual({ engine: "gemini" });
+      return json(202, { candidate: created, candidates: [candidate(), created], run: { id: "r", status: "queued" }, cannotStart: null });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await mount([], { engines: ["deepgram", "gemini"] });
+    expect([...container!.querySelectorAll("button")].map((button) => button.textContent?.trim())).toEqual(["Deepgram で案を作る", "Gemini で案を作る"]);
+    await click("Gemini で案を作る");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(statusText()).toContain("Gemini の案を作っています");
+  });
+
+  it("エンジンが 1 つだけなら「別の案を作る」（エンジンは送らない）", async () => {
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toEqual({});
+      return json(202, { candidate: candidate({ id: SECOND, adopted: false }), candidates: [], run: { id: "r" }, cannotStart: null });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await mount([], { engines: ["deepgram"] });
+    expect(buttonByText("別の案を作る")).toBeTruthy();
+    await click("別の案を作る");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("始められなかったときは理由を出す（案は残る）", async () => {

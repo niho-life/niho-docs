@@ -49,10 +49,15 @@ export type RecordingsStore = {
   listCandidates?: (owner: OwnerId, pageId: string) => Promise<RecordingCandidateView[]>;
 };
 
+/** いま使えるエンジンの名前（画面が案のエンジンを選べるか決める）。 */
+export type RecordingEnginesReader = () => readonly string[];
+
 export type RecordingsApiDeps = {
   auth: () => AuthProvider;
   /** DB が使えないときは null（503）。 */
   store: () => RecordingsStore | null;
+  /** いま使えるエンジン（#36 段 3b-4。無ければ空＝画面はエンジンを選ばない）。 */
+  engines?: RecordingEnginesReader;
   env?: Readonly<Record<string, string | undefined>>;
 };
 
@@ -176,7 +181,7 @@ export function importVttRoute(request: Request, deps: RecordingsApiDeps): Promi
 }
 
 /**
- * GET /api/pages/{id}/recording — 録音（`{ recording, speakers, transcription, audios, candidates }`）。
+ * GET /api/pages/{id}/recording — 録音（`{ recording, speakers, transcription, audios, candidates, engines }`）。
  * transcription は最新の文字起こしの run（#36 段 2b。無ければ null）、audios は音声の列（#36 段 3b-4。足した順）、
  * candidates は文字起こしの案（作った順。案を作っていない録音は空）。無ければ同じ 404。
  */
@@ -200,6 +205,7 @@ export function getRecordingRoute(request: Request, id: string, deps: Recordings
       transcription: run ? transcriptionRunBody(run) : null,
       audios: audios.map(audioPartBody),
       candidates: candidates.map(candidateBody),
+      engines: [...(deps.engines?.() ?? [])],
     });
   });
 }

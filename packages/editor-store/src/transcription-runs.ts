@@ -36,7 +36,8 @@ import type { OwnerId, PageLang, Queryable } from "./types.ts";
  * 本文・音声・エンジンの応答・鍵はこの表に持たない。
  */
 
-export const TRANSCRIPTION_ENGINES = ["deepgram", "fake"] as const;
+/** 使えるエンジン（0012 の CHECK と、gemini を足した migration と同じ並び）。 */
+export const TRANSCRIPTION_ENGINES = ["deepgram", "fake", "gemini"] as const;
 export type TranscriptionEngineName = (typeof TRANSCRIPTION_ENGINES)[number];
 
 export const TRANSCRIPTION_RUN_STATUSES = ["queued", "running", "succeeded", "failed"] as const;

@@ -133,7 +133,7 @@ function deps(userId: string | null, store: CandidatesStore | null, extra: { run
   return {
     auth: () => authAs(userId),
     store: () => store,
-    runner: extra.runner ?? (() => ({ engine: "fake", dispatcher: dispatcher() })),
+    runner: extra.runner ?? (() => ({ engine: "fake", engines: ["fake"], dispatcher: dispatcher() })),
     env: {},
   };
 }
@@ -203,7 +203,7 @@ describe("POST /api/pages/{id}/recording/candidates", () => {
 
   it("積み込みが失敗したら run を失敗にする（案は残る）", async () => {
     const { store, calls } = memoryStore();
-    const response = await add(deps("user-a", store, { runner: () => ({ engine: "fake", dispatcher: dispatcher(true) }) }));
+    const response = await add(deps("user-a", store, { runner: () => ({ engine: "fake", engines: ["fake"], dispatcher: dispatcher(true) }) }));
     expect(response.status).toBe(202);
     expect(calls).toContain("failRun");
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -224,14 +224,32 @@ describe("POST /api/pages/{id}/recording/candidates", () => {
     expect((await add(deps("user-a", null))).status).toBe(503);
   });
 
-  it("未認証は 401、別の origin は 403、本文が空でなければ 400", async () => {
+  it("未認証は 401、別の origin は 403、知らない項目・使えないエンジンは 400", async () => {
     const { store, calls } = memoryStore();
     expect((await add(deps(null, store))).status).toBe(401);
     expect((await add(deps("user-a", store), {}, { origin: "http://evil.test" })).status).toBe(403);
-    const bad = await add(deps("user-a", store), { engine: "deepgram" });
-    expect(bad.status).toBe(400);
-    expect(await bad.json()).toEqual({ error: "bad_request", reason: "body" });
+    // 鍵の無いエンジンは選べない（この server は fake だけ）
+    const wrongEngine = await add(deps("user-a", store), { engine: "deepgram" });
+    expect(wrongEngine.status).toBe(400);
+    expect(await wrongEngine.json()).toEqual({ error: "bad_request", reason: "engine" });
+    const unknownKey = await add(deps("user-a", store), { lang: "ja" });
+    expect(unknownKey.status).toBe(400);
+    expect(await unknownKey.json()).toEqual({ error: "bad_request", reason: "body" });
     expect(calls).toEqual([]);
+  });
+
+  it("使えるエンジンを選べる（案と run に記録する）", async () => {
+    const { store, calls, names } = memoryStore();
+    const runner = () => ({ engine: "deepgram" as const, engines: ["deepgram" as const, "gemini" as const], dispatcher: dispatcher() });
+    const response = await add(deps("user-a", store, { runner }), { engine: "gemini" });
+    expect(response.status).toBe(202);
+    const body = await response.json();
+    expect(body.candidate.engine).toBe("gemini");
+    expect(body.candidate.name).toBe("Gemini");
+    expect(body.candidate.engineLabel).toBe("Gemini");
+    // 1 つ目の案は、いまの文字起こしのエンジン（Deepgram）の名前
+    expect(names).toEqual(["Deepgram/Gemini/gemini"]);
+    expect(calls).toContain(`enqueue:${body.candidate.id}`);
   });
 });
 

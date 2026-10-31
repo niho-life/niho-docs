@@ -31,8 +31,10 @@
 | `EDITOR_ORIGIN` | `https://<APP_DOMAIN>` | 更新系の要求の `Origin` 検査。独自ドメインが無いうちは `run.app` の URL |
 | `EDITOR_STORAGE` | `gcs` | 資産の保存先。**毎回渡す**。未設定は本番で `off` の扱いになり、画像と音声の API が 503 `storage_unavailable` を返す（`apps/editor-web/src/storage/config.ts`） |
 | `EDITOR_ASSETS_BUCKET` | 資産バケット名 | 画像（#33）と音声（#36）の実体。実行 ID はこのバケットに作成と閲覧だけできる |
-| `EDITOR_TRANSCRIBE_ENGINE` | `deepgram` | 文字起こしのエンジン。`niho-editor-deepgram-key` に有効な版があるときだけ渡す（§12） |
+| `EDITOR_TRANSCRIBE_ENGINE` | `deepgram` | 文字起こしの**既定の**エンジン。`niho-editor-deepgram-key` に有効な版があるときだけ渡す（§12） |
 | `DEEPGRAM_API_KEY` | Secret | 同上 |
+| `GEMINI_API_KEY` | Secret | 任意。渡すと **Gemini の案**（#36 段 3b-4）を作れる（既定のエンジンは変わらない）。鍵は `niho-editor-gemini-key` に置く |
+| `EDITOR_GEMINI_MODEL` | 任意 | Gemini のモデル。空ならアプリの既定（`gemini-3.8-flash`） |
 | `EDITOR_TRANSCRIBE_TIMEOUT_SEC` | `TRANSCRIBE_TIMEOUT_SEC` | 同上。任意。空ならアプリの既定（1200 秒） |
 | `EDITOR_TRANSCRIBE_MODE` ほか 3 つ | `TRANSCRIBE_MODE=cloud-tasks` のときだけ | 文字起こしの呼び出し口（キュー・worker の URL・OIDC の身元。§12） |
 | `DATABASE_URL` | Secret | アプリ用ロール |

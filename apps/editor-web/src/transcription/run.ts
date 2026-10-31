@@ -11,7 +11,7 @@ import {
 } from "@niho/editor-store";
 import { StorageError, type ObjectStorage, type ReadObject } from "../storage/types";
 import { composeParts, type TranscribedPart } from "./compose-parts";
-import { EngineError, type EngineErrorCode, type TranscriptionEngine } from "./engine";
+import { EngineError, type EngineErrorCode, type TranscriptionEngine, type TranscriptionEngineName } from "./engine";
 import { normalizeEngineResult } from "./normalize";
 
 /**
@@ -22,6 +22,7 @@ import { normalizeEngineResult } from "./normalize";
  *   長さだけ時刻をずらし、話者の番号は音声ごとに振り直す）。1 回の実行の時間切れ（既定 20 分）は全部で共有する
  *   （1 つの task の締め切りを超えないため。足りなければ `EDITOR_TRANSCRIBE_TIMEOUT_SEC` を上げる）。
  * - run に案（candidate）が付いていれば、確定で書くのは正本ではなくその案（store の finishRun が分ける）。
+ * - エンジンは **run に記録された名前**で引く（案を別のエンジンで作れるため）。その鍵がサーバーに無ければ engine_unavailable。
  *
  * - 途中の失敗は短い code にして run を failed にする（failRun。世代が一致するときだけ）。音声は消さないので「もう一度」ができる。
  *   音声の資産が無い・アップロードが済んでいない・保存先に無い → audio_missing、期限切れ → audio_expired、
@@ -48,7 +49,8 @@ export function pgTranscriptionRunStore(pool: Connectable & Queryable): Transcri
 export type ExecuteRunDeps = {
   store: TranscriptionRunStore;
   storage: ObjectStorage;
-  engine: TranscriptionEngine;
+  /** run に記録されたエンジンの口（使えないエンジンなら null → engine_unavailable）。 */
+  engines: (name: TranscriptionEngineName) => TranscriptionEngine | null;
   runId: string;
   /** 1 回の文字起こしの時間切れ（ミリ秒。設定の EDITOR_TRANSCRIBE_TIMEOUT_SEC）。 */
   timeoutMs: number;
@@ -105,6 +107,9 @@ export async function executeRun(deps: ExecuteRunDeps): Promise<ExecuteRunOutcom
     return { status: "failed", errorCode: code };
   };
 
+  // run に記録されたエンジン（案を別のエンジンで作れるので、run ごとに違う）
+  const engine = deps.engines(run.engine);
+  if (!engine) return fail("engine_unavailable");
   // 音声の列（part 0 から。古い claim の口しか無いときは part 0 だけ）
   const parts = claim.parts.length > 0 ? claim.parts : audio ? [{ ...audio, partIndex: 0, offsetSec: 0, durationSec: null, sourceName: null }] : [];
   if (parts.length === 0) return fail("audio_missing");
@@ -118,7 +123,7 @@ export async function executeRun(deps: ExecuteRunDeps): Promise<ExecuteRunOutcom
     for (const part of parts) {
       opened = await deps.storage.readObject(part.objectPath);
       if (!opened) return await fail("audio_missing");
-      const raw = await deps.engine.transcribe({
+      const raw = await engine.transcribe({
         audio: { stream: opened.body, contentType: part.contentType, sizeBytes: opened.sizeBytes },
         language: run.language,
         diarize: run.diarize,

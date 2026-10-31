@@ -12,6 +12,7 @@ import type {
   TranscriptionErrorCode,
 } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
+import type { TranscriptionEngineName } from "../transcription/engine";
 import { candidateEngineLabel, nextCandidateName, primaryCandidateName } from "../recording/candidate-names";
 import type { TranscriptionRunnerDeps } from "./transcription-api";
 import { withSpeakers } from "./recordings-api";
@@ -27,8 +28,8 @@ import { errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, rea
  *   （画面は「もう一度」で積み直せる）。
  * - 採用: 選んだ案を正本に写す（それまでの本文は、採用中だった案に残る）。正本の revision が進むので、開いている画面は
  *   次の書き込みで 409 を受けて最新に合わせる。
- * - エンジンは設定（`EDITOR_TRANSCRIBE_ENGINE`）が決める（要求からは選ばせない）。エンジンが増えたら、案の行はそのままで
- *   選べるようにする。
+ * - エンジンは要求の `engine`（**いま使えるエンジン**だけ。鍵の無いエンジンは 400）。省けば設定の既定。
+ *   Gemini を足したので、Deepgram と Gemini の案を並べて見比べられる。
  * 作法は録音の API と同じ: 未認証 401、更新系は同じ origin からだけ（403）、別の人・存在しない・不正な id・削除済み・
  * 録音や案の無いページは同じ 404、エラーの本文は短い code と理由だけ。
  */
@@ -110,8 +111,9 @@ async function startCandidateRun(
   owner: OwnerId,
   pageId: string,
   candidateId: string,
+  engine: TranscriptionEngineName = runner.engine,
 ): Promise<{ run: ReturnType<typeof transcriptionRunBody> | null; reason: string | null }> {
-  const result = await store.enqueue(owner, pageId, { engine: runner.engine, diarize: true, replace: false, terms: [], candidate: candidateId });
+  const result = await store.enqueue(owner, pageId, { engine, diarize: true, replace: false, terms: [], candidate: candidateId });
   if (!result) return { run: null, reason: "missing" };
   if (result.status === "audio_not_ready" || result.status === "audio_expired" || result.status === "has_transcript" || result.status === "candidate_missing") {
     return { run: null, reason: result.status };
@@ -141,12 +143,18 @@ export function addCandidateRoute(request: Request, id: string, deps: Candidates
     if (!runner) return jsonResponse(503, { error: "transcription_unavailable" });
     const store = deps.store();
     if (!store) return errorResponse("unavailable");
-    // 本文は空だけを受ける（今はエンジンも案の名前も要求からは決めない）
+    // 受けるのは `{ engine? }` だけ（案の名前はサーバーが決める）
     const body = await readJsonBody(request, CANDIDATE_BODY_MAX_BYTES);
     if (!body.ok) return body.response.status === 400 ? jsonResponse(400, { error: "bad_request", reason: "body" }) : body.response;
-    if (body.value !== undefined && body.value !== null && (typeof body.value !== "object" || Object.keys(body.value).length > 0)) {
+    const value: unknown = body.value ?? {};
+    if (typeof value !== "object" || value === null || Array.isArray(value) || !Object.keys(value).every((key) => key === "engine")) {
       return jsonResponse(400, { error: "bad_request", reason: "body" });
     }
+    const asked = (value as { engine?: unknown }).engine;
+    if (asked !== undefined && (typeof asked !== "string" || !runner.engines.includes(asked as TranscriptionEngineName))) {
+      return jsonResponse(400, { error: "bad_request", reason: "engine" });
+    }
+    const engine = (asked as TranscriptionEngineName | undefined) ?? runner.engine;
 
     const owner = session.userId;
     const recording = await store.getRecording(owner, id);
@@ -155,15 +163,15 @@ export function addCandidateRoute(request: Request, id: string, deps: Candidates
     const added = await store.addCandidate(owner, id, {
       name: nextCandidateName(
         existing.map((item) => item.name),
-        runner.engine,
+        engine,
       ),
-      engine: runner.engine,
+      engine,
       language: recording.language,
       primaryName: primaryCandidateName(recording.engine),
     });
     if (!added) return notFoundResponse();
     if (added.status === "too_many") return jsonResponse(409, { error: "too_many" });
-    const started = await startCandidateRun(store, runner, owner, id, added.candidate.id);
+    const started = await startCandidateRun(store, runner, owner, id, added.candidate.id, engine);
     const candidates = await store.listCandidates(owner, id);
     return jsonResponse(202, {
       candidate: candidateBody(added.candidate),
@@ -237,7 +245,9 @@ export function retryCandidateRoute(request: Request, id: string, candidateId: s
     if (!store) return errorResponse("unavailable");
     const candidate = await store.getCandidate(session.userId, id, candidateId);
     if (!candidate) return notFoundResponse();
-    const started = await startCandidateRun(store, runner, session.userId, id, candidateId);
+    // その案を作ったエンジンでもう一度（いま使えなければ設定の既定）
+    const engine = candidate.engine !== null && runner.engines.includes(candidate.engine as TranscriptionEngineName) ? (candidate.engine as TranscriptionEngineName) : runner.engine;
+    const started = await startCandidateRun(store, runner, session.userId, id, candidateId, engine);
     if (!started.run) return started.reason === "missing" ? notFoundResponse() : cannotStart(started.reason ?? "internal");
     return jsonResponse(202, { run: started.run });
   });

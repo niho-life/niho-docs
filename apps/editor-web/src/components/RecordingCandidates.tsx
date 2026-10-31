@@ -13,6 +13,7 @@ import {
   type RecordingCandidateSummary,
   type RecordingSnapshot,
 } from "@/lib/recording-client";
+import { candidateEngineLabel } from "@/recording/candidate-names";
 import { formatClock, speakerLabel } from "@/lib/recording-view";
 
 const ROW_STYLE: CSSProperties = { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 8 };
@@ -38,7 +39,8 @@ function detailOf(candidate: RecordingCandidateSummary): string {
 /**
  * 文字起こしの案（#36 段 3b-4）。同じ音声を別のエンジンで起こして**見比べ、採用する案を選ぶ**
  * （旧 NIHO docs の candidateSets の工程 1）。
- * - 「別の案を作る」で案を足し、その案の文字起こしを始める（設定のエンジンで作る。エンジンが増えたら選べるようにする）。
+ * - 「別の案を作る」で案を足し、その案の文字起こしを始める。使えるエンジンが 2 つ以上なら、どのエンジンで作るかを選べる
+ *   （「Deepgram で案を作る」「Gemini で案を作る」）。1 つだけなら「別の案を作る」。
  * - 「見る」でその案の本文を読み、上の文字起こし（採用中の案）と見比べる。
  * - 「採用する」で正本に写す。それまでの本文（画面で直した分も）は、採用中だった案に残る。
  * - 要らなくなった案は「消す」（1 回確かめてから）。採用中の案と、作っている途中の案は消せない。
@@ -47,12 +49,15 @@ function detailOf(candidate: RecordingCandidateSummary): string {
 export function RecordingCandidates({
   pageId,
   candidates,
+  engines,
   onSnapshot,
   onChanged,
   disabled,
 }: {
   pageId: string;
   candidates: readonly RecordingCandidateSummary[];
+  /** いま使えるエンジン（2 つ以上あれば、どのエンジンで作るか選べる）。 */
+  engines?: readonly string[];
   /** 採用のあとの最新の録音（正本が入れ替わる）。 */
   onSnapshot: (snapshot: RecordingSnapshot) => void;
   /** 案が増えた・実行を積んだ（録音を読み直す）。 */
@@ -78,9 +83,9 @@ export function RecordingCandidates({
     }
   };
 
-  const create = () =>
+  const create = (engine?: string) =>
     guard("candidate", async () => {
-      const added = await addCandidate(pageId);
+      const added = await addCandidate(pageId, engine);
       onChanged();
       if (added.started) return { kind: "info", text: `${added.candidate.name} の案を作っています` };
       // 案はできたが、実行を積めなかった（音声が途中・期限切れ・ほかの実行が走っている）
@@ -120,9 +125,24 @@ export function RecordingCandidates({
   return (
     <section aria-label="文字起こしの案" data-recording-candidates={candidates.length}>
       <div style={ROW_STYLE}>
-        <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-disabled={locked || undefined} onClick={() => void create()}>
-          別の案を作る
-        </button>
+        {/* エンジンが 2 つ以上使えるときは、どのエンジンで作るかを選ばせる（旧 NIHO docs の「別のエンジンの案」） */}
+        {(engines ?? []).length > 1 ? (
+          (engines ?? []).map((engine) => (
+            <button
+              key={engine}
+              type="button"
+              className="es-btn es-btn--outline es-btn--sm"
+              aria-disabled={locked || undefined}
+              onClick={() => void create(engine)}
+            >
+              {candidateEngineLabel(engine)} で案を作る
+            </button>
+          ))
+        ) : (
+          <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-disabled={locked || undefined} onClick={() => void create()}>
+            別の案を作る
+          </button>
+        )}
         <span className="es-note">同じ音声をもう一度文字起こしして、見比べて選べます</span>
       </div>
       {candidates.length > 0 && (

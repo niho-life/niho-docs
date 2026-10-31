@@ -38,6 +38,7 @@ import { publishConfig } from "../publish/config";
 import { pgDraftFingerprints, pgPublishStore } from "../publish/pg-store";
 import { assetUrlsOf, faceDeclarations, roleReaderOf, sessionAuthors, wirePublishPorts } from "../publish/ports";
 import { getStorage } from "../storage/runtime";
+import { availableTranscriptionEngines } from "../transcription/config";
 import { getTranscriptionRunner } from "../transcription/runtime";
 import type { AudioApiDeps } from "./audio-api";
 import type { AudioStreamApiDeps } from "./audio-stream-api";
@@ -106,6 +107,8 @@ export const recordingDeps: RecordingsApiDeps = {
       listCandidates: (owner, pageId) => listRecordingCandidates(pool, owner, pageId),
     };
   },
+  // いま使えるエンジン（鍵が入っているもの）。画面は 2 つ以上あるときだけ案のエンジンを選べる
+  engines: () => availableTranscriptionEngines(process.env),
 };
 
 /** 文字起こしの案（#36 段 3b-4）の実行時の依存（DB・実行の呼び出し口は要求のたびに遅延して決める）。 */
