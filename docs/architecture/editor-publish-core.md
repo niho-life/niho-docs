@@ -110,6 +110,7 @@ Condition = { id, message, fix, kind, …kind ごとの引数 }
 
 ## まだ無いもの
 
-- HTTP の経路と画面：公開のシート（#39）、公開 API v1（#40）、鍵を表示するコピー／再発行の画面（#41）。
+- HTTP の経路と画面：公開 API v1（#40）、鍵を表示するコピー／再発行の画面（#41）。公開のシートは `apps/editor-web`（#39。経路は `src/server/publish-api.ts`、画面は `src/components/PagePublish.tsx`）。
+- シートに出していないもの：公開の知らせ（`notices`）、本人のサイトが 2 つ以上のときの選び方、カテゴリ・関連する体験の欄。
 - 宣言の取得（`.well-known` の配備）、NIHO からの役割の読み取り（#42 と niho-app 側）。ポートまでを定義する。
 - WordPress・Ghost への送信。
