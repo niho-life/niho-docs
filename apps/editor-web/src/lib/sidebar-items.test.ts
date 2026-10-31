@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
 import type { SearchHit } from "./search-client";
-import { arrangeSidebarItems, formatWhen, searchRows } from "./sidebar-items";
+import { arrangeSidebarItems, formatWhen, searchRows, withoutPageTree } from "./sidebar-items";
 
 /** 2026-10-31 12:00（東京）＝ 03:00 UTC。 */
 const NOW = Date.parse("2026-10-31T03:00:00.000Z");
@@ -128,5 +128,20 @@ describe("arrangeSidebarItems: 2 行目の公開先（#39）", () => {
   it("公開中は録音・作成中より先に出す（モック v6 の順）", () => {
     const rec = { ...page("rec", { kind: "rec", title: "鎌倉の録音" }), publication: live };
     expect(arrangeSidebarItems([rec], { now: NOW })[0]!.sub).toEqual({ text: "NIHO Experience", dest: "exp" });
+  });
+});
+
+describe("withoutPageTree", () => {
+  it("drops the deleted page and every loaded descendant (in any order), and keeps the rest in order", () => {
+    // 更新順なので、孫が親より先に来ることもある
+    const pages = [page("g", { parent: "c" }), page("a"), page("c", { parent: "p" }), page("p"), page("o", { parent: "a" }), page("c2", { parent: "p" })];
+    expect(withoutPageTree(pages, "p").map((item) => item.id)).toEqual(["a", "o"]);
+    expect(withoutPageTree(pages, "c").map((item) => item.id)).toEqual(["a", "p", "o", "c2"]);
+    expect(withoutPageTree(pages, "missing")).toEqual(pages);
+  });
+
+  it("stops on a parent cycle", () => {
+    const pages = [page("x", { parent: "y" }), page("y", { parent: "x" }), page("z")];
+    expect(withoutPageTree(pages, "x").map((item) => item.id)).toEqual(["z"]);
   });
 });

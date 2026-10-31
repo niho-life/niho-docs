@@ -81,7 +81,17 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **`/s/{token}`**（`src/app/s/[token]/page.tsx`。`app/(editor)` の外なので、枠・一覧を出さず、未ログインでもログインへ移さない。CSP の nonce は他の画面と同じく `src/proxy.ts` が付ける）: 認証を使わず、題名と本文（最新の保存版）だけを `src/share/render-blocks.tsx` で React の要素にする（HTML を注入しない。リンクは https・http・mailto だけ、`rel="noopener noreferrer nofollow ugc"`）。形の違う・未共有・止めた・作り直す前の token とゴミ箱のページは同じ 404、DB を使えないときは汎用の 500。header は `next.config.ts` の `/s/:token*` の規則で `Cache-Control: private, no-store`・`Referrer-Policy: no-referrer`（全体の規則の後に置き、値は 1 つ）。`next dev` はページの Cache-Control を開発用の値に置き換えるので、本番の値は `test:startup` で確かめる。
 - **表**: migration `0004_page_shares.sql`（共有中のページに 1 行。止める＝行を消す。token は 256 bit の乱数の base64url を平文で持つ）。コードは `packages/editor-store/src/shares.ts`・`duplicate.ts`。
 - **書き出し**（`src/export/markdown.ts`）: niho-experience の Markdown サブセット（`apps/web/src/lib/guide-markdown.ts`）として読める形だけを出す。見出しは `##`/`###`、リストは 1 行 1 項目に平坦化、引用・囲みは `:::note`、リンクは https だけ、画像・区切り線は出さない。本文の記号は `\` で逃がす（日本語は変えない）。parser の受理規則を写した oracle が `src/export/markdown.test.ts` にある。
-- **画面から呼ぶ関数**（組み込みは #32）: `src/lib/page-actions-client.ts`（`getPageShare`・`startPageShare`・`rotatePageShare`・`stopPageShare`・`duplicatePageRequest`・`pageExportUrl`）。
+- **画面から呼ぶ関数**: `src/lib/page-actions-client.ts`（`getPageShare`・`startPageShare`・`rotatePageShare`・`stopPageShare`・`duplicatePageRequest`（新しい id・題名・種類を返す）・`pageExportUrl`・`deletePageRequest`）。共有の 4 つは次の段で画面に組み込む。
+- **ヘッダーの状態と「…」（#34 第 1 段）**:
+  - **状態の丸**（docs-ui の `StatusDot`）: 公開の状態（公開中・更新あり・限定公開・公開をやめた。公開のシートが読んだもの。#39）＋保存の状態（「公開中 · … · 保存済み」「自分だけ · 保存中」「· オフライン・この端末に保持」など。言葉は `src/lib/save-status.ts` の `headerStatus`）。公開のシートがまだ読めていない間は「自分だけ」。ページの外（`/`・設定・録音から）では出さない。
+  - **読み上げ**: 保存の状態を読み上げるのはヘッダーの丸（`aria-live="polite"`）だけ。本文の上の「保存済み」などの表示は見える文字として残し、live region にしない（二重に読み上げない）。
+  - **「…」**: 書き出し（.md）・複製・削除の 3 つ（docs-ui の `shellMoreItems` から選ぶ）。リンクで共有と履歴は次の段、Google ドキュメントへの書き出しは NIHO の API 待ち。まだ作っていないページ（`/p/new`）と、端末の下書きを読み終える前は出さない。開閉と項目の移動は `ShellMenu`（↑↓・Home・End・Esc）で、選んだらフォーカスは「…」へ戻る。
+  - **どの操作も先に保存する**: まだ届いていない変更を今送り、全て届くまで待つ（`Autosave.settle`）。届かなければ（オフライン・ログイン切れ・サーバーの失敗・競合で止めている）操作を止め、「〜の前に変更を保存できませんでした」と出す（編集は捨てない）。同じページの操作は 1 つずつ。
+  - **複製**: `POST …/duplicate` → 一覧の上に足し、`/p/{新しい id}` へ。失敗は「…」の左に短く（`role="alert"`。「複製できませんでした」）。
+  - **書き出し**: 同じ origin の `<a href="/api/pages/{id}/export.md" download>` を押す（本文は fetch で読まない。ファイル名はサーバーの Content-Disposition）。
+  - **削除**: 確認のダイアログ（docs-ui の `ShellSheet` を `EditorShell` の overlay に。外は inert、Esc・「やめる」で閉じ、フォーカスは「…」へ戻る）→ `DELETE /api/pages/{id}`（204）→ 一覧からそのページと子孫（読み込み済みの分。サーバーは子孫ごとゴミ箱へ入れる）を外し、`/` へ（`editor_last_page` が消したページを指していても、`/` はサーバーで確かめて新しいページへ移す）。409 `published` は「公開中のページは、先に公開をやめてください」、他の失敗は「削除できませんでした」をダイアログの中に出し、閉じない（一覧もページもそのまま）。送っている間は 2 回目を送らず、閉じない（応答は 30 秒で打ち切る）。
+  - **枠とページの橋渡し**: ヘッダーは枠（`EditorFrame`）、保存の状態とエディタはページの中（`PageEditor`）にあるので、`PageEditor` が `useEditorFrame().attachPage({ id, status, flush })` で自分を登録し（保存の状態が変わるたびに登録し直す）、画面を離れたら外す。操作は「…」を開いたページの id に対して行い、終わったときに別のページへ移っていたら（id と flush で見分ける）、その画面には何も出さず移動もしない（複製・削除が済んだことは一覧には反映する）。一覧からは `pageRemoved(id)` で外す。
+  - **まだ**: リンクで共有・履歴（次の段）、情報パネル、写真の zip と Google ドキュメントへの書き出し。検索の結果からは、この画面で削除したページと一覧に読み込んであった子孫だけを外す（読み込んでいない子孫は、次に探すまで結果に残る）。
 
 ## 手順（#37）
 
