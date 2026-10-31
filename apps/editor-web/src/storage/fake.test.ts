@@ -54,6 +54,24 @@ describe("fake object storage", () => {
     await expect(storage.startUpload({ objectPath: PATH, contentType: "audio/mp4", sizeBytes: -1, origin: null })).rejects.toMatchObject({ code: "rejected" });
   });
 
+  it("reads the stored bytes back for the relay, and answers null for what is not there", async () => {
+    const storage = createFakeStorage();
+    const image = "image/6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+    expect(await storage.readObject(image)).toBeNull();
+    const ticket = await storage.startUpload({ objectPath: image, contentType: "image/png", sizeBytes: 3, origin: null });
+    expect(storage.putFakeObject(tokenOf(ticket.url), new Uint8Array([1, 2, 3]), "image/png")).toBe("ok");
+    const read = await storage.readObject(image);
+    expect(read).toMatchObject({ contentType: "image/png", sizeBytes: 3 });
+    expect(new Uint8Array(await new Response(read!.body).arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+    // 同じ object は何度でも読める（流れは呼ぶたびに作る）
+    const second = await storage.readObject(image);
+    expect(new Uint8Array(await new Response(second!.body).arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+    // 形の違う場所は読まない
+    for (const objectPath of ["", "image/../x", "IMAGE/x"]) {
+      await expect(storage.readObject(objectPath), objectPath).rejects.toBeInstanceOf(StorageError);
+    }
+  });
+
   it("keeps separate state per instance unless the state is shared", async () => {
     const a = createFakeStorage();
     const b = createFakeStorage();

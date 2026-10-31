@@ -257,6 +257,7 @@ describe("POST /api/recordings/audio/start", () => {
           throw new StorageError(code);
         },
         stat: async () => null,
+        readObject: async () => null,
       };
       const response = await start(START, deps("user-a", store, storage));
       expect(response.status).toBe(502);
@@ -389,6 +390,7 @@ describe("POST /api/pages/{id}/recording/audio/complete", () => {
       stat: async () => {
         throw new StorageError("unavailable");
       },
+      readObject: async () => null,
     };
     const failed = await complete(id, deps("user-a", store, failing));
     expect(failed.status).toBe(502);

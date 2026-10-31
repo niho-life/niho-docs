@@ -100,6 +100,38 @@ describe("SharedBlocks", () => {
     expect(html).not.toMatch(/img|example\.com|写真/);
   });
 
+  it("renders an image of the shared page through the token's relay, with alt and the credit as a caption", () => {
+    const assetId = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+    const token = "s".repeat(43);
+    const html = renderToStaticMarkup(
+      <SharedBlocks
+        blocks={[{ type: "image", attrs: { assetId, alt: "合成の写真", credit: "合成の提供元", consent: true } }]}
+        assetSrc={(id) => `/s/${token}/a/${id}`}
+      />,
+    );
+    expect(html).toBe(
+      `<figure><img src="/s/${token}/a/${assetId}" alt="合成の写真" loading="lazy" decoding="async" data-doc-asset=""/><figcaption>合成の提供元</figcaption></figure>`,
+    );
+  });
+
+  it("never renders an image that cannot be read: no relay, no asset id, or an outside src", () => {
+    const token = "s".repeat(43);
+    const assetSrc = (id: string) => `/s/${token}/a/${id}`;
+    const blocks = [
+      { type: "image", attrs: { assetId: "not-a-uuid" } },
+      { type: "image", attrs: { src: "https://evil.example/pixel.gif", alt: "外" } },
+      { type: "image" },
+      { type: "image", attrs: { assetId: "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11" } },
+    ];
+    // 中継を渡さなければ 1 枚も描かない（読めない img を置かない）
+    expect(render(blocks)).toBe("");
+    const html = renderToStaticMarkup(<SharedBlocks blocks={blocks} assetSrc={assetSrc} />);
+    expect(html).toBe(`<figure><img src="/s/${token}/a/6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11" alt="" loading="lazy" decoding="async" data-doc-asset=""/></figure>`);
+    expect(html).not.toContain("evil.example");
+    // 止めた共有（null を返す中継）では描かない
+    expect(renderToStaticMarkup(<SharedBlocks blocks={blocks} assetSrc={() => null} />)).toBe("");
+  });
+
   it("stops at depth 64 instead of recursing without end", () => {
     let node: Node = paragraph(text("底"));
     for (let depth = 0; depth < 200; depth++) node = { type: "blockquote", content: [node] };

@@ -200,6 +200,45 @@ describe("GCS storage: checking an object", () => {
   });
 });
 
+describe("GCS storage: reading an object (the image relay)", () => {
+  const IMAGE = "image/6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+  const media = (body: string, headers: Record<string, string>) => new Response(body, { status: 200, headers });
+
+  it("GETs the media with the same bearer token and returns the stream, type and length", async () => {
+    const { fetch, calls } = fakeFetch(media("abc", { "content-type": "image/png", "content-length": "3" }));
+    const storage = createGcsStorage({ bucket: BUCKET, fetch, accessToken: async () => TOKEN });
+    const read = await storage.readObject(IMAGE);
+    expect(read).toMatchObject({ contentType: "image/png", sizeBytes: 3 });
+    expect(await new Response(read!.body).text()).toBe("abc");
+    const call = calls[0]!;
+    const url = new URL(call.url);
+    expect(url.origin).toBe("https://storage.googleapis.com");
+    expect(call.url.startsWith(`https://storage.googleapis.com/storage/v1/b/${BUCKET}/o/image%2F6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11?`)).toBe(true);
+    expect(url.searchParams.get("alt")).toBe("media");
+    expect(call.init.method).toBe("GET");
+    expect(call.init.redirect).toBe("error");
+    expect(headersOf(call)).toEqual({ authorization: `Bearer ${TOKEN}` });
+  });
+
+  it("answers null for 404, maps the other failures, and refuses a response without a usable length", async () => {
+    const missing = createGcsStorage({ bucket: BUCKET, fetch: fakeFetch(new Response(null, { status: 404 })).fetch, accessToken: async () => TOKEN });
+    expect(await missing.readObject(IMAGE)).toBeNull();
+    const cases: Array<[Response | Error, "unavailable" | "rejected"]> = [
+      [new Error("socket hang up"), "unavailable"],
+      [new Response(null, { status: 401 }), "unavailable"],
+      [new Response(null, { status: 500 }), "unavailable"],
+      [new Response(null, { status: 400 }), "rejected"],
+      [media("abc", { "content-type": "image/png", "content-length": "x" }), "unavailable"],
+    ];
+    for (const [response, code] of cases) {
+      const storage = createGcsStorage({ bucket: BUCKET, fetch: fakeFetch(response).fetch, accessToken: async () => TOKEN });
+      expect((await failureOf(storage.readObject(IMAGE))).code).toBe(code);
+    }
+    const bad = createGcsStorage({ bucket: BUCKET, fetch: fakeFetch(media("x", {})).fetch, accessToken: async () => TOKEN });
+    await expect(bad.readObject("image/../x")).rejects.toMatchObject({ code: "rejected" });
+  });
+});
+
 describe("metadata server token", () => {
   it("keeps the token in memory until shortly before it expires, and fetches it once for concurrent callers", async () => {
     let now = NOW;

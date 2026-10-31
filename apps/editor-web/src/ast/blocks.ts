@@ -1,4 +1,5 @@
 import type { Block } from "@niho/editor-store";
+import { IMAGE_ALT_MAX_CHARS, IMAGE_CREDIT_MAX_CHARS } from "@/image/image-limits";
 
 /**
  * ページの本文（限定 AST）。設計 §3・Issue #33。
@@ -9,7 +10,8 @@ import type { Block } from "@niho/editor-store";
  *
  * - ブロック: 段落・見出し（2・3）・箇条書き・番号付き・引用・囲み・区切り線・画像・録音
  * - 行の中: 文字（太字・斜体・リンク）・改行
- * - 画像・録音は資産の id だけを持つ（URL・HTML・外部の src は持たない）。実体の扱いは別の PR。
+ * - 画像・録音は資産の id だけを持つ（URL・HTML・外部の src は持たない）。画像の実体は private bucket で、描くときに
+ *   サーバーが中継する（src/image/image-paths.ts・src/server/images-api.ts）。録音の実体の扱いは #36。
  */
 
 /** ブロックの入れ子の深さの上限（引用の中の引用…）。 */
@@ -19,9 +21,9 @@ export const MAX_LINK_CHARS = 2048;
 /** リンクに使える scheme（相対・data・javascript は保存しない）。 */
 export const LINK_PROTOCOLS: readonly string[] = ["https:", "http:", "mailto:"];
 
-/** 画像の alt・クレジットの上限（DB の assets と同じ）。 */
-const MAX_ALT_CHARS = 1000;
-const MAX_CREDIT_CHARS = 500;
+/** 画像の alt・クレジットの上限（DB の assets・画像の上限（src/image/image-limits.ts）と同じ 1 か所から）。 */
+const MAX_ALT_CHARS = IMAGE_ALT_MAX_CHARS;
+const MAX_CREDIT_CHARS = IMAGE_CREDIT_MAX_CHARS;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

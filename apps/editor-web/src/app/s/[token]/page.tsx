@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { isShareToken, readSharedPage, type SharedPage } from "@niho/editor-store";
+import { sharedImagePath } from "@/image/image-paths";
 import { getPool } from "@/server/db";
 import { SharedBlocks } from "@/share/render-blocks";
 
@@ -37,6 +38,7 @@ async function loadSharedPage(token: string): Promise<SharedPage | null> {
 
 /**
  * リンクで共有したページ（読み取り専用・ログイン不要。#34）。認証は使わない。
+ * 本文の画像（#33）は `/s/{token}/a/{assetId}`（src/app/s/[token]/a/[assetId]/route.ts）が中継する。
  * 形の違う token・共有していない・止めた・作り直す前の token・ゴミ箱のページはどれも同じ 404。
  * 返すのは最新の保存版の題名と本文だけ（編集中の下書きはサーバーに無い）。
  */
@@ -47,7 +49,8 @@ export default async function SharedPageView(props: { params: Promise<{ token: s
   return (
     <main lang={page.lang}>
       <h1>{page.title || (page.lang === "en" ? "Untitled" : "無題")}</h1>
-      <SharedBlocks blocks={page.blocks} />
+      {/* 画像は同じ token の中継だけを指す（署名付き URL も `/api/assets` も共有ページには出さない） */}
+      <SharedBlocks blocks={page.blocks} assetSrc={(assetId) => sharedImagePath(token, assetId)} />
     </main>
   );
 }
