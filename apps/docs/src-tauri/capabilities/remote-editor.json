@@ -5,5 +5,5 @@
   "windows": ["main"],
   "platforms": ["macOS"],
   "remote": { "urls": ["https://editor.niho.life"] },
-  "permissions": ["allow-editor-shell", "core:event:allow-listen", "core:event:allow-unlisten"]
+  "permissions": ["allow-editor-shell"]
 }

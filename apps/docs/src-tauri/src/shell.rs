@@ -7,6 +7,7 @@
 //! remote origin から呼べるコマンドは `capabilities/remote-editor.json`（本番は editor.niho.life だけ）で決まる。
 //! 開発の `localhost` は `capabilities/remote-editor-dev.json` に分け、`tauri.dev.conf.json` を付けたときだけ入る
 //! （配布物の `tauri.conf.json` は `default` と `remote-editor` だけを数える。acl_tests.rs が固定する）。
+//! remote には core の event の購読も許さない（アプリ全体の event を聞けてしまう）。進みは command の Channel で返す。
 
 use serde::Serialize;
 
@@ -81,7 +82,11 @@ pub fn capabilities(dev: bool) -> ShellCapabilities {
     dev,
     // 第 1 段では「ある」ことだけ返す。実際に使える状態か（マイクの許可・音声モデル・CLI のログイン）は、
     // それぞれの command が呼ばれたときに今までどおり確かめる
-    features: ShellFeatures { recording: true, local_transcription: true, cli_ai: true },
+    features: ShellFeatures {
+      recording: true,
+      local_transcription: true,
+      cli_ai: true,
+    },
   }
 }
 
@@ -99,7 +104,10 @@ mod tests {
   fn remote_is_the_production_editor_only() {
     assert_eq!(shell_mode(Some("remote"), false), ShellMode::Remote);
     assert_eq!(shell_mode(Some("remote"), true), ShellMode::Remote);
-    assert_eq!(remote_url(ShellMode::Remote).unwrap().as_str(), "https://editor.niho.life/");
+    assert_eq!(
+      remote_url(ShellMode::Remote).unwrap().as_str(),
+      "https://editor.niho.life/"
+    );
   }
 
   #[test]
@@ -112,7 +120,13 @@ mod tests {
 
   #[test]
   fn anything_else_keeps_the_bundled_screen() {
-    for value in [None, Some(""), Some("local"), Some("https://example.com"), Some("REMOTE")] {
+    for value in [
+      None,
+      Some(""),
+      Some("local"),
+      Some("https://example.com"),
+      Some("REMOTE"),
+    ] {
       assert_eq!(shell_mode(value, true), ShellMode::Local, "{value:?}");
     }
     assert_eq!(remote_url(ShellMode::Local), None);
@@ -122,7 +136,10 @@ mod tests {
   fn capabilities_carry_no_paths_or_secrets() {
     let json = serde_json::to_value(capabilities(false)).unwrap();
     assert_eq!(json["dev"], serde_json::json!(false));
-    assert_eq!(json["features"], serde_json::json!({ "recording": true, "localTranscription": true, "cliAi": true }));
+    assert_eq!(
+      json["features"],
+      serde_json::json!({ "recording": true, "localTranscription": true, "cliAi": true })
+    );
     assert_eq!(json["version"], serde_json::json!(env!("CARGO_PKG_VERSION")));
     assert_eq!(json.as_object().unwrap().len(), 3);
   }

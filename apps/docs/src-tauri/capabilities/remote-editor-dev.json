@@ -5,5 +5,5 @@
   "windows": ["main"],
   "platforms": ["macOS"],
   "remote": { "urls": ["http://localhost:3000"] },
-  "permissions": ["allow-editor-shell", "core:event:allow-listen", "core:event:allow-unlisten"]
+  "permissions": ["allow-editor-shell"]
 }

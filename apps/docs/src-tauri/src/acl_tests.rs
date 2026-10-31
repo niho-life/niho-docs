@@ -98,19 +98,30 @@ fn reachable_commands(capability: &serde_json::Value) -> BTreeSet<String> {
 fn the_remote_editor_capability_reaches_only_the_shell_commands() {
   let remote = capability(include_str!("../capabilities/remote-editor.json"));
   assert_eq!(remote["windows"], serde_json::json!(["main"]));
-  assert_eq!(remote["remote"]["urls"], serde_json::json!(["https://editor.niho.life"]));
-  let granted = granted(&remote);
-  for identifier in &granted {
-    assert!(
-      identifier == "allow-editor-shell" || identifier.starts_with("core:event:"),
-      "remote の capability に端末の力以外の permission がある: {identifier}"
-    );
-  }
-  assert!(granted.contains("allow-editor-shell"));
+  assert_eq!(
+    remote["remote"]["urls"],
+    serde_json::json!(["https://editor.niho.life"])
+  );
+  // 端末の力の permission だけ。core のイベント購読（アプリ全体の event を remote が聞ける）も許さない
+  assert_eq!(
+    granted(&remote),
+    BTreeSet::from(["allow-editor-shell".to_string()]),
+    "remote の capability に端末の力以外の permission がある"
+  );
   let reachable = reachable_commands(&remote);
   assert_eq!(reachable, BTreeSet::from(["shell_capabilities".to_string()]));
   // 保管庫・会話・鍵・本人実行・保存先のコマンドは、1 つも remote から届かない
-  for forbidden in ["load_pages", "write_page", "read_page", "run_turn", "run_chat_turn", "save_api_key", "personal_open", "cloud_state", "load_settings"] {
+  for forbidden in [
+    "load_pages",
+    "write_page",
+    "read_page",
+    "run_turn",
+    "run_chat_turn",
+    "save_api_key",
+    "personal_open",
+    "cloud_state",
+    "load_settings",
+  ] {
     assert!(!reachable.contains(forbidden), "{forbidden} が remote から届く");
   }
 }
@@ -120,10 +131,20 @@ fn the_remote_editor_capability_reaches_only_the_shell_commands() {
 fn the_dev_editor_capability_is_not_shipped() {
   let dev = capability(include_str!("../capabilities/remote-editor-dev.json"));
   assert_eq!(dev["remote"]["urls"], serde_json::json!(["http://localhost:3000"]));
-  assert_eq!(reachable_commands(&dev), BTreeSet::from(["shell_capabilities".to_string()]));
+  assert_eq!(granted(&dev), BTreeSet::from(["allow-editor-shell".to_string()]));
+  assert_eq!(
+    reachable_commands(&dev),
+    BTreeSet::from(["shell_capabilities".to_string()])
+  );
   let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
-  assert_eq!(conf["app"]["security"]["capabilities"], serde_json::json!(["default", "remote-editor"]));
+  assert_eq!(
+    conf["app"]["security"]["capabilities"],
+    serde_json::json!(["default", "remote-editor"])
+  );
   let dev_conf: serde_json::Value =
     serde_json::from_str(include_str!("../tauri.dev.conf.json")).expect("tauri.dev.conf.json");
-  assert_eq!(dev_conf["app"]["security"]["capabilities"], serde_json::json!(["default", "remote-editor", "remote-editor-dev"]));
+  assert_eq!(
+    dev_conf["app"]["security"]["capabilities"],
+    serde_json::json!(["default", "remote-editor", "remote-editor-dev"])
+  );
 }

@@ -41,9 +41,9 @@ mod resident;
 mod sample_url;
 mod samples;
 mod secrets;
+mod shell;
 #[cfg(target_os = "macos")]
 mod single_instance;
-mod shell;
 mod speech;
 mod store;
 mod updater;
