@@ -35,6 +35,8 @@ const VARIANTS: { id: string; widths: readonly number[] }[] = [
   { id: "page:rec?speakers=3&edit=1&rail=0", widths: [1440, 390, 375, 320] },
   { id: "page:rec?speakers=6&rail=0", widths: [1440, 390, 375, 320] },
   { id: "page:rec?time=0&play=0&rail=0", widths: [1440, 390, 375, 320] },
+  // 再生している最中（#36 段 3b-2。一時停止のボタン・再生位置のスライダー・時刻のボタン）
+  { id: "page:rec?playing=1&rail=0", widths: [1440, 390, 375, 320] },
   // editor-web の「録音から」（#36 段 3b-1。取り込める形式の長い一言）
   { id: "newrec?web=1", widths: [1440, 390, 375, 320] },
   // editor-web の情報パネル（#34 第 3 段。自分だけ・肩書なし・Markdown だけ・ページを削除・言語の一言）

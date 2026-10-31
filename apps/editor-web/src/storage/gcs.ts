@@ -1,4 +1,15 @@
-import { StorageError, isObjectPath, type ObjectStorage, type ReadObject, type StartUploadInput, type StoredObject, type UploadTicket } from "./types";
+import {
+  StorageError,
+  isByteRange,
+  isObjectPath,
+  type ByteRange,
+  type ObjectStorage,
+  type ReadObject,
+  type ReadObjectOptions,
+  type StartUploadInput,
+  type StoredObject,
+  type UploadTicket,
+} from "./types";
 
 /**
  * Google Cloud Storage の保存先（`EDITOR_STORAGE=gcs`）。依存を足さず、fetch と Cloud Run のメタデータサーバーの token だけで呼ぶ。
@@ -20,6 +31,9 @@ import { StorageError, isObjectPath, type ObjectStorage, type ReadObject, type S
  *   object の中身で、`Content-Type` が種類、大きさは `Content-Length`（無ければ `x-goog-stored-content-length`）。`Accept-Encoding: identity`
  *   （中身をそのまま・`Content-Length` 付きで受ける）。時間切れは header が届くまでだけで、本文の読み取りには時間切れをかけない
  *   （長い音声をエンジンへ流し終えるまでの時間は、呼び出し側の時間切れが決める）。署名付き URL は作らない（実行 ID に署名の権限が無い前提）。
+ * - 範囲の読み取り（録音の再生 #36 段 3b-2）: 同じ GET に `Range: bytes={start}-{end}`。206 の `Content-Range: bytes a-b/total` から
+ *   返した範囲と全体の大きさを読む（求めた始まりと、object の終わりで切った終わりに一致しなければ信じない）。200 は範囲を無視した
+ *   全体として扱う（https://cloud.google.com/storage/docs/json_api/v1/objects/get の Range）。416 は range_not_satisfiable。
  * - token: メタデータサーバー `GET {METADATA_TOKEN_URL}`（header `Metadata-Flavor: Google`）の `access_token`・`expires_in`（秒）。
  *
  * 失敗の写し方: 届かない・時間切れ（30 秒）・401・403・408・429・5xx は unavailable、それ以外の 4xx は rejected、確認の 404 は null。
@@ -71,6 +85,22 @@ async function readJson(response: Response): Promise<unknown> {
 function failure(status: number): StorageError {
   if (status === 401 || status === 403 || status === 408 || status === 429 || status >= 500) return new StorageError("unavailable");
   return new StorageError("rejected");
+}
+
+/** 10 進の大きさ（`Content-Length` など。前後の空白は許す）。形が違えば NaN。 */
+function lengthOf(value: string | null): number {
+  return value !== null && /^\d{1,16}$/.test(value.trim()) ? Number(value.trim()) : Number.NaN;
+}
+
+const CONTENT_RANGE = /^bytes (\d{1,16})-(\d{1,16})\/(\d{1,16})$/i;
+
+/** 206 の `Content-Range: bytes a-b/total`（a ≤ b < total）。形が違えば null（`*` の全体・不明の大きさも null）。 */
+function parseContentRange(value: string | null): (ByteRange & { total: number }) | null {
+  const match = value === null ? null : CONTENT_RANGE.exec(value.trim());
+  if (!match) return null;
+  const [start, end, total] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  if (![start, end, total].every(Number.isSafeInteger) || start > end || end >= total) return null;
+  return { start, end, total };
 }
 
 /**
@@ -202,10 +232,13 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
       if (!Number.isSafeInteger(sizeBytes)) throw new StorageError("unavailable");
       return { sizeBytes, contentType: typeof contentType === "string" ? contentType : null };
     },
-    async readObject(objectPath: string): Promise<ReadObject | null> {
+    async readObject(objectPath: string, options: ReadObjectOptions = {}): Promise<ReadObject | null> {
       if (!isObjectPath(objectPath)) throw new StorageError("rejected");
+      const { range } = options;
+      if (range !== undefined && !isByteRange(range)) throw new StorageError("rejected");
       const url = `${GCS_JSON_BASE}${bucket}/o/${encodeURIComponent(objectPath)}?alt=media`;
-      const headers = { Authorization: await authorization(), "Accept-Encoding": "identity" };
+      const headers: Record<string, string> = { Authorization: await authorization(), "Accept-Encoding": "identity" };
+      if (range !== undefined) headers.Range = `bytes=${range.start}-${range.end}`;
       // 時間切れは header が届くまで（本文を読む間は切らない。届いたら timer を止める）
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -222,17 +255,48 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
         await discard(response);
         return null;
       }
+      if (range !== undefined && response.status === 416) {
+        await discard(response);
+        throw new StorageError("range_not_satisfiable");
+      }
       if (!response.ok) {
         await discard(response);
         throw failure(response.status);
       }
-      const length = response.headers.get("content-length") ?? response.headers.get("x-goog-stored-content-length");
-      const sizeBytes = length !== null && /^\d{1,16}$/.test(length.trim()) ? Number(length.trim()) : Number.NaN;
+      const contentType = response.headers.get("content-type");
+      if (range !== undefined && response.status === 206) {
+        // 求めた始まりから、求めた終わり（object の終わりで切る）まで。それ以外の範囲・大きさの食い違いは信じない
+        const served = parseContentRange(response.headers.get("content-range"));
+        const length = response.headers.get("content-length");
+        const sizeBytes = served ? served.end - served.start + 1 : Number.NaN;
+        if (
+          !served ||
+          !response.body ||
+          served.start !== range.start ||
+          served.end !== Math.min(range.end, served.total - 1) ||
+          (length !== null && lengthOf(length) !== sizeBytes)
+        ) {
+          await discard(response);
+          throw new StorageError("unavailable");
+        }
+        return { body: response.body, contentType, sizeBytes, range: { start: served.start, end: served.end }, totalBytes: served.total };
+      }
+      if (range !== undefined && response.status !== 200) {
+        await discard(response);
+        throw new StorageError("unavailable");
+      }
+      const sizeBytes = lengthOf(response.headers.get("content-length") ?? response.headers.get("x-goog-stored-content-length"));
       if (!response.body || !Number.isSafeInteger(sizeBytes)) {
         await discard(response);
         throw new StorageError("unavailable");
       }
-      return { body: response.body, contentType: response.headers.get("content-type"), sizeBytes };
+      if (range === undefined) return { body: response.body, contentType, sizeBytes };
+      // 範囲を求めたのに 200: 保存先が範囲を無視して全体を返した。全体の範囲として返す（空の object には範囲が無い）
+      if (sizeBytes === 0) {
+        await discard(response);
+        throw new StorageError("range_not_satisfiable");
+      }
+      return { body: response.body, contentType, sizeBytes, range: { start: 0, end: sizeBytes - 1 }, totalBytes: sizeBytes };
     },
   };
 }

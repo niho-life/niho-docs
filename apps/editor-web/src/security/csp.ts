@@ -8,7 +8,8 @@
  *   絞るには docs-ui 側で TipTap の `injectNonce` を渡し、`style=""` を class に置き換える必要がある。
  * - 外部 origin を許さない（`default-src 'self'`）。例外は `connect-src` の GCS（`https://storage.googleapis.com`）だけで、
  *   録音の音声をブラウザから保存先の resumable upload のセッション URI へ直接 PUT するため（#36 段 3b-1）。
- *   音声を GCS から読む段階（#36 段 3b-2）で、`media-src` をどうするかを決める（今は変えない）。
+ *   音声の再生（#36 段 3b-2）は、同じ origin の route（`/api/pages/{id}/recording/audio`）がサーバーで保存先から読み出して流す
+ *   （署名付き URL を使わない）ので、`media-src` は `'self' blob:` のまま変えない。
  * - 開発（`next dev`）だけ、React の debug 用の `unsafe-eval` と HMR の WebSocket を許す。本番にはどちらも入れない。
  */
 export type CspOptions = { nonce: string; dev: boolean };

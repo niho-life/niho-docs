@@ -71,6 +71,12 @@ describe("recording view", () => {
     ]);
   });
 
+  it("marks only the paragraph being played as current (#36 段 3b-2)", () => {
+    expect(shellSegments(recording(), {}, "1").map((segment) => segment.current)).toEqual([undefined, true, undefined]);
+    expect(shellSegments(recording(), {}, null).some((segment) => "current" in segment)).toBe(false);
+    expect(shellSegments(recording(), {}, "9").some((segment) => "current" in segment)).toBe(false);
+  });
+
   it("builds the speakers: only those with paragraphs, id is the number, unnamed ones start the input empty", () => {
     expect(
       shellSpeakers([

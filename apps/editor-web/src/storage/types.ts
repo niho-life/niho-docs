@@ -36,11 +36,32 @@ export type StartUploadInput = {
 /** 保存先にある object（無ければ null）。 */
 export type StoredObject = { sizeBytes: number; contentType: string | null };
 
+/** 読み出す範囲（バイト。start も end も含む。0 ≤ start ≤ end の整数）。 */
+export type ByteRange = { start: number; end: number };
+
 /**
  * 保存先から読み出した object（中身は 1 回だけ読める流れ。読み終えるか cancel する。読まずに捨てると保存先との接続が残る）。
- * 画像（#33）の中継と、文字起こし（#36 段 2b。サーバーが音声をエンジンへ流す）が使う。中身はログ・エラー・DB に書かない。
+ * 画像（#33）の中継と、文字起こし（#36 段 2b。サーバーが音声をエンジンへ流す）と、録音の再生（#36 段 3b-2。範囲つき）が使う。
+ * 中身はログ・エラー・DB に書かない。
  */
-export type ReadObject = { body: ReadableStream<Uint8Array>; contentType: string | null; sizeBytes: number };
+export type ReadObject = {
+  body: ReadableStream<Uint8Array>;
+  contentType: string | null;
+  /** body の大きさ（範囲を読んだときは、返した範囲の大きさ）。 */
+  sizeBytes: number;
+  /**
+   * 範囲を求めたときだけ: 返した範囲。終わりは object の終わりで切る。保存先が範囲を無視して全体を返したときは全体の範囲
+   * （求めた範囲と違うことがあるので、呼び出し側が見分ける）。
+   */
+  range?: ByteRange;
+  /** 範囲を求めたときだけ: object 全体の大きさ。 */
+  totalBytes?: number;
+};
+
+export type ReadObjectOptions = {
+  /** 渡すとその範囲だけを読む（始まりが object の大きさ以上なら StorageError の range_not_satisfiable）。 */
+  range?: ByteRange;
+};
 
 export interface ObjectStorage {
   readonly kind: "fake" | "gcs";
@@ -49,19 +70,30 @@ export interface ObjectStorage {
   /** object の大きさと種類。無ければ null。 */
   stat(objectPath: string): Promise<StoredObject | null>;
   /**
-   * object の中身を読む（画像の中継。無ければ null）。
+   * object の中身を読む（画像の中継・音声の再生。無ければ null）。範囲を渡さなければ全体（今までどおり）。
    * 応答の流れをそのまま返すので、呼び出し側は返した body を読み切るか cancel する。
    */
-  readObject(objectPath: string): Promise<ReadObject | null>;
+  readObject(objectPath: string, options?: ReadObjectOptions): Promise<ReadObject | null>;
 }
 
-/** unavailable: 保存先に届かない・権限・一時的な失敗 / rejected: 保存先が要求を断った（形・既にある・大きさ）。 */
-export type StorageErrorCode = "unavailable" | "rejected";
+/**
+ * unavailable: 保存先に届かない・権限・一時的な失敗 / rejected: 保存先が要求を断った（形・既にある・大きさ）/
+ * range_not_satisfiable: 範囲の始まりが object の大きさ以上（範囲を求めたときだけ）。
+ */
+export type StorageErrorCode = "unavailable" | "rejected" | "range_not_satisfiable";
 
 const MESSAGES: Record<StorageErrorCode, string> = {
   unavailable: "editor-web: object storage is unavailable",
   rejected: "editor-web: object storage rejected the request",
+  range_not_satisfiable: "editor-web: object storage cannot serve the range",
 };
+
+/** 範囲として正しい形か（整数・0 ≤ start ≤ end）。 */
+export function isByteRange(value: unknown): value is ByteRange {
+  if (typeof value !== "object" || value === null) return false;
+  const { start, end } = value as { start?: unknown; end?: unknown };
+  return Number.isSafeInteger(start) && Number.isSafeInteger(end) && (start as number) >= 0 && (start as number) <= (end as number);
+}
 
 /** 保存先の失敗。メッセージは code ごとの固定の文だけ（bucket 名・場所・token・URL を含めない）。 */
 export class StorageError extends Error {

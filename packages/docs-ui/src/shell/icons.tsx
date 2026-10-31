@@ -98,6 +98,7 @@ const PATHS: Record<ShellIconName, ReactNode> = {
     </>
   ),
   play: <path d="M8 5.5v13l10-6.5z" fill="currentColor" stroke="none" />,
+  pause: <path d="M7.5 5.5h3v13h-3zM13.5 5.5h3v13h-3z" fill="currentColor" stroke="none" />,
   doc: (
     <>
       <path d="M7 3.5h7l4 4v13H7z" />
