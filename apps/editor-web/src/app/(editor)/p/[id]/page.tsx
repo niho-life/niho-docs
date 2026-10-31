@@ -2,17 +2,22 @@ import { notFound } from "next/navigation";
 import { OpenPage } from "@/components/FramePages";
 import { StoreUnavailable } from "@/components/Notice";
 import { getStore } from "@/server/db";
+import { shareDeps } from "@/server/deps";
 import { requireSession } from "@/server/session";
+import { readShareFlag } from "@/server/share-api";
 
 export const dynamic = "force-dynamic";
 
-/** ページ。別の人のページ・存在しない id・UUID として不正な id はどれも同じ 404。 */
+/**
+ * ページ。別の人のページ・存在しない id・UUID として不正な id はどれも同じ 404。
+ * リンクで共有しているか（「…」の「共有中」の印）も一緒に読む。渡すのは真偽だけで、リンク（bearer）は HTML・RSC の payload に入れない。
+ */
 export default async function PageView(props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
   const session = await requireSession(`/p/${id}`);
   const store = getStore();
   if (!store) return <StoreUnavailable />;
-  const page = await store.getPage(session.userId, id);
+  const [page, shared] = await Promise.all([store.getPage(session.userId, id), readShareFlag(shareDeps.store(), session.userId, id)]);
   if (!page) notFound();
   const { kind, title, lang, parent, stepStatus, createdAt, updatedAt } = page;
   return (
@@ -21,6 +26,7 @@ export default async function PageView(props: { params: Promise<{ id: string }> 
       summary={{ id: page.id, kind, title, lang, parent, stepStatus, createdAt, updatedAt }}
       blocks={page.blocks}
       revision={page.revision}
+      shared={shared}
     />
   );
 }

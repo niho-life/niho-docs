@@ -10,6 +10,7 @@ import {
   exportFileBaseName,
   exportMarkdownRoute,
   getShareRoute,
+  readShareFlag,
   rotateShareRoute,
   sharePublicId,
   stopShareRoute,
@@ -316,5 +317,34 @@ describe("GET /api/pages/{id}/export.md", () => {
     expect(header).toBe(`attachment; filename="page.md"; filename*=UTF-8''It%27s%20%28draft%29%2050%25%3B%20quoted.md`);
     // RFC 5987 の attr-char 以外（' ( ) * など）は %XX になっている
     expect(header.split("''")[1]).toMatch(/^[A-Za-z0-9!#$&+\-.^_`|~%]+$/);
+  });
+});
+
+describe("readShareFlag (the 共有中 mark when a page opens)", () => {
+  const OWNER = "user-flag";
+  const PAGE = "00000000-0000-4000-8000-0000000000f1";
+
+  it("says only whether the page is shared (never the link), and null when it cannot tell", async () => {
+    const token = randomBytes(32).toString("base64url");
+    const shared = { getShare: vi.fn(async () => ({ shared: true, token, createdAt: "2026-01-01T00:00:00.000Z", rotatedAt: null }) satisfies PageShareState) };
+    expect(await readShareFlag(shared, OWNER, PAGE)).toBe(true);
+    expect(shared.getShare).toHaveBeenCalledWith(OWNER, PAGE);
+    expect(await readShareFlag({ getShare: async () => ({ shared: false }) }, OWNER, PAGE)).toBe(false);
+    // ページが無い・DB が無い
+    expect(await readShareFlag({ getShare: async () => null }, OWNER, PAGE)).toBeNull();
+    expect(await readShareFlag(null, OWNER, PAGE)).toBeNull();
+  });
+
+  it("does not stop the page from opening when the read fails, and logs only the error's name", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const secret = randomBytes(32).toString("base64url");
+      const failing = { getShare: async () => Promise.reject(new Error(`connection lost near ${secret}`)) };
+      expect(await readShareFlag(failing, OWNER, PAGE)).toBeNull();
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    } finally {
+      log.mockRestore();
+    }
   });
 });

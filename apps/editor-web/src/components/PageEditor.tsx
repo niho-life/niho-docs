@@ -25,6 +25,7 @@ import {
 } from "@/lib/drafts";
 import { MAX_TITLE_CHARS } from "@/lib/page-limits";
 import { UNCREATED_REVISION, classifySaveFailure, createPageSaver, type PageSaver } from "@/lib/page-save";
+import type { RestoredPage } from "@/lib/page-actions-client";
 import { PageConflictError, type ConflictPage, type PageBody } from "@/lib/pages-client";
 import { SAVE_STATUS_TEXT, type SaveStatus } from "@/lib/save-status";
 
@@ -55,8 +56,21 @@ export type PageEditorEvents = {
   /** 新しいページを最初の保存で作った（1 回だけ）。 */
   onCreated?: (id: string) => void;
   onTitleChange?: (title: string) => void;
-  /** 保存が終わった（作った・PATCH のどちらも）。 */
+  /** 保存が終わった（作った・PATCH のどちらも。版に戻したときも）。 */
   onSaved?: () => void;
+};
+
+export type PageEditorProps = {
+  page: EditablePage;
+  drafts?: DraftStorage | null;
+  /** リンクで共有しているか（開いたときにサーバーが読んだ値。分からなければ null・省略）。「…」の「共有中」の印に使う。 */
+  shared?: boolean | null;
+} & PageEditorEvents;
+
+type ScreenProps = PageEditorProps & {
+  shared: boolean | null;
+  setShared: (shared: boolean) => void;
+  reopen: (page: RestoredPage) => void;
 };
 
 const noSubscription = () => () => undefined;
@@ -81,6 +95,40 @@ function loadDraft(editor: Editor, draft: PageDraft): boolean {
   // 載せたこと自体は Undo の対象にしない（開いた直後の Undo で下書きを消さない）
   editor.chain().setMeta("addToHistory", false).setContent(doc, { emitUpdate: false }).run();
   return true;
+}
+
+/**
+ * ページのエディタ（中身は下の EditorScreen）。「…」の「履歴」で版に戻したら、サーバーが返した戻したあとのページ
+ * （題名・本文・revision）でエディタを開き直す（key を替えて作り直す。保存・下書き・Undo の部品も新しくなり、
+ * 次の保存の `baseRevision` は戻したあとの revision から始まる。開いたときと同じく端末の下書きとも比べる）。
+ * 共有の状態（「共有中」の印）は開き直しても持ち越す。
+ */
+export function PageEditor(props: PageEditorProps) {
+  const [reopened, setReopened] = useState<{ count: number; page: EditablePage } | null>(null);
+  const [shared, setShared] = useState<boolean | null>(props.shared ?? null);
+  // 端末の下書きの置き場は、開き直しても同じものを使う
+  const [drafts] = useState<DraftStorage | null>(() => (props.drafts === undefined ? createIndexedDbDraftStorage() : props.drafts));
+  const savedRef = useRef(props.onSaved);
+  useEffect(() => {
+    savedRef.current = props.onSaved;
+  });
+  const reopen = useCallback((restored: RestoredPage) => {
+    const { id, title, blocks, revision, updatedAt } = restored;
+    setReopened((current) => ({ count: (current?.count ?? 0) + 1, page: { id, title, blocks, revision, updatedAt } }));
+    // 戻した（サーバーの更新時刻が進んだ）。一覧の上へ動かす
+    savedRef.current?.();
+  }, []);
+  return (
+    <EditorScreen
+      key={reopened?.count ?? 0}
+      {...props}
+      page={reopened?.page ?? props.page}
+      drafts={drafts}
+      shared={shared}
+      setShared={setShared}
+      reopen={reopen}
+    />
+  );
 }
 
 /**
@@ -109,8 +157,8 @@ function loadDraft(editor: Editor, draft: PageDraft): boolean {
  * どちらも本文を変える操作は TipTap の transaction なので、新しいページ（id が null）でも、手で打った変更と同じく
  * 下書きと保存（最初の保存で作る）に乗る。
  */
-export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | null } & PageEditorEvents) {
-  const { page } = props;
+function EditorScreen(props: ScreenProps) {
+  const { page, shared, setShared, reopen } = props;
   const { attachPage } = useEditorFrame();
   const [title, setTitle] = useState(page.title);
   const [state, setState] = useState<SaveState>("saved");
@@ -315,12 +363,20 @@ export function PageEditor(props: { page: EditablePage; drafts?: DraftStorage | 
     if (editor) editor.setEditable(ready && !unreadable, false);
   }, [editor, ready, unreadable]);
 
-  // 枠のヘッダー（状態の丸と「…」）へ、このページを登録する。「…」の操作（複製・書き出し・削除）は、この flush で
+  // 枠のヘッダー（状態の丸と「…」）へ、このページを登録する。「…」の操作（共有・書き出し・履歴・複製・削除）は、この flush で
   // まだ届いていない変更を先に保存し、届かなければ止める。下書きを読み終えるまでと、まだ作っていないページは id を渡さない
-  // （「…」を出さない。読み終える前に操作すると、あとから載せる下書きが操作に入らないため）。画面を離れたら外す
+  // （「…」を出さない。読み終える前に操作すると、あとから載せる下書きが操作に入らないため）。画面を離れたら外す。
+  // 版に戻すときは revision（今の本文がもとにしている revision）を送り、戻したら reopen でこの画面ごと開き直す
   const flush = useCallback(() => autosaveRef.current?.settle() ?? Promise.resolve(false), []);
+  const revision = useCallback(() => {
+    const saver = saverRef.current;
+    return saver && saver.pageId !== null ? saver.revision : null;
+  }, []);
   const status = statusOf(state);
-  useEffect(() => attachPage({ id: ready ? pageId : null, status, flush }), [attachPage, ready, pageId, status, flush]);
+  useEffect(
+    () => attachPage({ id: ready ? pageId : null, status, flush, revision, reopen, shared, setShared }),
+    [attachPage, ready, pageId, status, flush, revision, reopen, shared, setShared],
+  );
 
   const overwrite = () => {
     const saver = saverRef.current;
