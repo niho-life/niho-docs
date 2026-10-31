@@ -63,6 +63,7 @@ function askNotifyPermission(): void {
  * - 状態は親（録音ページ）の id で読む。読むたびにサーバーが前提変更を測り直すので、画面では測らない。
  * - 帯の段階を押すとそのサブページへ移る。失敗した段階・前提が変わった段階からやり直せる（受付 API に `fromStep` を渡すだけ）。
  * - 実行はサーバー（Cloud Tasks の worker）が進めるので、画面を閉じても進む。開き直すと読み直すので帯は最新になる。
+ * - 開いているページがその段階で、実行が終わって本文が入れ替わったら `onBodyReplaced` で知らせる（呼ぶ側が開き直す）。
  * - 手順に関わらないページ（録音でもサブページでもない）では、帯も入口も出さず `media` と本文をそのまま並べる。
  */
 export function PageSteps({
@@ -70,6 +71,7 @@ export function PageSteps({
   kind,
   parentId,
   media,
+  onBodyReplaced,
   children,
 }: {
   pageId: string;
@@ -77,6 +79,11 @@ export function PageSteps({
   parentId: string | null;
   /** 本文の上に入るもの（録音ページの文字起こし）。 */
   media?: ReactNode;
+  /**
+   * 開いているページが手順の段階で、その実行が終わって worker が本文を入れ替えた（revision も進んだ）。
+   * 呼ぶ側はページを読み直してエディタを開き直す（#37。帯だけ「済み」になってエディタが古いままにならないように）。
+   */
+  onBodyReplaced?: () => void;
   /** 本文（PageEditor）。 */
   children: ReactNode;
 }) {
@@ -91,15 +98,26 @@ export function PageSteps({
   const [tick, setTick] = useState(0);
   // 前に見た run が動いていたか（動いている → 終わったの境目でだけ通知する）
   const wasActive = useRef(false);
+  // 開いているページの段階が、前に見たとき実行の途中だったか（途中 → 済みの境目でだけ本文を読み直す）
+  const wasPending = useRef(false);
+  const replaced = useRef(onBodyReplaced);
+  useEffect(() => {
+    replaced.current = onBodyReplaced;
+  });
 
   const apply = useCallback(
     (next: StepRun) => {
       setRun(next);
       if (wasActive.current && isStepRunDone(next)) notifyDone(next);
       wasActive.current = isStepRunActive(next);
+      // 開いているページの本文が、この段階の結果で入れ替わった（worker が blocks を書き、revision を進めた）
+      const here = next.steps.find((step) => step.pageId === pageId);
+      const pending = here !== undefined && (here.state === "pending" || here.state === "queued" || here.state === "running");
+      if (wasPending.current && here?.state === "succeeded") replaced.current?.();
+      wasPending.current = pending;
       if (rootId) stepPagesChanged(rootId, stepPagesOf(next));
     },
-    [rootId, stepPagesChanged],
+    [rootId, pageId, stepPagesChanged],
   );
 
   // 開いたときに読み、動いている間だけ、だんだん間隔を空けて読み直す。隠れている間は読まない

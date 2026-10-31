@@ -12,6 +12,7 @@ import {
   stepRecipeName,
   stepStartChoices,
   stepStateOf,
+  maxStepFrom,
 } from "./steps-view";
 
 const NAMES = ["文字起こし修正", "記事方針", "記事本文"];
@@ -108,12 +109,66 @@ describe("steps-view（手順の帯の見た目）", () => {
     ]);
     // その失敗した段階のページを開いているときは、同じことを二度出さない
     expect(stepBandActions(failed, "page-1").map((action) => action.id)).toEqual(["retry", "restart"]);
-    // 別の段階のページを開いていれば、その段階からの作り直しも出す
+    // 手前の段階 1 が済みでないので、段階 2 のページを開いていても「この手順を作り直す」は出さない（サーバーが断る）
     expect(stepBandActions(failed, "page-2")).toEqual([
       { id: "retry", label: "「記事方針」からやり直す", tone: "primary", fromStep: 1 },
-      { id: "redo-here", label: "この手順を作り直す", tone: "outline", fromStep: 2 },
       { id: "restart", label: "はじめから作り直す", tone: "outline", fromStep: 0 },
     ]);
+  });
+
+  it("手前が済みの段階のページを開いていれば、その段階からの作り直しも出す", () => {
+    const failed = run({
+      state: "failed",
+      steps: [
+        step(0, { state: "succeeded", stepStatus: "done" }),
+        step(1, { state: "succeeded", stepStatus: "done" }),
+        step(2, { state: "failed", errorCode: "internal", stepStatus: "failed" }),
+      ],
+    });
+    expect(stepBandActions(failed, "page-1")).toEqual([
+      { id: "retry", label: "「記事本文」からやり直す", tone: "primary", fromStep: 2 },
+      { id: "redo-here", label: "この手順を作り直す", tone: "outline", fromStep: 1 },
+      { id: "restart", label: "はじめから作り直す", tone: "outline", fromStep: 0 },
+    ]);
+  });
+
+  it("段階 2 が失敗したあとに段階 0 を直したら、主ボタンは手前の段階 1 を送る（サーバーが断る始点を押させない）", () => {
+    // refreshStale は、失敗した段階 2 の手前の済みの段階 1 を「前提変更」にする。createRun は手前が全部済みでないと断るので、
+    // 段階 2 ではなく段階 1 から作り直す
+    const run2 = run({
+      state: "failed",
+      steps: [
+        step(0, { state: "succeeded", stepStatus: "done" }),
+        step(1, { state: "succeeded", stepStatus: "stale" }),
+        step(2, { state: "failed", errorCode: "internal", stepStatus: "failed" }),
+      ],
+    });
+    expect(maxStepFrom(run2)).toBe(1);
+    expect(stepBandActions(run2, "rec")).toEqual([
+      { id: "retry", label: "「記事方針」からやり直す", tone: "primary", fromStep: 1 },
+      { id: "restart", label: "はじめから作り直す", tone: "outline", fromStep: 0 },
+    ]);
+    // 段階 2 のページを開いていても、断られる始点（fromStep: 2）はボタンにしない
+    expect(stepBandActions(run2, "page-2").map((action) => action.fromStep)).toEqual([1, 0]);
+  });
+
+  it("手前の段階が済みでなければ、そこまで手前へ丸める（ボタンの文字も送る段階の名前にする）", () => {
+    // 取消のあと: 段階 0 は待機に戻り、済みだった段階 1 は前提変更。始められるのは段階 0 だけ
+    const canceled = run({
+      state: "canceled",
+      steps: [step(0, { state: "canceled", stepStatus: "wait" }), step(1, { state: "succeeded", stepStatus: "stale" })],
+    });
+    expect(maxStepFrom(canceled)).toBe(0);
+    expect(stepBandActions(canceled, "page-1")).toEqual([
+      { id: "retry", label: "「文字起こし修正」からやり直す", tone: "primary", fromStep: 0 },
+      { id: "restart", label: "はじめから作り直す", tone: "outline", fromStep: 0 },
+    ]);
+  });
+
+  it("すべて済んでいる手順では、どの段階からでも始められる", () => {
+    const done = run({ state: "succeeded", steps: [step(0, { state: "succeeded", stepStatus: "done" }), step(1, { state: "succeeded", stepStatus: "done" }), step(2, { state: "succeeded", stepStatus: "done" })] });
+    expect(maxStepFrom(done)).toBe(2);
+    expect(stepBandActions(done, "page-2").map((action) => action.fromStep)).toEqual([2, 0]);
   });
 
   it("すべて済んでいるサブページでは「この手順を作り直す」が主ボタン", () => {

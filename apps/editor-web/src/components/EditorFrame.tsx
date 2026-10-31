@@ -364,7 +364,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           });
           const at = Date.now();
           const added = steps
-            .filter((step) => !known.has(step.id) && !current.gone.has(step.id))
+            // サブページがゴミ箱に入っている段階（stepStatus が null）の行は作らない。実行の記録（attempt）は残るので
+            // 再読み込みのあとに run から届くが、押しても 404 のページへ行くだけ。作り直しの導線は帯が持つ
+            .filter((step) => step.stepStatus !== null && !known.has(step.id) && !current.gone.has(step.id))
             .map((step, index): PageSummary => {
               const created = new Date(at + index).toISOString();
               return {

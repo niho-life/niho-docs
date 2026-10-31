@@ -100,28 +100,54 @@ export type StepBandAction = {
 };
 
 /**
- * その状態でできること。動いている間は「やめる」だけ。終わっていれば、失敗した段階・前提が変わった段階からのやり直しを主ボタンにし、
- * 手順のサブページを開いているときは「この手順を作り直す」（その段階から）も出す。はじめからの作り直しはいつでもできる。
+ * サーバーが受け付ける作り直しの始点の上限。`createRun` は手前の段階すべてのサブページが済みであることを要求するので、
+ * 先頭から続く「済み」の数より後ろからは始められない（送れば `invalid_from_step`）。
+ */
+export function maxStepFrom(run: StepRun): number {
+  const notDone = run.steps.findIndex((step) => stepStateOf(step) !== "done");
+  return notDone === -1 ? run.steps.length - 1 : notDone;
+}
+
+/** 作り直しが必要ないちばん手前の段階（失敗・前提変更）。無ければ undefined。 */
+function firstProblem(run: StepRun): StepRunStep | undefined {
+  return run.steps.find((step) => {
+    const state = stepStateOf(step);
+    return state === "failed" || state === "stale";
+  });
+}
+
+/**
+ * その状態でできること。動いている間は「やめる」だけ。終わっていれば、作り直しが必要ないちばん手前の段階からのやり直しを
+ * 主ボタンにし、手順のサブページを開いているときは「この手順を作り直す」（その段階から）も出す。
+ * はじめからの作り直しはいつでもできる。
+ *
+ * 送る `fromStep` は必ず `maxStepFrom` までに収める（サーバーが断る始点をボタンにしない）。段階 2 が失敗したあとに
+ * 段階 0 を直すと、済みだった段階 1 は前提変更になる。そのときは手前の段階 1 からやり直す（段階 2 からは始められない）。
  */
 export function stepBandActions(run: StepRun, currentPageId: string): StepBandAction[] {
   if (isStepRunActive(run)) return [{ id: "cancel", label: "やめる", tone: "quiet", cancel: true }];
   const actions: StepBandAction[] = [];
-  const failed = run.steps.find((step) => step.state === "failed");
-  const stale = run.steps.find((step) => stepStateOf(step) === "stale");
-  const first = failed ?? stale;
-  if (first) {
-    actions.push({ id: "retry", label: `${quoted(first.name)}からやり直す`, tone: "primary", fromStep: first.index });
+  const limit = maxStepFrom(run);
+  const problem = firstProblem(run);
+  // ボタンの文字と送る段階を必ず同じものにする（手前へ丸めたら、文字もその段階の名前にする）
+  const target = problem === undefined ? undefined : run.steps[Math.min(problem.index, limit)];
+  if (target) {
+    actions.push({ id: "retry", label: `${quoted(target.name)}からやり直す`, tone: "primary", fromStep: target.index });
   }
   const here = run.steps.find((step) => step.pageId === currentPageId);
-  // 開いている段階が、すでに主ボタンになっている段階と同じなら二度出さない
-  if (here && here.index !== first?.index) {
-    actions.push({ id: "redo-here", label: "この手順を作り直す", tone: first ? "outline" : "primary", fromStep: here.index });
+  // 開いている段階が、すでに主ボタンになっている段階と同じなら二度出さない。サーバーが断る始点も出さない
+  if (here && here.index !== target?.index && here.index <= limit) {
+    actions.push({ id: "redo-here", label: "この手順を作り直す", tone: target ? "outline" : "primary", fromStep: here.index });
   }
   actions.push({ id: "restart", label: "はじめから作り直す", tone: "outline", fromStep: 0 });
   return actions;
 }
 
-/** サイドバーの行に渡す、手順のサブページ（まだ一覧に無い行はここから足す）。 */
+/**
+ * サイドバーの行に渡す、手順のサブページ（まだ一覧に無い行はここから足す）。
+ * `stepStatus` が null の段階は、サブページがゴミ箱に入っている（`loadRunView` は attempt を残す）。
+ * 行を作らないのは枠の側（EditorFrame の `stepPagesChanged`）。
+ */
 export function stepPagesOf(run: StepRun): { id: string; title: string; stepStatus: StepPageStatus | null }[] {
   return run.steps.map((step) => ({ id: step.pageId, title: step.name, stepStatus: step.stepStatus }));
 }

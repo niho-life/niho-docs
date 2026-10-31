@@ -12,6 +12,7 @@ import { runAttempt } from "@/steps/runner";
 
 const router = { push: vi.fn(), refresh: vi.fn(), replace: vi.fn() };
 const frame = { stepPagesChanged: vi.fn() };
+const onBodyReplaced = vi.fn();
 
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 vi.mock("./EditorFrame", () => ({ useEditorFrame: () => frame }));
@@ -98,7 +99,7 @@ async function mount(props: { pageId: string; kind: "rec" | "step"; parentId: st
   root = createRoot(container);
   await act(async () => {
     root!.render(
-      <PageSteps pageId={props.pageId} kind={props.kind} parentId={props.parentId} media={null}>
+      <PageSteps pageId={props.pageId} kind={props.kind} parentId={props.parentId} media={null} onBodyReplaced={onBodyReplaced}>
         <p>本文</p>
       </PageSteps>,
     );
@@ -324,6 +325,44 @@ describe("PageSteps（手順の帯）", () => {
     const read = api.calls.length;
     await act(async () => void (await vi.advanceTimersByTimeAsync(120_000)));
     expect(api.calls.length).toBe(read);
+  });
+
+  it("開いている段階が終わったら、本文が入れ替わったことを知らせる（#37 P1）", async () => {
+    const api = server();
+    vi.stubGlobal("fetch", api.fetchImpl);
+    await mount({ pageId: api.recording, kind: "rec", parentId: null });
+    await pressEntry("記事にする");
+    await settle();
+    const run = await currentRun(api);
+    const second = run.steps[1]!.pageId;
+
+    // 録音ページの本文は手順が書き換えないので、録音ページでは知らせない
+    await api.work(good);
+    await wait(60_000);
+    expect(onBodyReplaced).not.toHaveBeenCalled();
+
+    // 実行の途中の段階のページを開いたまま、その段階が終わったとき（上流を直して、その段階から作り直す）
+    await unmount();
+    api.store.pages.get(run.steps[0]!.pageId)!.blocks = [{ type: "paragraph", content: [{ type: "text", text: "手で直した" }] }];
+    await mount({ pageId: second, kind: "step", parentId: api.recording });
+    await pressAction("「記事方針」からやり直す");
+    await settle();
+    // まだ実行していない（待機）ので知らせない
+    expect(onBodyReplaced).not.toHaveBeenCalled();
+    expect(band()[1]!.state).toBe("wait");
+
+    await api.work(good);
+    await wait(60_000);
+    expect(band()[1]!.state).toBe("done");
+    expect(onBodyReplaced).toHaveBeenCalledTimes(1);
+
+    // 読み直すたびに知らせない（途中 → 済みの境目だけ）
+    await back();
+    expect(onBodyReplaced).toHaveBeenCalledTimes(1);
+    // 済んだページを開き直しただけでも知らせない
+    await unmount();
+    await mount({ pageId: second, kind: "step", parentId: api.recording });
+    expect(onBodyReplaced).toHaveBeenCalledTimes(1);
   });
 
   it("終わったら通知する（許可されているときだけ。本文は入れない）", async () => {
