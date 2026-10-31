@@ -185,11 +185,11 @@ describe("ヘッダーの状態と公開ボタン", () => {
     expect($(".es-sb-list .es-di-sub")!.textContent).toBe("NIHO");
   });
 
-  it("⌘⇧P で公開のシートを開く", async () => {
+  it("⌘⇧P（jsdom は Mac ではないので Ctrl+Shift+P）で公開のシートを開く", async () => {
     server({ sheets: [sheet()] });
     await mount();
     await act(async () => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "P", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "P", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }));
     });
     expect(dialog()?.getAttribute("aria-label")).toBe("公開");
   });

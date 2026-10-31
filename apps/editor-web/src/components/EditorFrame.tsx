@@ -8,6 +8,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageSummary } from "@niho/editor-store";
 import { EditorShell, ShellHeader, ShellSidebar, shellAccountItems, type NewPageKind } from "niho-docs-ui/shell";
 import { listPagesRequest } from "@/lib/pages-client";
+import { useShortcuts } from "@/lib/shortcuts";
 import { arrangeSidebarItems, searchRows, type SidebarPublication } from "@/lib/sidebar-items";
 import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
@@ -49,6 +50,8 @@ export type EditorFrameApi = {
   pageCreated: (id: string, title: string) => void;
   /** 開いているページのエディタの「今すぐ保存して待つ」（公開のシートが、開く前と送る前に使う）。返す関数で外す。 */
   registerPageSaver: (saveNow: () => Promise<boolean>) => () => void;
+  /** 公開のシートを開く（ページを開いている画面だけで出る）。 */
+  openPublish: () => void;
 };
 
 const noop = () => undefined;
@@ -60,6 +63,7 @@ const FrameContext = createContext<EditorFrameApi>({
   pageSaved: noop,
   pageCreated: noop,
   registerPageSaver: () => noop,
+  openPublish: noop,
 });
 
 export function useEditorFrame(): EditorFrameApi {
@@ -107,6 +111,7 @@ const SEARCH_NOTE_STYLE = { margin: 0, padding: "10px 16px", fontSize: 13, color
  * editor の枠（一覧＋ヘッダー＋ページ）。見た目は niho-docs-ui の shell（#48）。ここは状態と移動だけを持つ。
  * - 一覧は最初の区切りをサーバーから受け、末尾が近づいたら続きを読む。
  * - 900px 以下では `/` が一覧の画面。ページと設定は全画面で、ヘッダーの左のボタンで一覧を出す。
+ * - ショートカット（設計 §11）: ⌘N 新しいページ、⌘K 検索、⌘⇧P 公開のシート（⌘S はページ、⌘/ は本文が持つ）。
  */
 export function EditorFrame({ initial, children }: { initial: FrameInitial; children: ReactNode }) {
   const router = useRouter();
@@ -123,10 +128,13 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
   const publishSaved = useRef<(id: string) => void>(() => undefined);
+  const publishOpen = useRef<() => void>(() => undefined);
   const pageSaver = useRef<(() => Promise<boolean>) | null>(null);
   // ⌘K のたびに増やし、検索の入力へフォーカスを移す合図にする（すでに開いているときも）
   const [searchFocus, setSearchFocus] = useState(0);
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const frameRoot = useRef<HTMLDivElement | null>(null);
+  // ⌘N で移り始めた元の path（移り終わるまで二度は押さない）
+  const newFrom = useRef<string | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
@@ -198,6 +206,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           if (pageSaver.current === saveNow) pageSaver.current = null;
         };
       },
+      openPublish: () => publishOpen.current(),
     }),
     [],
   );
@@ -210,23 +219,6 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     () => (searching ? searchRows(found.results, now) : arrangeSidebarItems(list.pages, { now })),
     [searching, found.results, list.pages, now],
   );
-
-  // ⌘K（Mac 以外は Ctrl+K）: 一覧が隠れていれば出し、検索の入力を開いてフォーカスする
-  useSearchShortcut(() => {
-    if (narrow) {
-      if (pathname !== "/") setListFor(pathname);
-    } else {
-      setCollapsed(false);
-    }
-    setSearch((current) => ({ open: true, value: current.open ? current.value : "" }));
-    setSearchFocus((tick) => tick + 1);
-  });
-  useEffect(() => {
-    if (searchFocus === 0) return;
-    const input = rootRef.current?.querySelector<HTMLInputElement>('[role="search"] input');
-    input?.focus();
-    input?.select();
-  }, [searchFocus]);
 
   const select = (id: string) => {
     if (id === currentId) setListFor(null);
@@ -254,11 +246,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     }
   };
 
-  const title = currentId
-    ? (list.pages.find((page) => page.id === currentId)?.title ?? (list.opened?.id === currentId ? list.opened.title : ""))
-    : pathname === "/p/new" && searchParams.get("from") === "recording"
-      ? "録音から"
-      : (settings?.title ?? "");
+  const opened = currentId ? (list.pages.find((page) => page.id === currentId) ?? (list.opened?.id === currentId ? list.opened : undefined)) : undefined;
+  const recordingStart = pathname === "/p/new" && searchParams.get("from") === "recording";
+  const title = currentId ? (opened?.title ?? "") : recordingStart ? "録音から" : (settings?.title ?? "");
 
   // 公開の状態・ボタン・シートは、開いている（一覧か開いたページで分かっている）自分のページにだけ出す
   const openPage = currentId ? (list.opened?.id === currentId ? list.opened : list.pages.find((page) => page.id === currentId)) : undefined;
@@ -286,14 +276,51 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   });
   useEffect(() => {
     publishSaved.current = publishing.pageSaved;
-  }, [publishing.pageSaved]);
+    publishOpen.current = publishing.open;
+  }, [publishing.pageSaved, publishing.open]);
+
+  // 公開のシートはページを開いている画面だけ（一覧・設定・新しいページ・録音からでは出さない）。開いているあいだは ⌘N・⌘K を効かせない
+  const sheetShown = publishing.shown;
+  const openPublish = publishing.open;
+
+  const openSearch = () => {
+    if (sheetShown) return;
+    if (narrow) setListFor(pathname);
+    else setCollapsed(false);
+    setSearch((current) => (current.open ? current : { open: true, value: "" }));
+    setSearchFocus((count) => count + 1);
+  };
+  useEffect(() => {
+    if (searchFocus === 0) return;
+    const input = frameRoot.current?.querySelector<HTMLInputElement>('[role="search"] input');
+    input?.focus();
+    input?.select();
+  }, [searchFocus]);
+  useSearchShortcut(openSearch);
+
+  useEffect(() => {
+    newFrom.current = null;
+  }, [pathname]);
+  useShortcuts({
+    newPage: () => {
+      if (sheetShown) return false;
+      // 新しいページを開いている（作っている）とき・⌘N で移っている最中は、二つ目を作らない
+      if ((pathname === "/p/new" && !recordingStart) || newFrom.current === pathname) return;
+      newFrom.current = pathname;
+      pickNew("blank");
+    },
+    publish: () => {
+      if (!currentId || (narrow && sidebarOpen)) return false;
+      if (!sheetShown) openPublish();
+    },
+  });
 
   // 一覧をしまう: デスクトップでは列を閉じ、狭い画面ではページへ戻る（`/` では一覧がその画面なので出さない）
   const collapse = narrow ? (pathname === "/" ? undefined : () => setListFor(null)) : () => setCollapsed(true);
 
   return (
     <FrameContext.Provider value={frame}>
-      <div ref={rootRef} data-docs-app-root="" data-docs-shared-ui="" style={{ position: "fixed", inset: 0 }}>
+      <div ref={frameRoot} data-docs-app-root="" data-docs-shared-ui="" style={{ position: "fixed", inset: 0 }}>
         <EditorShell
           sidebarOpen={sidebarOpen}
           railOpen={false}

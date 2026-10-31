@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
-import { EditorFrame, type FrameInitial } from "./EditorFrame";
+import { EditorFrame, useEditorFrame, type FrameInitial } from "./EditorFrame";
 
 const nav = vi.hoisted(() => ({ pathname: "/", search: "", push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -57,14 +57,37 @@ function page(id: string, title = id): PageSummary {
   return { id, kind: "note", title, lang: "ja", parent: null, stepStatus: null, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-31T02:00:00.000Z", publication: null };
 }
 
-async function mount(initial: Partial<FrameInitial> = {}) {
+let mounted: FrameInitial | null = null;
+
+async function mount(initial: Partial<FrameInitial> = {}, children: React.ReactNode = <p>合成の中身</p>) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
   const value: FrameInitial = { pages: [], next: null, now: NOW, me: { name: "開発ユーザー", caption: "stub", initial: "開" }, initialNarrow: false, ...initial };
-  await act(async () => root!.render(<EditorFrame initial={value}>{<p>合成の中身</p>}</EditorFrame>));
+  mounted = value;
+  await act(async () => root!.render(<EditorFrame initial={value}>{children}</EditorFrame>));
   return container;
 }
+
+/** 同じ枠のまま、nav.pathname・nav.search を替えて描き直す（画面の移動）。 */
+async function moveTo(pathname: string, search = "") {
+  nav.pathname = pathname;
+  nav.search = search;
+  await act(async () => root!.render(<EditorFrame initial={mounted!}>{<p>合成の中身</p>}</EditorFrame>));
+}
+
+/** ショートカットを押す（jsdom の platform は Mac ではないので Ctrl）。 */
+async function shortcut(key: string, init: KeyboardEventInit = {}, target: EventTarget = document.body): Promise<KeyboardEvent> {
+  const event = new KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true, cancelable: true, ...init });
+  await act(async () => {
+    target.dispatchEvent(event);
+  });
+  return event;
+}
+
+const PAGE_ID = "00000000-0000-4000-8000-000000000001";
+const dialog = () => container!.querySelector<HTMLElement>('[role="dialog"]');
+const buttonByText = (text: string, scope: ParentNode = container!) => [...scope.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === text);
 
 const rows = () => [...container!.querySelectorAll(".es-sb-list li .es-di-t")].map((node) => node.textContent);
 const shell = () => container!.querySelector<HTMLElement>("[data-editor-shell]")!.dataset;
@@ -267,5 +290,130 @@ describe("EditorFrame", () => {
     await act(async () => root!.render(<EditorFrame initial={{ pages: [], next: null, now: NOW, me: { name: "x", caption: "", initial: "x" }, initialNarrow: true }}>{null}</EditorFrame>));
     expect(container!.querySelector(".es-ttl")?.textContent).toBe("設定");
     expect(container!.querySelector(".es-dt--plain")).not.toBeNull();
+  });
+
+  it("⌘N (Ctrl+N) opens a blank new page like the menu, once until it gets there, and not again on the new page", async () => {
+    nav.pathname = `/p/${PAGE_ID}`;
+    await mount({ pages: [page(PAGE_ID, "合成の題名")] });
+    const first = await shortcut("n");
+    expect(first.defaultPrevented).toBe(true);
+    expect(nav.push).toHaveBeenCalledWith("/p/new");
+    await shortcut("n");
+    expect(nav.push).toHaveBeenCalledTimes(1);
+
+    // 新しいページ（作っている途中を含む）では作り直さない。録音からの画面からは新しいページへ
+    await moveTo("/p/new");
+    await shortcut("n");
+    expect(nav.push).toHaveBeenCalledTimes(1);
+    await moveTo("/p/new", "from=recording");
+    await shortcut("n");
+    expect(nav.push).toHaveBeenCalledTimes(2);
+
+    // 移ったあと、もとのページに戻れば、また押せる
+    await moveTo(`/p/${PAGE_ID}`);
+    await shortcut("n");
+    expect(nav.push).toHaveBeenCalledTimes(3);
+    // ⇧・⌥ 付き、IME の変換中は対象にしない
+    await shortcut("N", { shiftKey: true });
+    await shortcut("n", { altKey: true });
+    await moveTo("/settings");
+    await shortcut("n", { isComposing: true });
+    expect(nav.push).toHaveBeenCalledTimes(3);
+  });
+
+  it("⌘K (Ctrl+K) brings the list back and focuses the search field, also when the search is already open", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ results: [] }), { status: 200, headers: { "content-type": "application/json" } })));
+    await mount({ pages: [page("a", "NIHO 録音"), page("b", "日記")] });
+    await click('button[aria-label="一覧をしまう"]');
+    expect(shell().sidebar).toBe("closed");
+    const event = await shortcut("k");
+    expect(event.defaultPrevented).toBe(true);
+    expect(shell().sidebar).toBe("open");
+    const input = container!.querySelector<HTMLInputElement>('input[type="search"]')!;
+    expect(document.activeElement).toBe(input);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "日記");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => input.blur());
+    await shortcut("k");
+    // 開いていた検索の入力を残したまま、もう一度フォーカスする（検索の結果はサーバーが返す。ここでは絞り込まない）
+    const again = container!.querySelector<HTMLInputElement>('input[type="search"]')!;
+    expect(document.activeElement).toBe(again);
+    expect(again.value).toBe("日記");
+    vi.unstubAllGlobals();
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+  });
+
+  it("narrow: ⌘K on a page shows the list screen with the search field focused", async () => {
+    narrow = true;
+    nav.pathname = `/p/${PAGE_ID}`;
+    await mount({ pages: [page(PAGE_ID, "合成の題名")], initialNarrow: true });
+    expect(shell().view).toBe("page");
+    await shortcut("k");
+    expect(shell().view).toBe("list");
+    expect(document.activeElement).toBe(container!.querySelector('input[type="search"]'));
+  });
+
+  it("⌘⇧P and the header's 公開 open the publish sheet on a page only, and Esc closes it back to where it was opened", async () => {
+    await mount({ pages: [page(PAGE_ID, "合成の題名")] });
+    // 一覧・設定・新しいページ・録音からでは出さず、キーはブラウザに任せる
+    for (const [path, search] of [["/", ""], ["/settings", ""], ["/p/new", ""], ["/p/new", "from=recording"]] as const) {
+      await moveTo(path, search);
+      expect(buttonByText("公開"), path).toBeUndefined();
+      const ignored = await shortcut("P", { shiftKey: true });
+      expect(ignored.defaultPrevented, path).toBe(false);
+      expect(dialog(), path).toBeNull();
+    }
+
+    await moveTo(`/p/${PAGE_ID}`);
+    const opener = buttonByText("公開")!;
+    await act(async () => opener.focus());
+    const event = await shortcut("P", { shiftKey: true }, opener);
+    expect(event.defaultPrevented).toBe(true);
+    expect(dialog()?.getAttribute("aria-label")).toBe("公開");
+    expect(container!.querySelector(".es-root")!.contains(dialog())).toBe(true);
+    await act(async () => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(dialog()).toBeNull();
+    expect(document.activeElement).toBe(opener);
+
+    await act(async () => opener.click());
+    expect(dialog()?.getAttribute("aria-label")).toBe("公開");
+    // 開いているあいだ、⌘N・⌘K は使わない
+    await shortcut("n");
+    await shortcut("k");
+    expect(nav.push).not.toHaveBeenCalled();
+    expect(container!.querySelector('input[type="search"]')).toBeNull();
+    // 別の画面へ移ったら閉じる
+    await moveTo("/settings");
+    await moveTo(`/p/${PAGE_ID}`);
+    expect(dialog()).toBeNull();
+  });
+
+  it("narrow: ⌘⇧P does nothing while the list is shown over the page", async () => {
+    narrow = true;
+    nav.pathname = `/p/${PAGE_ID}`;
+    await mount({ pages: [page(PAGE_ID, "合成の題名")], initialNarrow: true });
+    await click('button[aria-label="一覧を出す"]');
+    expect(shell().view).toBe("list");
+    expect((await shortcut("P", { shiftKey: true })).defaultPrevented).toBe(false);
+    expect(dialog()).toBeNull();
+  });
+
+  it("a page opens the publish sheet through useEditorFrame().openPublish", async () => {
+    function OpenFromPage() {
+      const { openPublish } = useEditorFrame();
+      return (
+        <button type="button" onClick={openPublish}>
+          ページから公開
+        </button>
+      );
+    }
+    nav.pathname = `/p/${PAGE_ID}`;
+    await mount({ pages: [page(PAGE_ID, "合成の題名")] }, <OpenFromPage />);
+    await act(async () => buttonByText("ページから公開")!.click());
+    expect(dialog()?.getAttribute("aria-label")).toBe("公開");
   });
 });

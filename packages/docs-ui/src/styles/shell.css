@@ -565,6 +565,10 @@
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="rail"] .es-canvas{visibility:hidden}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="list"] .es-skip,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root[data-view="rail"] .es-skip{display:none}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-rail{position:absolute;left:0;right:0;bottom:0;top:var(--es-header);z-index:46;border-left:0}
+  /* レールのシート（ShellRail に onClose を渡したとき）。下からの背の高いシートで、中のレールは残りの高さを使う（#43） */
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sheet--rail{height:calc(100% - 24px);background:var(--ed-canvas)}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sheet--rail>.es-sh-hd{padding-bottom:12px;border-bottom:1px solid var(--ed-line)}
+  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-sheet--rail>.es-rail{position:static;flex:1;border-left:0}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas{padding:0 18px 80px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt{font-size:30px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt.es-ja{font-size:24px}
