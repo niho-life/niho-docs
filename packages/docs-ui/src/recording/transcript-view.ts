@@ -13,6 +13,8 @@ import { SHELL_TONES, type ShellSegment, type ShellSpeaker, type ShellTone } fro
 const PART_HEADING = /^## Part (\d+):/u;
 const TIMESTAMP = /^\[(\d{2,}:\d{2}:\d{2})\] /u;
 const LABEL = /^([^:\n]+): /u;
+/** docs-core が付ける番号つき・不明のラベル。これだけは名前の記録が無くても話者のラベルとして外す。 */
+const GENERATED_LABEL = /^話者(?:(\d+)|[?？])$/u;
 
 /** 話者の色は、一覧に出てくる順（Part → 番号）で割り当てる。 */
 export function speakerTones(speakers: readonly TranscriptSpeakerEntry[]): Map<string, ShellTone> {
@@ -34,10 +36,20 @@ export function transcriptSpeakers(speakers: readonly TranscriptSpeakerEntry[]):
   }));
 }
 
-/** 文字起こしの段落。`id` は段落の位置（直したものを書き戻すときに使う）。 */
+/** `renameTranscriptSpeakerLabel` が名前の記号に付けた `\` を戻す（`A\_B` → `A_B`）。 */
+function decodeLabel(value: string): string {
+  return value.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/gu, "$1");
+}
+
+/**
+ * 文字起こしの段落。`id` は段落の位置（直したものを書き戻すときに使う）。
+ *
+ * 先頭の `xxx: ` を話者として外すのは、docs-core が付けた番号つき・不明のラベルか、同じ Part の既知の話者の名前
+ * （名前を変えたあとの本文は、番号ではなく名前に書き換わっている）のときだけ。それ以外の `Note: ...` のような
+ * 発話の一部は、話者を作らず本文のまま残す。
+ */
 export function transcriptSegments(markdown: string, speakers: readonly TranscriptSpeakerEntry[]): ShellSegment[] {
   const tones = speakerTones(speakers);
-  const nameOf = new Map(speakers.map((speaker) => [speaker.key, speaker.label] as const));
   const segments: ShellSegment[] = [];
   let partIndex: number | null = null;
   markdown.split(/\n{2,}/u).forEach((block, index) => {
@@ -52,14 +64,18 @@ export function transcriptSegments(markdown: string, speakers: readonly Transcri
     const timestamp = TIMESTAMP.exec(paragraph);
     const rest = timestamp ? paragraph.slice(timestamp[0].length) : paragraph;
     const label = LABEL.exec(rest);
-    const speakerIndex = label ? /^話者(\d+)$/u.exec(label[1]!.trim())?.[1] : undefined;
-    const key = speakerIndex === undefined ? null : formatTranscriptSpeakerKey(partIndex, Number(speakerIndex));
+    const text = label ? decodeLabel(label[1]!.trim()) : "";
+    const generated = GENERATED_LABEL.exec(text);
+    const speaker = generated?.[1] !== undefined
+      ? speakers.find((entry) => entry.key === formatTranscriptSpeakerKey(partIndex, Number(generated[1])))
+      : speakers.find((entry) => entry.partIndex === partIndex && entry.name === text);
+    const isSpeakerLabel = label !== null && (generated !== null || speaker !== undefined);
     segments.push({
       id: String(index),
-      who: key !== null ? (nameOf.get(key) ?? label![1]!.trim()) : (label?.[1]?.trim() ?? ""),
-      tone: key !== null ? (tones.get(key) ?? "a") : "e",
+      who: speaker?.label ?? (isSpeakerLabel ? text : ""),
+      tone: speaker ? (tones.get(speaker.key) ?? "a") : "e",
       time: timestamp?.[1] ?? "",
-      text: label ? rest.slice(label[0].length) : rest,
+      text: isSpeakerLabel ? rest.slice(label[0].length) : rest,
     });
   });
   return segments;

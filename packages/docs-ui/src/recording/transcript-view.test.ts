@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listTranscriptSpeakers, transcriptMarkdown } from "@niho/docs-core";
+import { listTranscriptSpeakers, renameTranscriptSpeakerLabel, transcriptMarkdown } from "@niho/docs-core";
 import { transcriptSegments, transcriptSpeakers } from "./transcript-view";
 
 /** Mac の保管庫の transcript.md → 共有の ShellRecording が描く行（#45）。合成データだけを使う。 */
@@ -61,6 +61,51 @@ describe("文字起こしの表示", () => {
     const segments = transcriptSegments(markdown, listTranscriptSpeakers(markdown));
     expect(segments).toHaveLength(1);
     expect(segments[0]).toMatchObject({ time: "00:00:05", who: "", text: "話者を分けない録音" });
+  });
+
+  it("コロンを含む発話は、話者が無ければ本文のまま残し、話者を作らない", () => {
+    const markdown = "[00:00:00] Note: bring lunch";
+    const speakers = listTranscriptSpeakers(markdown);
+    expect(speakers).toEqual([]);
+    expect(transcriptSegments(markdown, speakers)[0]).toMatchObject({ time: "00:00:00", who: "", tone: "e", text: "Note: bring lunch" });
+  });
+
+  it("名前を変えたあとの本文（番号が名前に書き換わった）も、同じ話者として色と名前を引く", () => {
+    const original = transcriptMarkdown([
+      {
+        jsonl: jsonl([
+          { start: 0, end: 3, text: "こんにちは", speaker: 1 },
+          { start: 3, end: 7, text: "よろしく", speaker: 2 },
+        ]),
+        offsetSec: 0,
+      },
+    ]);
+    const renamed = renameTranscriptSpeakerLabel(original, "話者2", "A_B");
+    expect(renamed).toContain("A\\_B:");
+    const speakers = listTranscriptSpeakers(renamed, { "2": "A_B" });
+    const segments = transcriptSegments(renamed, speakers);
+    // 名前は `\_` のエスケープを戻した表示名、色は話者の一覧と同じ
+    expect(segments.map((segment) => segment.who)).toEqual(["話者1", "A_B"]);
+    expect(segments[1]!.tone).toBe(transcriptSpeakers(speakers)[1]!.tone);
+    expect(segments[1]!.text).toBe("よろしく");
+  });
+
+  it("名前の一致は同じ Part の中だけ。別の Part の名前と同じ文字でも話者にしない", () => {
+    const markdown = [
+      "## Part 1: 前半",
+      "",
+      "[00:00:00] Mika: ひとつめ",
+      "",
+      "## Part 2: 後半",
+      "",
+      "[00:00:00] Mika: ふたつめ",
+    ].join("\n");
+    const speakers = listTranscriptSpeakers(markdown, { "1:1": "Mika" });
+    const segments = transcriptSegments(markdown, speakers);
+    expect(segments.map((segment) => [segment.who, segment.text])).toEqual([
+      ["Mika", "ひとつめ"],
+      ["", "Mika: ふたつめ"],
+    ]);
   });
 
   it("文字起こしが無ければ行は出ない", () => {
