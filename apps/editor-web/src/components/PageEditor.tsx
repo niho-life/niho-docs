@@ -25,6 +25,7 @@ import {
 import { MAX_TITLE_CHARS } from "@/lib/page-limits";
 import { UNCREATED_REVISION, classifySaveFailure, createPageSaver, type PageSaver } from "@/lib/page-save";
 import { PageConflictError, type ConflictPage, type PageBody } from "@/lib/pages-client";
+import { isSaveShortcut } from "@/lib/shortcuts";
 
 export { docFromBlocks };
 
@@ -71,11 +72,6 @@ const noSubscription = () => () => undefined;
 
 function statusOf(state: SaveState): SaveStatus {
   return state === "stopped" ? "conflict" : state;
-}
-
-/** ⌘S・Ctrl+S（⇧・⌥ との組み合わせはブラウザに任せる）。 */
-function isSaveShortcut(event: KeyboardEvent): boolean {
-  return (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && typeof event.key === "string" && event.key.toLowerCase() === "s";
 }
 
 /** 下書きの本文をエディタに載せる。今の schema で読めなければ載せずに false（下書きはそのまま残す）。 */
