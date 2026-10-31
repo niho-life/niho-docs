@@ -266,8 +266,10 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 
 1. 本人でログインし、録音ページに**短い音声（30 秒ほど）**を上げて「文字起こし」を押す。状態が `queued` → `running` → `succeeded` と進む。
 2. **段落と話者**が本文に入る（話者を分けた場合は 1 始まりの番号、名前は空）。長さが入る。
-3. わざと失敗させて（例: 鍵の版を無効にして配備）**音声が残り「もう一度」ができる**こと。run は `failed` になり、`errorCode` が画面に出る。
-4. 20 分を超える音声で、時間切れが `engine_timeout` になり、Cloud Run の要求が先に切れないこと（上限は 1320 秒）。
+3. わざと失敗させて、**音声が残り「もう一度」ができる**こと。エンジンを入れたまま、形は合うが Deepgram が受け付けない鍵の版（でたらめな 1 行。`set-transcribe-key.sh` で足す）で配備する。起動時検査は鍵の形しか見ないので配備は通る。音声を上げて「文字起こし」を押すと、run が `failed` になり、`errorCode`（Deepgram の 401 は `engine_unavailable` に写される）が画面に出て、音声は消えない。確かめたら**正しい鍵をもう一度入れて版を足し、配備し直してから**「もう一度」を押し、`succeeded` まで進むこと。なお、鍵の版を無効にして配備しても失敗の経路は通らない（エンジンが `off` になり、開始が 503 `transcription_unavailable` で断られるだけで、run が作られない）。
+4. 時間切れの扱いと、Cloud Run の要求の上限との順序。**時間切れは音声の長さではなく、エンジンが返すまでにかかった時間**（`TRANSCRIBE_TIMEOUT_SEC`、既定 1200 秒）で決まる。20 分を超える音声でも、その間に返れば成功するので、長い音声を上げても `engine_timeout` になるとは限らない。確かめるのは次の 2 つ。
+   - **順序**: Cloud Run の要求の上限が時間切れより先に切れないこと。`gcloud run services describe niho-editor --region <region> --format='value(spec.template.spec.timeoutSeconds)'` が 1320（＝時間切れ 1200 ＋ 2 分）になっている。
+   - **`engine_timeout` になること**: 時間切れの扱い自体は `run.test.ts`（エンジンの応答を遅らせるテスト）で固定してある。本番で実際に見るなら、`deploy.env` の `TRANSCRIBE_TIMEOUT_SEC=60`（下限）で配備し、処理に 60 秒より長くかかる音声を上げる。60 秒以内に返れば成功するので、起きなくても失敗ではない。確かめたら `TRANSCRIBE_TIMEOUT_SEC` を戻して配備し直す。
 5. 掃除が効くこと: 実行中の run を DB で `running` のまま古くして、5 分以内に `engine_timeout` で失敗にされる（または queued の run が積み直される）。
 
 ### 無効にする・回す
