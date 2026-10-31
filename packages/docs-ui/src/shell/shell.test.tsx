@@ -79,7 +79,7 @@ function unlabeledButtons(html: string): string[] {
 describe("EditorShell", () => {
   const html = renderToStaticMarkup(
     <EditorShell sidebar={sidebar()} header={header()} toolbar={<ShellMobileToolbar />} sidebarOpen railOpen={false}>
-      <ShellPage kind="journal" lang="ja" title="10月30日（木）">
+      <ShellPage kind="note" lang="ja" title="10月30日（木）">
         <ShellBody blocks={[{ type: "p", text: "朝、北鎌倉まで歩いた。" }]} />
       </ShellPage>
     </EditorShell>,
@@ -299,7 +299,7 @@ describe("ShellRail", () => {
 });
 
 describe("ページの部品", () => {
-  it("ShellPage: 記事はカバー・kicker・リード、日記は題名とメタだけ", () => {
+  it("ShellPage: 記事はカバー・kicker・リード、メモは題名とメタだけ", () => {
     const article = renderToStaticMarkup(
       <ShellPage kind="article" lang="en" title="Riding the Enoden" cover="set" kicker="Travel" lead="Lead." meta={[{ author: "Mika Sato", initial: "M", text: "昨日" }]}>
         <ShellBody blocks={[{ type: "p", text: "Body" }, { type: "h2", text: "H" }, { type: "ul", items: ["a"] }]} />
@@ -313,12 +313,13 @@ describe("ページの部品", () => {
     expect(article).toContain(">TRAVEL<");
     expect(article).toContain('class="es-ld" data-ph="Lead"');
     expect(article).not.toContain("url(");
-    const journal = renderToStaticMarkup(<ShellPage kind="journal" lang="ja" title="10月30日（木）" meta={[{ text: "木曜日" }]} />);
-    expect(journal).toContain("es-tt es-ja es-tt--journal");
-    expect(journal).not.toContain("es-ld");
-    expect(journal).not.toContain("es-cover");
+    const memo = renderToStaticMarkup(<ShellPage kind="note" lang="ja" title="10月30日（木）" meta={[{ text: "木曜日" }]} />);
+    expect(memo).toContain("es-tt es-ja");
+    expect(memo).not.toContain("es-tt--journal");
+    expect(memo).not.toContain("es-ld");
+    expect(memo).not.toContain("es-cover");
     // 題名はページの h1。空のときは見えている「無題」を名前にする（空の見出しにしない）
-    expect(journal).toMatch(/<h1 class="es-tt es-ja es-tt--journal" data-ph="無題" spellcheck="false">10月30日（木）<\/h1>/);
+    expect(memo).toMatch(/<h1 class="es-tt es-ja" data-ph="無題" spellcheck="false">10月30日（木）<\/h1>/);
     const untitled = renderToStaticMarkup(<ShellPage kind="note" lang="ja" title="" />);
     expect(untitled).toContain('<h1 class="es-tt es-ja" data-ph="無題" aria-label="無題"');
   });

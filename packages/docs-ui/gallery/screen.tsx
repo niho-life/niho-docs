@@ -223,7 +223,7 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
       onLang={setLang}
       author={{ name: ME.name, title: lang === "ja" ? ME.titleJa : ME.titleEn, initial: ME.initial }}
       info={[
-        { label: "作成", value: page.kind === "journal" ? "2026-10-30" : "2026-10-28" },
+        { label: "作成", value: page.id === "j1030" ? "2026-10-30" : "2026-10-28" },
         { label: "更新", value: page.saved },
         ...(page.kind === "rec" ? [{ label: "録音", value: "14:38 · 2026-10-29" }] : []),
         { label: "文字数", value: lang === "ja" ? "412" : "1,180 words" },
@@ -283,7 +283,7 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
     const blocks = def?.sel ? withSelection(page.body) : page.body;
     const started = Boolean(page.children?.length);
     const meta =
-      page.kind === "journal"
+      page.id === "j1030"
         ? [{ text: "木曜日" }, { text: "晴れ" }]
         : page.kind === "rec"
           ? [{ text: "14:38", icon: "mic" as const }, { text: "2026-10-29" }]
