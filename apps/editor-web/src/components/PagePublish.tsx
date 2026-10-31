@@ -140,6 +140,10 @@ export type PagePublishUi = {
   overlay?: ReactNode;
   /** そのページを保存した（公開中なら、少し待って「更新あり」を確かめ直す）。 */
   pageSaved: (id: string) => void;
+  /** 公開のシートを開く（⌘⇧P・useEditorFrame().openPublish）。ページが無ければ何もしない。 */
+  open: () => void;
+  /** 公開のシートが（確認・結果の画面も含めて）開いているか。開いているあいだは ⌘N・⌘K を効かせない。 */
+  shown: boolean;
 };
 
 /**
@@ -235,18 +239,6 @@ export function usePagePublish(input: {
       });
   }, [pageId, load, patch]);
 
-  // ⌘⇧P（Ctrl+Shift+P）で公開のシート（設計 §11）
-  useEffect(() => {
-    if (pageId === null) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.altKey || event.key.toLowerCase() !== "p") return;
-      event.preventDefault();
-      if (stateRef.current.view.kind === "closed") open();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [pageId, open]);
-
   // 「直す」: シートが閉じ、シートが開いた要素へフォーカスを戻したあと（同じ commit の片付けのあと）にその欄へ移る
   useEffect(() => {
     if (current.view.kind !== "closed" || pendingFix.current === null) return;
@@ -269,7 +261,7 @@ export function usePagePublish(input: {
     [pageId, load],
   );
 
-  if (pageId === null) return { pageSaved };
+  if (pageId === null) return { pageSaved, open, shown: false };
 
   const { sheet, view, selection, loading, busy, error, loadError } = current;
   const { options, site } = destOptionsOf(sheet);
@@ -424,5 +416,7 @@ export function usePagePublish(input: {
     publish: { ...shellPublishButton({ pub: publication, isArticle }), onClick: open },
     overlay,
     pageSaved,
+    open,
+    shown: view.kind !== "closed",
   };
 }

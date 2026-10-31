@@ -176,6 +176,7 @@ describe("0009 on a database whose old publications table has rows", { skip: dat
 
       await client.query("DELETE FROM publications");
       const applied = await applyMigrations(client);
+      // 0009 から先の migration が、番号の順に適用される（あとから足された migration があっても、0009 が先頭）
       assert.equal(applied.applied[0], "0009_publications.sql");
       const columns = await client.query<{ column_name: string }>(
         "SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'publications' ORDER BY ordinal_position",
@@ -220,7 +221,8 @@ describe("0010 on a database that already has preview tokens", { skip: databaseU
         [fakeSha("pv-before-0010"), pageId, OWNER, at(0), at(10)],
       );
       const applied = await applyMigrations(client);
-      assert.deepEqual(applied.applied, ["0010_preview_token_author.sql"]);
+      // 0010 から先の migration が、番号の順に適用される（あとから足された migration があっても、0010 が先頭）
+      assert.equal(applied.applied[0], "0010_preview_token_author.sql");
       assert.deepEqual(await findPreviewToken(client, fakeSha("pv-before-0010"), at(1)), {
         sha256: fakeSha("pv-before-0010"),
         pageId,

@@ -1,5 +1,6 @@
 import { estimateTokenCostUsd } from "@niho/docs-core";
 import { isPositiveInteger, monthKeyJst, type AiUsageDelta, type AiUsageTotals, type EditorStore, type OwnerId } from "@niho/editor-store";
+import { AnthropicError } from "../ai/anthropic";
 import type { AiBackend } from "../ai/config";
 import { applyAdoptions, buildProposal, buildRequest, type Adoptions, type AiRun, type AiScope } from "../ai/engine";
 import type { AiInsertKind, AiUsageReport } from "../ai/model";
@@ -60,7 +61,7 @@ const AI_STATUS: Record<AiErrorCode, number> = {
   ai_unavailable: 503,
   // モデルが失敗した・出力が検証に通らない
   ai_failed: 502,
-  // 送る本文が 200,000 文字を超える（範囲を選んで頼む）
+  // 送る本文が 30,000 文字を超える（範囲を選んで頼む）
   too_large: 413,
 };
 
@@ -226,6 +227,8 @@ export function createAiProposal(request: Request, id: string, deps: AiApiDeps):
         runs.push({ request: aiRequest, output: result.output });
       } catch (error) {
         console.error("editor-web: ai model failed", { route, name: error instanceof Error ? error.name : "unknown" });
+        // 応答は届いたが使えなかった（JSON でない・途中で切れた）ときも課金されているので、その分も数える
+        if (error instanceof AnthropicError && error.usage) addUsage(delta, backend, error.usage);
         failed = true;
         break;
       }
