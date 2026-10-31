@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   RecordingRequestError,
   addCandidate,
@@ -21,6 +21,9 @@ const LIST_STYLE: CSSProperties = { listStyle: "none", margin: "6px 0 0", paddin
 const PREVIEW_STYLE: CSSProperties = { margin: "6px 0 0", padding: "8px 10px", border: "1px solid var(--ed-line-2)", borderRadius: 10 };
 
 type Message = { kind: "info" | "error"; text: string };
+
+/** 作っている途中の案の状態を読み直す間隔（ミリ秒）。 */
+const CANDIDATE_POLL_MS = 4000;
 
 /** 案の状態の言葉（色だけで表さない）。 */
 const STATE_LABELS: Readonly<Record<RecordingCandidateSummary["state"], string>> = {
@@ -70,6 +73,19 @@ export function RecordingCandidates({
   // 「消す」を押した案（1 回確かめる）
   const [confirming, setConfirming] = useState<string | null>(null);
   const locked = busy || disabled === true;
+
+  // 案を作る・もう一度作る実行は、上の文字起こしの見張り（useTranscription）の対象ではない。作っている途中の案がある
+  // あいだは、録音を読み直して状態を追う（できた・できなかったが画面に出る。読み直さないと「作っています」のまま残る）
+  const building = candidates.some((candidate) => candidate.state === "pending");
+  const changed = useRef(onChanged);
+  useEffect(() => {
+    changed.current = onChanged;
+  });
+  useEffect(() => {
+    if (!building) return;
+    const timer = setInterval(() => changed.current(), CANDIDATE_POLL_MS);
+    return () => clearInterval(timer);
+  }, [building]);
 
   const guard = async (action: "candidate" | "adopt" | "delete_candidate", job: () => Promise<Message | null>) => {
     if (locked) return;

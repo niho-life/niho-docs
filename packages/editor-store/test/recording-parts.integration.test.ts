@@ -189,6 +189,22 @@ describe("audio parts on PostgreSQL（1 ページに音声を複数）", { skip:
     assert.deepEqual(await startAudioPart(pool, OWNER, other, input), { status: "conflict" });
   });
 
+  it("2 本目のずらす量は、1 本目の音声そのものの長さを下限にする（文字起こしが短くても、無音で終わる音声でも 1 本目の中にずれ込まない）", async () => {
+    // 1 本目は 600 秒の音声。文字起こしは 10 秒までしか無い（末尾が無音）
+    const page = await audioRecording(pool, OWNER, { durationSec: 600 });
+    await pool.query("UPDATE page_recordings SET duration_sec = 10 WHERE page_id = $1", [page]);
+    const index = await addPart(pool, page, { durationSec: 60 });
+    assert.equal(index, 1);
+    const parts = await listAudioParts(pool, OWNER, page);
+    assert.deepEqual(
+      parts.map((part) => [part.partIndex, part.offsetSec]),
+      [
+        [0, 0],
+        [1, 600],
+      ],
+    );
+  });
+
   it("文章（VTT）の録音にも音声を足せる（ずらす量は文字起こしの長さ）", async () => {
     const created = await createRecordingPage(pool, OWNER, {
       lang: "ja",
@@ -344,6 +360,25 @@ describe("transcript candidates on PostgreSQL（別のエンジンの案）", { 
     assert.deepEqual(await enqueueTranscription(pool, OWNER, page, run()), { status: "has_transcript" });
     // 無い案は candidate_missing
     assert.deepEqual(await enqueueTranscription(pool, OWNER, page, run({ candidate: randomUUID() })), { status: "candidate_missing" });
+  });
+
+  it("有効な実行が既にあるときは、その書き先（案か正本）を返す: 別の案の実行を、求めた案の実行と取り違えない", async () => {
+    const page = await transcribed();
+    const first = await add(page, "Fake");
+    const second = await add(page, "Fake");
+    assert.ok(first && first.status === "created" && second && second.status === "created");
+    const running = await enqueueTranscription(pool, OWNER, page, run({ candidate: first.candidate.id }));
+    assert.ok(running?.status === "created", JSON.stringify(running));
+
+    // 同じ案を求めると、その実行（書き先は同じ案）
+    const same = await enqueueTranscription(pool, OWNER, page, run({ candidate: first.candidate.id }));
+    assert.deepEqual(same, { status: "existing", run: running.run, candidate: first.candidate.id });
+    // 別の案を求めても、走っているのは最初の案の実行（呼び出し側が書き先を見て、始まっていないと分かる）
+    const other = await enqueueTranscription(pool, OWNER, page, run({ candidate: second.candidate.id }));
+    assert.deepEqual(other, { status: "existing", run: running.run, candidate: first.candidate.id });
+    // 正本に書く実行を求めても同じ
+    const canonical = await enqueueTranscription(pool, OWNER, page, run({ replace: true }));
+    assert.deepEqual(canonical, { status: "existing", run: running.run, candidate: first.candidate.id });
   });
 
   it("採用すると正本が入れ替わり、それまでの本文は採用中だった案に残る", async () => {

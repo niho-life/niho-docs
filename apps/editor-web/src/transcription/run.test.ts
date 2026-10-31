@@ -136,6 +136,17 @@ describe("executeRun", () => {
     expect(failed).toEqual([]);
   });
 
+  it("keeps the audio length the engine reported, even when the last utterance ends earlier (trailing silence)", async () => {
+    const { store, finished } = memoryStore(claimOf());
+    const engine: TranscriptionEngine = {
+      name: "fake",
+      transcribe: async () => ({ segments: [{ start: 0, end: 10, text: "合成", speaker: 1 }], durationSec: 100 }),
+    };
+    const outcome = await executeRun({ store, storage: await storageWithAudio(), engines: () => engine, runId: RUN_ID, timeoutMs: 60_000, now: () => NOW });
+    expect(outcome).toEqual({ status: "succeeded" });
+    expect(finished[0]?.output.durationSec).toBe(100);
+  });
+
   it("transcribes every audio of the recording and joins them with the stored offsets", async () => {
     const second = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
     const secondObject = `audio/${second}`;

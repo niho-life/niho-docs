@@ -73,10 +73,26 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
   const draftsRef = useRef<Drafts>({});
   const chain = useRef<Promise<unknown>>(Promise.resolve());
 
-  const applySnapshot = useCallback((next: RecordingSnapshot) => {
+  /** 読み込んだ録音をそのまま置く（別のページの音声・案を引き継がない）。 */
+  const replaceSnapshot = useCallback((next: RecordingSnapshot) => {
     snapshotRef.current = next;
     setSnapshot(next);
   }, []);
+  /**
+   * 変更（段落の直し・話者の名前・.vtt を足す・採用）の応答を置く。応答は `recording` と `speakers` だけで、音声の列と
+   * 案の一覧（読み取りのときだけ入る）は含まない。含まないときは直前のものを残す（空に戻すと、音声が無い・案が消えたように見える）。
+   */
+  const applySnapshot = useCallback(
+    (next: RecordingSnapshot) => {
+      const previous = snapshotRef.current;
+      replaceSnapshot({
+        ...next,
+        ...(next.audios === undefined && previous?.audios !== undefined ? { audios: previous.audios } : {}),
+        ...(next.candidates === undefined && previous?.candidates !== undefined ? { candidates: previous.candidates } : {}),
+      });
+    },
+    [replaceSnapshot],
+  );
   const applyDrafts = useCallback((next: Drafts) => {
     draftsRef.current = next;
     setDrafts(next);
@@ -87,7 +103,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
     getRecording(pageId).then(
       (loaded) => {
         if (cancelled) return;
-        applySnapshot(loaded);
+        replaceSnapshot(loaded);
         setLoadedPage(pageId);
         setLoad({ state: "ready" });
       },
@@ -99,7 +115,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [pageId, attempt, applySnapshot]);
+  }, [pageId, attempt, replaceSnapshot]);
 
   /** 書き込みを 1 本ずつ順に走らせる（前の失敗は次を止めない）。 */
   const enqueue = useCallback(<T,>(job: () => Promise<T>): Promise<T> => {

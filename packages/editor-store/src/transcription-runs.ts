@@ -92,8 +92,12 @@ export type EnqueueTranscriptionInput = {
 
 export type EnqueueTranscriptionResult =
   | { status: "created"; run: TranscriptionRunView }
-  /** 有効な run（queued・running）が既にある（新しく作らない）。 */
-  | { status: "existing"; run: TranscriptionRunView }
+  /**
+   * 有効な run（queued・running）が既にある（新しく作らない）。`candidate` はその run の書き先（null は正本）。
+   * 同じページの有効な run は 1 つだけなので、別の案・正本に書く run が走っていることもある。呼び出し側は、書き先が
+   * 求めたものと同じか確かめてから「始まった」と言う。
+   */
+  | { status: "existing"; run: TranscriptionRunView; candidate: string | null }
   /** 音声のアップロードが済んでいない（uploading）か、音声の無い録音。 */
   | { status: "audio_not_ready" }
   /** 音声の保持の期限を過ぎた（保存先から消えている見込み）。 */
@@ -132,6 +136,8 @@ export type TranscriptionOutput = { segments: readonly RecordingSegment[]; durat
 export type FinishTranscriptionResult = "succeeded" | "superseded" | "stale";
 
 type RunRow = {
+  /** 書き先の案（null は正本）。 */
+  candidate: string | null;
   id: string;
   status: TranscriptionRunStatus;
   engine: TranscriptionEngineName;
@@ -142,7 +148,7 @@ type RunRow = {
   finished_at: Date | null;
 };
 
-const RUN_COLUMNS = "t.id, t.status, t.engine, t.language, t.error_code, t.created_at, t.started_at, t.finished_at";
+const RUN_COLUMNS = "t.id, t.status, t.engine, t.language, t.error_code, t.created_at, t.started_at, t.finished_at, t.candidate";
 
 function toView(row: RunRow): TranscriptionRunView {
   return {
@@ -241,9 +247,9 @@ function isActiveRunConflict(error: unknown): boolean {
   return code === "23505" && constraint === ACTIVE_INDEX;
 }
 
-async function activeRun(db: Pick<PoolClient, "query">, owner: OwnerId, pageId: string): Promise<TranscriptionRunView | null> {
+async function activeRun(db: Pick<PoolClient, "query">, owner: OwnerId, pageId: string): Promise<{ run: TranscriptionRunView; candidate: string | null } | null> {
   const row = (await db.query<RunRow>(ACTIVE_RUN_SQL, [owner, pageId])).rows[0];
-  return row ? toView(row) : null;
+  return row ? { run: toView(row), candidate: row.candidate } : null;
 }
 
 /**
@@ -295,7 +301,7 @@ export async function enqueueTranscription(
       const existing = await activeRun(client, owner, pageId);
       if (existing) {
         await rollback(client);
-        return { status: "existing", run: existing };
+        return { status: "existing", run: existing.run, candidate: existing.candidate };
       }
       // 案に書く run は、正本の段落には触らないので段落の有無を見ない
       if (candidate === null && recording.has_segments && !input.replace) {
@@ -321,7 +327,7 @@ export async function enqueueTranscription(
       // 録音の行の lock を通らずに同じページの run が入った（並んだ開始）: 先に入った方を返す
       if (isActiveRunConflict(error)) {
         const existing = await activeRun(client, owner, pageId);
-        if (existing) return { status: "existing", run: existing };
+        if (existing) return { status: "existing", run: existing.run, candidate: existing.candidate };
       }
       if (isInvalidTextRepresentation(error)) return null;
       throw error;

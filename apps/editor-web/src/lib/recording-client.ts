@@ -293,6 +293,7 @@ const REASON_MESSAGES: Record<string, string> = {
   audio_not_ready: "音声の取り込みが終わっていません。",
   audio_expired: "音声は削除されました。",
   has_transcript: "文字起こしがすでにあります。",
+  other_run_active: "ほかの文字起こしを作っている途中です。できてから、もう一度試してください。",
   adopted: "採用中の案は消せません。別の案を採用してから消してください。",
   running: "この案は作っている途中です。できてから消してください。",
   transcription_unavailable: "いまは文字起こしを始められません。少ししてから、もう一度試してください。",

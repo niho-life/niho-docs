@@ -133,7 +133,8 @@ export async function executeRun(deps: ExecuteRunDeps): Promise<ExecuteRunOutcom
       // エンジンが読まなかった音声は、次の音声へ進む前に閉じる
       if (!opened.body.locked) await opened.body.cancel().catch(() => undefined);
       opened = null;
-      transcribed.push({ offsetSec: part.offsetSec, segments: normalizeEngineResult(raw, { diarize: run.diarize }).segments });
+      const normalizedPart = normalizeEngineResult(raw, { diarize: run.diarize });
+      transcribed.push({ offsetSec: part.offsetSec, segments: normalizedPart.segments, durationSec: normalizedPart.durationSec });
     }
     // 前の音声の長さだけずらして 1 本につなぐ（1 本だけの録音は、ずらす量 0 でそのまま）
     const normalized = composeParts(transcribed);

@@ -118,7 +118,12 @@ async function startCandidateRun(
   if (result.status === "audio_not_ready" || result.status === "audio_expired" || result.status === "has_transcript" || result.status === "candidate_missing") {
     return { run: null, reason: result.status };
   }
-  if (result.status === "existing") return { run: transcriptionRunBody(result.run), reason: null };
+  if (result.status === "existing") {
+    // 同じページで走れる実行は 1 つだけ。走っているのが別の案・正本に書く実行なら、この案の実行は始まっていない
+    // （「作っています」と言うと、この案はいつまでも空のまま）。この案の実行なら、積み直した扱い
+    if (result.candidate !== candidateId) return { run: null, reason: "other_run_active" };
+    return { run: transcriptionRunBody(result.run), reason: null };
+  }
   const { run } = result;
   try {
     await runner.dispatcher.dispatch(run.id);

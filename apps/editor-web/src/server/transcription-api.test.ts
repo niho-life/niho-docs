@@ -43,7 +43,7 @@ function memoryStore(pages: Page[] = []) {
       if (page.audio !== "uploaded") return { status: "audio_not_ready" };
       if (page.expired) return { status: "audio_expired" };
       const active = runs.find((run) => run.pageId === id && (run.status === "queued" || run.status === "running"));
-      if (active) return { status: "existing", run: view(active) };
+      if (active) return { status: "existing", run: view(active), candidate: active.input.candidate ?? null };
       if (page.segments > 0 && !input.replace) return { status: "has_transcript" };
       const run: Run = {
         id: randomUUID(),

@@ -237,4 +237,48 @@ describe("RecordingCandidates（文字起こしの案）", () => {
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(statusText()).toContain("開発の偽物 をもう一度作っています");
   });
+
+  it("作っている途中の案があるあいだは録音を読み直し続け、できたら止める（「作っています」のまま残さない）", async () => {
+    vi.useFakeTimers();
+    try {
+      const building = candidate({ id: SECOND, name: "開発の偽物", adopted: false, state: "pending", segmentCount: 0, preview: [] });
+      const onChanged = vi.fn();
+      await mount([candidate(), building], { onChanged });
+      expect(onChanged).not.toHaveBeenCalled();
+
+      await act(async () => vi.advanceTimersByTime(4000));
+      expect(onChanged).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTime(8000));
+      expect(onChanged).toHaveBeenCalledTimes(3);
+
+      // できあがって一覧が変わったら、もう読み直さない
+      await act(async () => {
+        root!.render(
+          <RecordingCandidates
+            pageId={PAGE_ID}
+            candidates={[candidate(), { ...building, state: "ready" }]}
+            engines={[]}
+            onSnapshot={() => undefined}
+            onChanged={onChanged}
+          />,
+        );
+      });
+      await act(async () => vi.advanceTimersByTime(20000));
+      expect(onChanged).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("作っている途中の案が無ければ、読み直さない", async () => {
+    vi.useFakeTimers();
+    try {
+      const onChanged = vi.fn();
+      await mount([candidate()], { onChanged });
+      await act(async () => vi.advanceTimersByTime(30000));
+      expect(onChanged).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

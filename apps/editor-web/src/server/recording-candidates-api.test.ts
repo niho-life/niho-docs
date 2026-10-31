@@ -201,6 +201,19 @@ describe("POST /api/pages/{id}/recording/candidates", () => {
     expect(body.candidate.state).toBe("pending");
   });
 
+  it("別の案・正本に書く実行が走っているときは、新しい案の実行は始まっていないと返す（案は残る）", async () => {
+    const run = { id: "11111111-1111-4111-8111-111111111111", status: "running", engine: "fake", language: "ja", errorCode: null, createdAt: "2030-01-01T00:00:00.000Z", startedAt: null, finishedAt: null } as const;
+    for (const elsewhere of [null, "33333333-3333-4333-8333-333333333333"]) {
+      const { store } = memoryStore({ enqueue: { status: "existing", run, candidate: elsewhere } });
+      const response = await add(deps("user-a", store));
+      expect(response.status).toBe(202);
+      const body = await response.json();
+      expect(body.run).toBeNull();
+      expect(body.cannotStart).toBe("other_run_active");
+      expect(body.candidate.state).toBe("pending");
+    }
+  });
+
   it("積み込みが失敗したら run を失敗にする（案は残る）", async () => {
     const { store, calls } = memoryStore();
     const response = await add(deps("user-a", store, { runner: () => ({ engine: "fake", engines: ["fake"], dispatcher: dispatcher(true) }) }));
@@ -324,9 +337,16 @@ describe("GET・採用・もう一度（/recording/candidates/{candidateId}）",
     const refused = await retry(deps("user-a", busy.store), id);
     expect(refused.status).toBe(409);
     expect(await refused.json()).toEqual({ error: "cannot_start", reason: "audio_expired" });
-    // 既に走っている実行はそのまま返す
-    const existing = memoryStore({ full, enqueue: { status: "existing", run } });
+    // この案の実行が既に走っているなら、そのまま返す
+    const existing = memoryStore({ full, enqueue: { status: "existing", run, candidate: id } });
     expect((await retry(deps("user-a", existing.store), id)).status).toBe(202);
+    // 走っているのが別の案・正本に書く実行なら、この案の実行は始まっていない（始まったと言わない）
+    for (const other of [null, "33333333-3333-4333-8333-333333333333"]) {
+      const elsewhere = memoryStore({ full, enqueue: { status: "existing", run, candidate: other } });
+      const blocked = await retry(deps("user-a", elsewhere.store), id);
+      expect(blocked.status).toBe(409);
+      expect(await blocked.json()).toEqual({ error: "cannot_start", reason: "other_run_active" });
+    }
     // 案が無い
     expect((await retry(deps("user-a", memoryStore({ full: null }).store), id)).status).toBe(404);
     expect((await retry(deps(null, store), id)).status).toBe(401);

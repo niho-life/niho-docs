@@ -482,7 +482,7 @@ function partProblem(input: StartAudioPartInput): string | null {
 
 // 本人の・ゴミ箱でないページの録音を押さえる（同じページの足す操作を直列にする）。$1 owner / $2 page id。
 const LOCK_FOR_PART_SQL = `
-SELECT r.duration_sec::float8 AS duration_sec, r.audio_status
+SELECT r.duration_sec::float8 AS duration_sec, r.audio_duration_sec::float8 AS audio_duration_sec, r.audio_status
   FROM page_recordings AS r
   JOIN pages AS p ON p.owner = r.owner AND p.id = r.page_id
  WHERE r.owner = $1 AND r.page_id = $2 AND p.deleted_at IS NULL
@@ -564,7 +564,9 @@ export async function startAudioPart(
     }
     await client.query("BEGIN");
     try {
-      const recording = (await client.query<{ duration_sec: number | null; audio_status: "none" | RecordingAudioStatus }>(LOCK_FOR_PART_SQL, [owner, pageId])).rows[0];
+      const recording = (
+        await client.query<{ duration_sec: number | null; audio_duration_sec: number | null; audio_status: "none" | RecordingAudioStatus }>(LOCK_FOR_PART_SQL, [owner, pageId])
+      ).rows[0];
       if (!recording) {
         await rollback(client);
         return null;
@@ -577,7 +579,9 @@ export async function startAudioPart(
         return { status: "too_many" };
       }
       const partIndex = tail.last_index + 1;
-      const offsetSec = Math.max(recording.duration_sec ?? 0, tail.tail);
+      // 文字起こしの長さ（段落の末尾）だけでなく、1 本目の音声そのものの長さも下限にする。末尾が無音の音声は、
+      // 段落の末尾が音声の長さより短い。そのまま足すと、2 本目の時刻が 1 本目の中にずれ込む
+      const offsetSec = Math.max(recording.duration_sec ?? 0, recording.audio_duration_sec ?? 0, tail.tail);
       await client.query(INSERT_ASSET_SQL, [pageId, owner, assetId, objectPath, input.bytes, input.sha256, input.contentType]);
       const inserted = await client.query<{ part_index: number }>(INSERT_PART_SQL, [
         pageId,

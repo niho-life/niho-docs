@@ -288,7 +288,7 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.deepEqual(row.terms, ["合成語", "Synthetic"]);
 
     const again = await enqueueTranscription(pool, OWNER, pageId, run({ language: "ja", replace: true }));
-    assert.deepEqual(again, { status: "existing", run: created.run }, "an active run is returned as it is");
+    assert.deepEqual(again, { status: "existing", run: created.run, candidate: null }, "an active run is returned as it is, with where it writes");
     assert.equal(await countRuns(pool, pageId), 1);
     assert.deepEqual(await latestRun(pool, OWNER, pageId), created.run);
     const ja = await uploadedRecording(pool);
