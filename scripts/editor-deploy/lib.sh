@@ -30,6 +30,11 @@ load_deploy_env() {
   # Steps (#37): off unless STEPS_MODE=cloud-tasks (docs/ops/editor-deploy.md §11).
   STEPS_MODE="${STEPS_MODE:-}"
   [[ -z "$STEPS_MODE" || "$STEPS_MODE" == cloud-tasks ]] || die "STEPS_MODE must be empty or cloud-tasks in $DEPLOY_ENV"
+  # Transcription (#36): the engine is on only when the Deepgram key secret has an enabled newest version
+  # (docs/ops/editor-deploy.md §12). The timeout is optional; empty leaves the app default (1200 seconds).
+  TRANSCRIBE_TIMEOUT_SEC="${TRANSCRIBE_TIMEOUT_SEC:-}"
+  [[ -z "$TRANSCRIBE_TIMEOUT_SEC" || "$TRANSCRIBE_TIMEOUT_SEC" =~ ^[0-9]+$ ]] \
+    || die "TRANSCRIBE_TIMEOUT_SEC must be empty or a whole number of seconds in $DEPLOY_ENV"
   TASKS_SA="${TASKS_SA:-niho-editor-tasks}"
   TASKS_SA_EMAIL="$TASKS_SA@$GCP_PROJECT.iam.gserviceaccount.com"
   STEPS_QUEUE=niho-editor-steps
@@ -45,6 +50,7 @@ load_deploy_env() {
   SECRET_DATABASE_URL=niho-editor-database-url
   SECRET_MIGRATE_DATABASE_URL=niho-editor-migrate-database-url
   SECRET_ANTHROPIC_KEY=niho-editor-anthropic-key
+  SECRET_DEEPGRAM_KEY=niho-editor-deepgram-key
 }
 
 # GCLOUD replaces the binary in the dry-run checks (scripts/editor-deploy/steps-infra.test.sh); the default is gcloud.
@@ -68,29 +74,40 @@ secret_has_version() {
 # The service reads `:latest`, which is the most recently created version whatever its state, so an older enabled version
 # does not count: a disabled newest one would make the revision fail to start. Otherwise deploy.sh adds nothing for AI and
 # the app answers 503 ai_unavailable.
-ai_key_ready() {
-  gcp secrets describe "$SECRET_ANTHROPIC_KEY" > /dev/null 2>&1 || return 1
+newest_version_enabled() {
+  gcp secrets describe "$1" > /dev/null 2>&1 || return 1
   local state
-  state="$(gcp secrets versions list "$SECRET_ANTHROPIC_KEY" --sort-by=~createTime --limit 1 --format='value(state)')"
+  state="$(gcp secrets versions list "$1" --sort-by=~createTime --limit 1 --format='value(state)')"
   [[ "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')" == enabled ]]
 }
+ai_key_ready() { newest_version_enabled "$SECRET_ANTHROPIC_KEY"; }
+# Transcription (#36) is on under the same rule as AI: the owner adds the key with set-transcribe-key.sh. Without it the
+# engine stays off and the app answers 503 (the VTT import still works; only the engine needs the key).
+transcribe_key_ready() { newest_version_enabled "$SECRET_DEEPGRAM_KEY"; }
 
-# The functions below take the AI switch as $1 (1 = ai_key_ready said yes, 0 = no) and never call gcloud for it,
-# so lib-test.sh checks them without GCP.
+# The functions below take the AI switch as $1 and the transcription switch as $2 (1 = the matching *_key_ready said yes,
+# 0 = no) and never call gcloud for them, so lib-test.sh checks them without GCP.
 
 # Secrets of the web service. `--set-secrets` replaces the whole list on every deploy: the database URL is always in it.
 service_secrets() {
   local secrets="DATABASE_URL=$SECRET_DATABASE_URL:latest"
   if [[ "${1:-0}" == 1 ]]; then secrets+=",ANTHROPIC_API_KEY=$SECRET_ANTHROPIC_KEY:latest"; fi
+  if [[ "${2:-0}" == 1 ]]; then secrets+=",DEEPGRAM_API_KEY=$SECRET_DEEPGRAM_KEY:latest"; fi
   printf '%s' "$secrets"
 }
 
 # Environment of the web service (`--set-env-vars` also replaces the whole list). Auth is always `niho`: the app refuses to
 # start in production otherwise.
 service_env_vars() {
-  printf 'EDITOR_AUTH_MODE=niho,EDITOR_ORIGIN=%s,EDITOR_ASSETS_BUCKET=%s' "$(app_origin)" "$ASSETS_BUCKET"
+  # EDITOR_STORAGE is always gcs here: unset means `off` in production (src/storage/config.ts), which answers 503 for
+  # every image and audio request. The bucket goes with it, and the runner may only create and read objects in it.
+  printf 'EDITOR_AUTH_MODE=niho,EDITOR_ORIGIN=%s,EDITOR_STORAGE=gcs,EDITOR_ASSETS_BUCKET=%s' "$(app_origin)" "$ASSETS_BUCKET"
   if [[ "${1:-0}" == 1 ]]; then
     printf ',EDITOR_AI_MODE=anthropic,EDITOR_AI_MODEL=%s,EDITOR_AI_MONTHLY_LIMIT_USD=%s' "$AI_MODEL" "$AI_MONTHLY_LIMIT_USD"
+  fi
+  if [[ "${2:-0}" == 1 ]]; then
+    printf ',EDITOR_TRANSCRIBE_ENGINE=deepgram'
+    if [[ -n "$TRANSCRIBE_TIMEOUT_SEC" ]]; then printf ',EDITOR_TRANSCRIBE_TIMEOUT_SEC=%s' "$TRANSCRIBE_TIMEOUT_SEC"; fi
   fi
 }
 
