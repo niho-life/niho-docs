@@ -214,4 +214,16 @@ describe("「あなたについて」", () => {
     expect(unlabeledButtons(markup)).toEqual([]);
     expect(unlabeledInputs(markup)).toEqual([]);
   });
+
+  /** gallery は型で守られていない（どの tsconfig にも入っていない）ので、渡し忘れても画面が落ちないこと。 */
+  it("still renders when the caller does not pass it at all", () => {
+    const without = props();
+    for (const key of ["about", "aboutDraft", "onEditAbout", "onAboutDraft", "onCancelAbout", "onSaveAbout"]) {
+      delete (without as unknown as Record<string, unknown>)[key];
+    }
+    delete (without.limits as unknown as Record<string, unknown>).aboutChars;
+    const markup = renderToStaticMarkup(<EditorSettingsPage {...without} />);
+    expect(markup).toContain("あなたについて");
+    expect(markup).toContain(EDITOR_SETTINGS_TEXT.empty);
+  });
 });

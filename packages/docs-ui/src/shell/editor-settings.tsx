@@ -172,7 +172,10 @@ function usd(value: number): string {
 }
 
 export function EditorSettingsPage(props: EditorSettingsPageProps) {
-  const { busy, glossary, termsDraft, about, aboutDraft, recipes, recipeDraft, usage, transcription, storage, limits } = props;
+  const { busy, glossary, termsDraft, recipes, recipeDraft, usage, transcription, storage, limits } = props;
+  // gallery は型で守られていないので、渡されなかったときも落ちないようにする（編集中なのは文字のときだけ）
+  const about = props.about ?? "";
+  const aboutDraft = typeof props.aboutDraft === "string" ? props.aboutDraft : null;
   const busyProps = busy ? { "aria-disabled": true as const, style: BUSY } : {};
   const quiet = (label: string, text: string, onClick: () => void) => (
     <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-label={label} {...busyProps} onClick={() => !busy && onClick()}>
@@ -211,7 +214,7 @@ export function EditorSettingsPage(props: EditorSettingsPageProps) {
             {aboutDraft === null ? (
               <>
                 {about.trim() === "" ? <span style={EMPTY}>{EDITOR_SETTINGS_TEXT.empty}</span> : <span className="es-kvs-note">{summaryOf(about)}</span>}
-                {quiet("あなたについてを編集", "編集", props.onEditAbout)}
+                {quiet("あなたについてを編集", "編集", props.onEditAbout ?? (() => undefined))}
               </>
             ) : null}
           </ShellKv>
@@ -235,7 +238,14 @@ export function EditorSettingsPage(props: EditorSettingsPageProps) {
           <TermsEditor terms={termsDraft} max={limits.glossary} busy={busy} onChange={props.onTermsDraft} onCancel={props.onCancelTerms} onSave={props.onSaveTerms} />
         )}
         {aboutDraft !== null && (
-          <AboutEditor value={aboutDraft} max={limits.aboutChars} busy={busy} onChange={props.onAboutDraft} onCancel={props.onCancelAbout} onSave={props.onSaveAbout} />
+          <AboutEditor
+            value={aboutDraft}
+            max={limits.aboutChars ?? 2_000}
+            busy={busy}
+            onChange={props.onAboutDraft}
+            onCancel={props.onCancelAbout}
+            onSave={props.onSaveAbout}
+          />
         )}
         {usage?.nearLimit && (
           <p role="alert" style={NOTE}>

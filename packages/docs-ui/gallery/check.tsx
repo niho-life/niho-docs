@@ -51,6 +51,7 @@ const VARIANTS: { id: string; widths: readonly number[] }[] = [
   { id: "sheet:publish?page=gomi", widths: [1440, 390, 375, 320] },
   // 設定（editor-web。#108。固有名詞の編集・既定の手順の編集・足した手順の編集）
   { id: "settings-web?terms=1", widths: [1440, 390, 375, 320] },
+  { id: "settings-web?about=1", widths: [1440, 390, 375, 320] },
   { id: "settings-web?recipe=tpl-1", widths: [1440, 390, 375, 320] },
   { id: "settings-web?recipe=r-talk", widths: [1440, 390, 375, 320] },
   // 発信先（editor-web。#41。発信先を追加・新しい鍵・URL の編集・鍵の再発行の確認・接続の解除の確認）
