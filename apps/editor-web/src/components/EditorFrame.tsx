@@ -5,7 +5,7 @@ import "niho-docs-ui/styles/tokens.css";
 import "niho-docs-ui/styles/shell.css";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import type { PageKind, PageSummary } from "@niho/editor-store";
+import type { PageKind, PageLang, PageSummary } from "@niho/editor-store";
 import { EditorShell, ShellHeader, ShellSheet, ShellSidebar, shellAccountItems, type NewPageKind } from "niho-docs-ui/shell";
 import { listPagesRequest } from "@/lib/pages-client";
 import { headerStatus } from "@/lib/save-status";
@@ -17,6 +17,7 @@ import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { usePageShare } from "@/lib/use-page-share";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
 import { HistorySheet } from "./HistorySheet";
+import { InfoPanel } from "./InfoPanel";
 import { usePagePublish } from "./PagePublish";
 import { BUSY_STYLE } from "./sheet-parts";
 import { ShareSheet } from "./ShareSheet";
@@ -47,12 +48,20 @@ export type FrameInitial = {
   initialNarrow: boolean;
 };
 
+/** 開いたページの、一覧の行に無いこと（情報パネルに出す）。 */
+export type OpenedDetails = {
+  /** 録音の長さ（秒。録音ページでない・分からなければ null）。 */
+  recordingSec?: number | null;
+};
+
 /** ページの画面から枠（一覧・ヘッダー）へ知らせること。 */
 export type EditorFrameApi = {
   narrow: boolean;
   /** 開いたページ。一覧に読み込んでいない古いページでも、ヘッダーに題名を出し、保存したら一覧の上に足す。 */
-  pageOpened: (page: PageSummary) => void;
+  pageOpened: (page: PageSummary, details?: OpenedDetails) => void;
   pageTitleChanged: (id: string, title: string) => void;
+  /** 情報パネルで変えた言語を保存した。一覧（読み込んだ分と開いたページ）の言語を替える。 */
+  pageLangChanged: (id: string, lang: PageLang) => void;
   /** 保存した。一覧の上へ動かし、時刻を今にする。 */
   pageSaved: (id: string) => void;
   /** 新しいページを作った（複製を含む）。一覧の上に足す。種類は既定で note。 */
@@ -76,6 +85,7 @@ const FrameContext = createContext<EditorFrameApi>({
   narrow: false,
   pageOpened: noop,
   pageTitleChanged: noop,
+  pageLangChanged: noop,
   pageSaved: noop,
   pageCreated: noop,
   registerPageSaver: () => noop,
@@ -104,6 +114,8 @@ type ListState = {
   pages: PageSummary[];
   next: string | null;
   opened: PageSummary | null;
+  /** 開いたページの、一覧の行に無いこと（opened と同じページの分だけ）。 */
+  details: { id: string; recordingSec: number | null } | null;
   /** この画面でゴミ箱へ入れたページ（検索の結果からも外す。結果はサーバーの、削除の前の答えのことがある）。 */
   gone: ReadonlySet<string>;
 };
@@ -190,6 +202,10 @@ function DeleteConfirm(props: { busy: boolean; error: string | null; onConfirm: 
  *   「…」（リンクで共有・書き出し・履歴・複製・削除。src/lib/use-page-menu.ts・use-page-share.ts・use-page-history.ts）。
  *   まだ作っていないページでは「…」を出さない。削除の確認・共有・履歴は ShellSheet で overlay に出す。
  * - ショートカット（設計 §11）: ⌘N 新しいページ、⌘K 検索、⌘⇧P 公開のシート（⌘S はページ、⌘/ は本文が持つ）。
+ * - ヘッダーの「このページの設定と AI」で右のレールに情報パネル（./InfoPanel.tsx）を出す。保存したページ（`/p/{id}`）だけで、
+ *   まだ作っていないページ（`/p/new`）・録音から・設定系の画面ではボタンを出さない。デスクトップではページを替えても開いたまま
+ *   （モック v6 と同じ。画面の移動でレールを閉じない）、狭い画面（900px 以下）は全画面のレールで、開いたページでだけ出す
+ *   （一覧から別のページを開いたら閉じる。閉じるのはヘッダーの同じボタン）。
  */
 export function EditorFrame({ initial, children }: { initial: FrameInitial; children: ReactNode }) {
   const router = useRouter();
@@ -197,11 +213,16 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const searchParams = useSearchParams();
   const narrow = useSyncExternalStore(subscribeNarrow, isNarrowNow, () => initial.initialNarrow);
 
-  const [list, setList] = useState<ListState>({ pages: initial.pages, next: initial.next, opened: null, gone: new Set() });
+  const [list, setList] = useState<ListState>({ pages: initial.pages, next: initial.next, opened: null, details: null, gone: new Set() });
   const [now, setNow] = useState(initial.now);
   const [collapsed, setCollapsed] = useState(false);
   // 狭い画面で一覧を出している path（path が変われば閉じる）
   const [listFor, setListFor] = useState<string | null>(null);
+  // 情報パネル: デスクトップで開いているか（ページを替えても持つ）と、狭い画面で開いている path（path が変われば閉じる）
+  const [railOpenWide, setRailOpenWide] = useState(false);
+  const [railFor, setRailFor] = useState<string | null>(null);
+  // 情報パネルの「ページ設定」の節を開いているか（ページを替えても持つ）
+  const [settingsOpen, setSettingsOpen] = useState(true);
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
@@ -278,12 +299,19 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
 
   const api = useMemo<Omit<EditorFrameApi, "narrow">>(
     () => ({
-      pageOpened: (page) => setList((current) => ({ ...current, opened: page })),
+      pageOpened: (page, details = {}) =>
+        setList((current) => ({ ...current, opened: page, details: { id: page.id, recordingSec: details.recordingSec ?? null } })),
       pageTitleChanged: (id, title) =>
         setList((current) => ({
           ...current,
           pages: current.pages.map((page) => (page.id === id ? { ...page, title } : page)),
           opened: current.opened?.id === id ? { ...current.opened, title } : current.opened,
+        })),
+      pageLangChanged: (id, lang) =>
+        setList((current) => ({
+          ...current,
+          pages: current.pages.map((page) => (page.id === id ? { ...page, lang } : page)),
+          opened: current.opened?.id === id ? { ...current.opened, lang } : current.opened,
         })),
       pageSaved: (id) => {
         setList((current) => {
@@ -473,12 +501,40 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   // 一覧をしまう: デスクトップでは列を閉じ、狭い画面ではページへ戻る（`/` では一覧がその画面なので出さない）
   const collapse = narrow ? (pathname === "/" ? undefined : () => setListFor(null)) : () => setCollapsed(true);
 
+  // 情報パネルのページ: 開いているエディタのページ（作ったばかりで URL がまだ `/p/new` のときも）か、URL のページ。
+  // 一覧の行（作成・更新）が分かり、エディタが画面にあるときだけボタンを出す（`/p/new` の作る前・設定系・ページが無い 404 では出さない）。
+  // エディタが下書きを読み終えるまでは、レールは出したまま中のボタンは何もしない（ページを替えるたびにレールが消えて戻らないように）
+  const railId = attached?.id ?? (attached ? currentId : undefined);
+  const railSummary = railId
+    ? (list.pages.find((page) => page.id === railId) ?? (list.opened?.id === railId ? list.opened : undefined))
+    : undefined;
+  const railPage = attached && attached.id !== null && attached.id === railId ? attached : null;
+  const railShown = railSummary !== undefined && (narrow ? railFor === pathname : railOpenWide);
+  const toggleRail = () => {
+    if (narrow) setRailFor(railShown ? null : pathname);
+    else setRailOpenWide(!railShown);
+  };
+
   return (
     <FrameContext.Provider value={frame}>
       <div ref={frameRoot} data-docs-app-root="" data-docs-shared-ui="" style={{ position: "fixed", inset: 0 }}>
         <EditorShell
           sidebarOpen={sidebarOpen}
-          railOpen={false}
+          railOpen={railShown}
+          rail={
+            railShown && railSummary ? (
+              <InfoPanel
+                summary={railSummary}
+                page={railPage}
+                author={initial.me}
+                recordingSec={list.details?.id === railSummary.id ? list.details.recordingSec : null}
+                open={settingsOpen}
+                onToggle={() => setSettingsOpen((open) => !open)}
+                onExportMarkdown={menu.exportMarkdown}
+                onDelete={menu.askDelete}
+              />
+            ) : undefined
+          }
           sidebar={
             <ShellSidebar
               items={items}
@@ -538,6 +594,8 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                   </span>
                 </>
               }
+              railOpen={railShown}
+              onToggleRail={railSummary ? toggleRail : undefined}
               more={menu.more}
               publish={publishing.publish}
             />

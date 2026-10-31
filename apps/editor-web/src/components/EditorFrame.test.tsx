@@ -9,7 +9,8 @@ import { SAVE_STATUS_TEXT, type SaveStatus } from "@/lib/save-status";
 import { isMacPlatform } from "@/lib/use-search-shortcut";
 import { COPIED_NOTE_MS } from "./ShareSheet";
 import { EditorFrame, useEditorFrame, type AttachedPage, type FrameInitial } from "./EditorFrame";
-import { PageEditor } from "./PageEditor";
+import { COUNT_DELAY_MS } from "./InfoPanel";
+import { LANG_NOT_SAVED, PageEditor } from "./PageEditor";
 
 // 公開のシートの読み込み（#39）は PagePublish.test.tsx で本物の fetch の形で確かめる。ここでは、ページを開くたびに出る読み込みが
 // fetch の呼び出しの順や回数（複製・削除・書き出しの検査）を乱さないよう、読めなかったことにする
@@ -455,7 +456,20 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     return <p>合成の本文</p>;
   }
   function fakePage(id: string | null, over: Partial<AttachedPage> = {}): AttachedPage {
-    return { id, status: "saved", flush: vi.fn(async () => true), revision: () => 1, reopen: vi.fn(), shared: null, setShared: vi.fn(), ...over };
+    return {
+      id,
+      status: "saved",
+      flush: vi.fn(async () => true),
+      revision: () => 1,
+      reopen: vi.fn(),
+      shared: null,
+      setShared: vi.fn(),
+      lang: "ja",
+      setLang: vi.fn(),
+      langNote: null,
+      text: { read: () => "", subscribe: () => () => undefined },
+      ...over,
+    };
   }
   function deferred<T>() {
     let resolve: (value: T) => void = () => undefined;
@@ -484,6 +498,19 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     await act(async () => menuItems().find((item) => item.textContent?.startsWith(label))!.click());
     await tick();
   }
+  // 情報パネル（#34 第 3 段）
+  const railButton = () => container!.querySelector<HTMLButtonElement>('.es-dt button[aria-label="このページの設定と AI"]');
+  const rail = () => container!.querySelector<HTMLElement>("#es-rail");
+  const inRail = (label: string) => [...(rail()?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent?.trim() === label);
+  const pressedLang = () => [...(rail()?.querySelectorAll('button[aria-pressed="true"]') ?? [])].map((button) => button.textContent);
+  const railAlert = () => rail()?.querySelector('[role="alert"]')?.textContent;
+  const infoRows = () => [...(rail()?.querySelectorAll(".es-kv > div") ?? [])].map((row) => [row.querySelector("dt")?.textContent, row.querySelector("dd")?.textContent]);
+  /** 端末の日付（YYYY-MM-DD。情報パネルの作成・更新の期待値）。 */
+  const localDay = (iso: string) => {
+    const date = new Date(iso);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  };
+  const openRail = () => act(async () => railButton()!.click());
 
   beforeEach(() => {
     nav.pathname = `/p/${A}`;
@@ -1262,6 +1289,233 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(container!.querySelector('.es-dt [role="status"]')?.textContent).toBe("");
   });
 
+  describe("情報パネル (#34 第 3 段)", () => {
+    /** 開いたページ（OpenPage と同じく、一覧の行と録音の長さを枠に知らせ、エディタの代わりを登録する）。 */
+    function OpenedFake({ summary, page: attached, recordingSec = null }: { summary: PageSummary; page: AttachedPage; recordingSec?: number | null }) {
+      const { attachPage, pageOpened } = useEditorFrame();
+      useEffect(() => pageOpened(summary, { recordingSec }), [pageOpened, summary, recordingSec]);
+      useEffect(() => attachPage(attached), [attachPage, attached]);
+      return <p>合成の本文</p>;
+    }
+    const headings = () => [...rail()!.querySelectorAll("h2, h3")].map((heading) => `${heading.tagName}:${heading.textContent?.replace("▾", "")}`);
+
+    it("opens and closes from the header (aria-expanded, aria-controls, a named rail, h2 then h3); the rail has no publish items (the 公開 button is the frame header's)", async () => {
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A)} />);
+      const button = railButton()!;
+      expect(button.getAttribute("aria-expanded")).toBe("false");
+      expect(button.getAttribute("aria-controls")).toBe("es-rail");
+      expect(rail()).toBeNull();
+      expect(shell().rail).toBe("closed");
+
+      await openRail();
+      expect(button.getAttribute("aria-expanded")).toBe("true");
+      expect(rail()?.tagName).toBe("ASIDE");
+      expect(rail()?.getAttribute("aria-label")).toBe("このページの設定");
+      expect(shell().rail).toBe("open");
+      expect(headings()).toEqual(["H2:ページ設定", "H3:言語", "H3:著者", "H3:ページ", "H3:書き出し"]);
+      // 公開の項目（発信先・カテゴリ・関連する体験）・Google ドキュメントはレールに出さない。公開ボタンは枠のヘッダーのもの（#39）
+      expect(rail()!.textContent).not.toMatch(/発信先|カテゴリ|関連する体験|公開|Google/);
+      expect(container!.querySelector(".es-pubbtn")).not.toBeNull();
+      expect([...rail()!.querySelectorAll("button")].map((item) => item.textContent?.replace("▾", "").trim())).toEqual(["ページ設定", "日本語", "English", "Markdown", "ページを削除"]);
+
+      // 節を閉じると、見出しに「自分だけ」
+      const section = rail()!.querySelector<HTMLButtonElement>("h2 button")!;
+      await act(async () => section.click());
+      expect(section.getAttribute("aria-expanded")).toBe("false");
+      expect(section.textContent).toContain("自分だけ");
+      await act(async () => section.click());
+      expect(section.textContent).not.toContain("自分だけ");
+
+      await act(async () => button.click());
+      expect(rail()).toBeNull();
+      expect(button.getAttribute("aria-expanded")).toBe("false");
+      expect(shell().rail).toBe("closed");
+    });
+
+    it("desktop: stays open when another page opens (as the mock v6), is not there on the settings, and is back on a page", async () => {
+      await mount({ pages: [page(A, "合成の題名"), page(B, "別のページ")] }, <FakePage page={fakePage(A)} />);
+      await openRail();
+      nav.pathname = `/p/${B}`;
+      await rerender(<FakePage page={fakePage(B, { lang: "en" })} />);
+      expect(rail()).not.toBeNull();
+      expect(pressedLang()).toEqual(["English"]);
+      expect(railButton()?.getAttribute("aria-expanded")).toBe("true");
+
+      nav.pathname = "/settings";
+      await rerender(null);
+      expect(railButton()).toBeNull();
+      expect(rail()).toBeNull();
+      expect(shell().rail).toBe("closed");
+
+      nav.pathname = `/p/${A}`;
+      await rerender(<FakePage page={fakePage(A)} />);
+      expect(rail()).not.toBeNull();
+      expect(pressedLang()).toEqual(["日本語"]);
+    });
+
+    it("narrow: the rail is the whole screen under the header, the same button closes it, and opening another page closes it", async () => {
+      narrow = true;
+      await mount({ pages: [page(A, "合成の題名"), page(B, "別のページ")], initialNarrow: true }, <FakePage page={fakePage(A)} />);
+      expect(shell().view).toBe("page");
+      await openRail();
+      expect(shell().view).toBe("rail");
+      expect(railButton()?.getAttribute("aria-expanded")).toBe("true");
+      await act(async () => railButton()!.click());
+      expect(shell().view).toBe("page");
+      expect(rail()).toBeNull();
+
+      await openRail();
+      nav.pathname = `/p/${B}`;
+      await rerender(<FakePage page={fakePage(B)} />);
+      expect(rail()).toBeNull();
+      expect(shell().view).toBe("page");
+      expect(railButton()?.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("has no button on a page not created yet, the recording start, the settings, or a page with no editor; while the drafts are read it shows but does nothing", async () => {
+      nav.pathname = "/p/new";
+      const uncreated = fakePage(null);
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={uncreated} />);
+      expect(railButton()).toBeNull();
+      nav.search = "from=recording";
+      await rerender(null);
+      expect(railButton()).toBeNull();
+      nav.search = "";
+      nav.pathname = "/account";
+      await rerender(null);
+      expect(railButton()).toBeNull();
+      // 開けなかったページ（404。一覧に行があってもエディタが無い）
+      nav.pathname = `/p/${A}`;
+      await rerender(null);
+      expect(railButton()).toBeNull();
+
+      // 端末の下書きを読んでいる間（id はまだ無い）: レールは出せるが、押しても何もしない。文字数はまだ数えない
+      const loading = fakePage(null, { lang: "en" });
+      await rerender(<FakePage page={loading} />);
+      await openRail();
+      expect(rail()).not.toBeNull();
+      expect(pressedLang()).toEqual(["日本語"]);
+      await act(async () => inRail("English")!.click());
+      await act(async () => inRail("ページを削除")!.click());
+      expect(loading.setLang).not.toHaveBeenCalled();
+      expect(dialog()).toBeNull();
+      expect(infoRows().map(([label]) => label)).toEqual(["作成", "更新"]);
+      // 読み終えた
+      await rerender(<FakePage page={fakePage(A, { lang: "en" })} />);
+      expect(pressedLang()).toEqual(["English"]);
+      expect(infoRows().map(([label]) => label)).toEqual(["作成", "更新", "文字数"]);
+    });
+
+    it("shows the signed-in name without a title, the dates, the recording length and the count (characters in ja, words in en) that follows the body", async () => {
+      const listeners = new Set<() => void>();
+      let body = "合成の 本文です";
+      const text = {
+        read: () => body,
+        subscribe: (onChange: () => void) => {
+          listeners.add(onChange);
+          return () => {
+            listeners.delete(onChange);
+          };
+        },
+      };
+      const summary: PageSummary = { ...page(A, "合成の録音"), kind: "rec", createdAt: "2026-10-28T09:00:00.000Z", updatedAt: "2026-10-30T18:00:00.000Z" };
+      const a = fakePage(A, { text });
+      await mount({ pages: [summary] }, <OpenedFake summary={summary} page={a} recordingSec={878} />);
+      await openRail();
+      const me = rail()!.querySelector(".es-me")!;
+      expect(me.querySelector("div")?.textContent).toBe("開発ユーザー");
+      expect(me.querySelector("small")).toBeNull();
+      expect(me.querySelector(".es-av")?.textContent).toBe("開");
+      expect(infoRows()).toEqual([
+        ["作成", localDay(summary.createdAt)],
+        ["更新", localDay(summary.updatedAt)],
+        ["録音", "14:38"],
+        ["文字数", "7"],
+      ]);
+
+      // 本文が変わったら、少し待ってから数え直す（打つたびには数えない）
+      body = "合成の本文です。続き";
+      await act(async () => listeners.forEach((listener) => listener()));
+      expect(infoRows().at(-1)).toEqual(["文字数", "7"]);
+      await act(async () => new Promise((resolve) => setTimeout(resolve, COUNT_DELAY_MS + 50)));
+      expect(infoRows().at(-1)).toEqual(["文字数", "10"]);
+
+      // 英語のページは語数
+      body = "A synthetic body";
+      await act(async () => listeners.forEach((listener) => listener()));
+      await act(async () => new Promise((resolve) => setTimeout(resolve, COUNT_DELAY_MS + 50)));
+      await rerender(<OpenedFake summary={summary} page={{ ...a, lang: "en" }} recordingSec={878} />);
+      expect(infoRows().at(-1)).toEqual(["文字数", "3 words"]);
+
+      // パネルを閉じたら、本文の知らせを受けない
+      await act(async () => railButton()!.click());
+      expect(listeners.size).toBe(0);
+    });
+
+    it("shows the language note the page gives, under 言語", async () => {
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A, { langNote: LANG_NOT_SAVED })} />);
+      await openRail();
+      expect(railAlert()).toBe("言語を保存できませんでした");
+      expect(rail()!.querySelector('[role="alert"]')?.closest("section")?.querySelector("h3")?.textContent).toBe("言語");
+    });
+
+    it("Markdown saves first, then clicks the same export.md link as the … (the focus stays on the button); unsaved edits stop it with a reason", async () => {
+      const calls: string[] = [];
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+        calls.push(`click ${this.getAttribute("href")} ${this.getAttribute("download")}`);
+      });
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      await mount({ pages: [page(A, "合成の題名")] }, <FakePage page={fakePage(A, { flush: vi.fn(async () => (calls.push("flush"), true)) })} />);
+      await openRail();
+      const markdown = inRail("Markdown")!;
+      markdown.focus();
+      await act(async () => markdown.click());
+      await tick();
+      expect(calls).toEqual(["flush", `click /api/pages/${A}/export.md `]);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(markdown);
+
+      calls.length = 0;
+      await rerender(<FakePage page={fakePage(A, { status: "offline", flush: vi.fn(async () => (calls.push("flush"), false)) })} />);
+      await act(async () => inRail("Markdown")!.click());
+      await tick();
+      expect(calls).toEqual(["flush"]);
+      expect(headerAlert()).toBe("書き出しの前に変更を保存できませんでした");
+    });
+
+    it("ページを削除 opens the same confirmation as the …; やめる gives the focus back to it; 削除する saves, DELETEs and leaves the page", async () => {
+      const calls: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit) => {
+          calls.push(`${init.method} ${url}`);
+          return new Response(null, { status: 204 });
+        }),
+      );
+      await mount({ pages: [page(A, "合成の題名"), page(D, "別のページ")] }, <FakePage page={fakePage(A, { flush: vi.fn(async () => (calls.push("flush"), true)) })} />);
+      await openRail();
+      const remove = inRail("ページを削除")!;
+      expect(remove.className).toContain("es-danger");
+      remove.focus();
+      await act(async () => remove.click());
+      expect(dialog()?.getAttribute("aria-label")).toBe("ページの削除");
+      expect(document.activeElement).toBe(dialogButton("やめる"));
+      expect(calls).toEqual([]);
+      await act(async () => dialogButton("やめる").click());
+      expect(dialog()).toBeNull();
+      expect(document.activeElement).toBe(remove);
+
+      await act(async () => remove.click());
+      await act(async () => dialogButton("削除する").click());
+      await tick();
+      expect(calls).toEqual(["flush", `DELETE /api/pages/${A}`]);
+      expect(dialog()).toBeNull();
+      expect(rows()).toEqual(["別のページ"]);
+      expect(nav.push).toHaveBeenCalledWith("/");
+    });
+  });
+
   describe("with the real PageEditor", () => {
     const typeTitle = async (value: string) => {
       const title = container!.querySelector<HTMLTextAreaElement>("textarea.page-title")!;
@@ -1429,6 +1683,191 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    describe("the language in the info panel (#34 第 3 段)", () => {
+      type Call = { method: string; url: string; body: Record<string, unknown> | null };
+      /** 保存（PATCH）を受ける合成のサーバー。`answer` で応答を差し替える（既定は revision を 1 つ進める）。 */
+      function savingServer(calls: Call[], answer?: (body: Record<string, unknown>) => Response | undefined | Promise<Response | undefined>) {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (url: string, init: RequestInit) => {
+            const sent = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+            calls.push({ method: String(init.method), url, body: sent });
+            const custom = sent ? await answer?.(sent) : undefined;
+            return custom ?? json(200, { page: { id: A, revision: (sent!.baseRevision as number) + 1 } });
+          }),
+        );
+      }
+      /** OpenPage と同じく、保存と言語を一覧へ知らせるエディタ。 */
+      function Opened({ lang = "ja", drafts = null }: { lang?: "ja" | "en"; drafts?: ReturnType<typeof createIndexedDbDraftStorage> }) {
+        const frame = useEditorFrame();
+        return (
+          <PageEditor
+            page={{ id: A, title: "合成の題名", blocks: [], revision: 1, updatedAt: UPDATED_AT, lang }}
+            drafts={drafts}
+            onSaved={() => frame.pageSaved(A)}
+            onLangChange={(next) => frame.pageLangChanged(A, next)}
+          />
+        );
+      }
+      async function untilAsync(condition: () => Promise<boolean>) {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (await condition()) return;
+          await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+        }
+        expect(await condition()).toBe(true);
+      }
+
+      it("sends the language at once on the same autosave (baseRevision), the dot says 保存中 then 保存済み, the next save builds on it, and the list gets it", async () => {
+        const calls: Call[] = [];
+        const answered = deferred<void>();
+        savingServer(calls, async (body) => {
+          if (body.lang !== undefined) await answered.promise;
+          return undefined;
+        });
+        await mount({ pages: [page(A, "合成の題名")] }, <Opened />);
+        await until(() => moreButton() !== null);
+        await openRail();
+        expect(pressedLang()).toEqual(["日本語"]);
+
+        await act(async () => inRail("English")!.click());
+        expect(pressedLang()).toEqual(["English"]);
+        expect(tip()).toBe("自分だけ · 保存中");
+        // 1 秒の自動保存を待たずに送る
+        expect(calls).toEqual([{ method: "PATCH", url: `/api/pages/${A}`, body: { lang: "en", baseRevision: 1 } }]);
+        await act(async () => answered.resolve());
+        await tick();
+        expect(tip()).toBe("自分だけ · 保存済み");
+        expect(railAlert()).toBeUndefined();
+
+        // 次の保存は、言語を保存したあとの revision の上に（revision をずらさない・競合にしない）
+        await typeTitle("合成の題名 2");
+        await saveNow();
+        await tick();
+        expect(calls.at(-1)).toEqual({ method: "PATCH", url: `/api/pages/${A}`, body: { title: "合成の題名 2", baseRevision: 2 } });
+
+        // 一覧の行の言語も替わった（エディタが下書きを読み直している間は、一覧の行の言語を出す）
+        await rerender(<FakePage page={fakePage(null)} />);
+        expect(pressedLang()).toEqual(["English"]);
+      });
+
+      it("a failed save puts the language the server has back with a short note, and sends that one too (the server ends as the screen says)", async () => {
+        const calls: Call[] = [];
+        let fail = true;
+        savingServer(calls, () => (fail ? json(500, { error: "internal" }) : undefined));
+        await mount({ pages: [page(A, "合成の題名")] }, <Opened />);
+        await until(() => moreButton() !== null);
+        await openRail();
+        await act(async () => inRail("English")!.click());
+        await tick();
+        expect(calls.map((call) => call.body)).toEqual([{ lang: "en", baseRevision: 1 }]);
+        expect(pressedLang()).toEqual(["日本語"]);
+        expect(railAlert()).toBe(LANG_NOT_SAVED);
+        expect(tip()).toBe("自分だけ · 保存に失敗しました。もう一度試します");
+
+        // 届いたか分からない失敗だったので、戻した言語も送る
+        fail = false;
+        await saveNow();
+        await tick();
+        expect(calls.at(-1)?.body).toEqual({ lang: "ja", baseRevision: 1 });
+        expect(tip()).toBe("自分だけ · 保存済み");
+        expect(railAlert()).toBe(LANG_NOT_SAVED);
+        // 次に変えたら一言は消える
+        await act(async () => inRail("English")!.click());
+        await tick();
+        expect(railAlert()).toBeUndefined();
+        expect(calls.at(-1)?.body).toEqual({ lang: "en", baseRevision: 2 });
+        expect(pressedLang()).toEqual(["English"]);
+      });
+
+      it("another screen saved first: the band stops the save (not taken as its own even with the same title and body), the language goes back, and この内容で上書き carries it", async () => {
+        const calls: Call[] = [];
+        // 別の画面が revision 3 まで進めていた（題名・本文は同じ。言語は日本語のまま）
+        savingServer(calls, (body) =>
+          body.baseRevision === 1
+            ? json(409, { error: "conflict", page: { id: A, kind: "note", title: "合成の題名", lang: "ja", blocks: [], revision: 3, updatedAt: UPDATED_AT } })
+            : undefined,
+        );
+        await mount({ pages: [page(A, "合成の題名")] }, <Opened />);
+        await until(() => moreButton() !== null);
+        await openRail();
+        await act(async () => inRail("English")!.click());
+        await tick();
+        expect(container!.querySelector("[data-conflict-band]")).not.toBeNull();
+        expect(tip()).toBe("自分だけ · 保存を止めています");
+        expect(pressedLang()).toEqual(["日本語"]);
+        expect(railAlert()).toBe(LANG_NOT_SAVED);
+
+        // 帯が出ている間に変えても、保存は止まったまま（戻して一言）
+        await act(async () => inRail("English")!.click());
+        await tick();
+        expect(calls).toHaveLength(1);
+        expect(pressedLang()).toEqual(["日本語"]);
+
+        await act(async () => [...container!.querySelectorAll<HTMLButtonElement>("[data-conflict-band] button")].find((item) => item.textContent === "この内容で上書き")!.click());
+        await tick();
+        expect(calls.at(-1)?.body).toMatchObject({ title: "合成の題名", lang: "ja", baseRevision: 3, overwrite: true });
+        expect(container!.querySelector("[data-conflict-band]")).toBeNull();
+        expect(tip()).toBe("自分だけ · 保存済み");
+        // 上書きのあとは普通に変えられる
+        await act(async () => inRail("English")!.click());
+        await tick();
+        expect(calls.at(-1)?.body).toEqual({ lang: "en", baseRevision: 4 });
+        expect(pressedLang()).toEqual(["English"]);
+      });
+
+      it("keeps the language when a version is restored (the reopened editor says English and does not send it again)", async () => {
+        const calls: Array<{ method: string; url: string; body: unknown }> = [];
+        restoringServer(calls);
+        await mount({ pages: [page(A, "合成の題名")] }, <PageEditor page={{ id: A, title: "合成の題名", blocks: paragraph("今の本文"), revision: 4, updatedAt: UPDATED_AT, lang: "ja" }} drafts={null} />);
+        await until(() => moreButton() !== null);
+        await openRail();
+        await act(async () => inRail("English")!.click());
+        await tick();
+        expect(calls.at(-1)).toEqual({ method: "PATCH", url: `/api/pages/${A}`, body: { lang: "en", baseRevision: 4 } });
+        await restoreFirstVersion();
+        // 戻すのは言語を保存したあとの revision の上に
+        expect(calls.find((call) => call.url.endsWith("/restore"))?.body).toEqual({ baseRevision: 5 });
+        expect(body()).toBe("戻した本文");
+        expect(pressedLang()).toEqual(["English"]);
+        // 合成のサーバーは戻したあとの revision を 5 で返す。言語は送り直さない
+        await typeTitle("合成の題名 2");
+        await saveNow();
+        await tick();
+        expect(calls.at(-1)).toEqual({ method: "PATCH", url: `/api/pages/${A}`, body: { title: "合成の題名 2", baseRevision: 5 } });
+      });
+
+      it("keeps the language in the device's draft until it reaches the server, and a draft with another language opens in that language and saves it", async () => {
+        const calls: Call[] = [];
+        const answered = deferred<void>();
+        savingServer(calls, async () => {
+          await answered.promise;
+          return undefined;
+        });
+        const drafts = createIndexedDbDraftStorage(new IDBFactory())!;
+        await mount({ pages: [page(A, "合成の題名")] }, <Opened drafts={drafts} />);
+        await until(() => moreButton() !== null);
+        await openRail();
+        await act(async () => inRail("English")!.click());
+        await untilAsync(async () => (await drafts.get(A))?.lang === "en");
+        expect(await drafts.get(A)).toMatchObject({ baseRevision: 1, title: "合成の題名", lang: "en" });
+        await act(async () => answered.resolve());
+        await untilAsync(async () => (await drafts.get(A)) === null);
+
+        // 届く前に閉じた下書き（同じ revision・言語だけ違う）を持って開き直す
+        await act(async () => root!.unmount());
+        container!.remove();
+        await drafts.put(A, { baseRevision: 1, title: "合成の題名", blocks: [], lang: "en", savedAt: "2026-10-31T02:30:00.000Z" });
+        calls.length = 0;
+        await mount({ pages: [page(A, "合成の題名")] }, <Opened drafts={drafts} />);
+        await until(() => moreButton() !== null);
+        await openRail();
+        expect(pressedLang()).toEqual(["English"]);
+        await saveNow();
+        await untilAsync(async () => calls.length > 0);
+        expect(calls[0]?.body).toMatchObject({ title: "合成の題名", lang: "en", baseRevision: 1 });
+      });
     });
   });
 });
