@@ -149,14 +149,56 @@ describe("every operation of the format bar and the block lists keeps the body w
   });
 });
 
+describe("the callout (#33)", () => {
+  it("wraps the line in a callout that the AST accepts, and holds blocks", () => {
+    const current = makeEditor({ type: "doc", content: [p("囲みにする")] });
+    expect(setLineType(current, "callout")).toBe(true);
+    expect(lineTypeOf(current.state)).toBe("callout");
+    const body = current.getJSON().content ?? [];
+    expect((body[0] as JSONContent).type).toBe("callout");
+    const saved = validateBlocks(body);
+    expect(saved.ok, saved.ok ? "" : saved.reason).toBe(true);
+
+    // 入れ物なので、中に別のブロックを足せる
+    current.commands.toggleBulletList();
+    const withList = validateBlocks(current.getJSON().content ?? []);
+    expect(withList.ok, withList.ok ? "" : withList.reason).toBe(true);
+    expect(JSON.stringify(current.getJSON())).toContain('"type":"callout"');
+  });
+
+  it("is rendered as aside[data-callout], and parses that back", () => {
+    const current = makeEditor({ type: "doc", content: [{ type: "callout", content: [p("補足")] }] });
+    expect(current.getHTML()).toContain('<aside data-callout=""');
+    // 同じ形の HTML を貼り直しても囲みに戻る（編集画面と共有ページで同じ DOM）
+    const again = makeEditor();
+    again.commands.setContent('<aside data-callout=""><p>補足</p></aside>');
+    expect((again.getJSON().content?.[0] as JSONContent | undefined)?.type).toBe("callout");
+  });
+
+  it("is removed by 「テキスト」 and leaves the blocks behind", () => {
+    const current = makeEditor({ type: "doc", content: [{ type: "callout", content: [p("中身")] }] });
+    current.commands.setTextSelection(3);
+    expect(setLineType(current, "paragraph")).toBe(true);
+    expect(JSON.stringify(current.getJSON())).not.toContain('"type":"callout"');
+    expect(JSON.stringify(current.getJSON())).toContain("中身");
+  });
+
+  it("never holds nothing (the AST refuses an empty callout)", () => {
+    expect(validateBlocks([{ type: "callout", content: [] }]).ok).toBe(false);
+  });
+});
+
 describe("the block choices", () => {
   it("never offer what this body cannot hold (heading 1, code, check, recording)", () => {
-    expect(BLOCK_CHOICES.map((choice) => choice.id)).toEqual(["paragraph", "h2", "h3", "bullet", "ordered", "quote", "hr", "image"]);
-    expect(filterBlockChoices("").map((choice) => choice.label)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "区切り線", "画像"]);
+    expect(BLOCK_CHOICES.map((choice) => choice.id)).toEqual(["paragraph", "h2", "h3", "bullet", "ordered", "quote", "callout", "hr", "image"]);
+    expect(filterBlockChoices("").map((choice) => choice.label)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "囲み", "区切り線", "画像"]);
     for (const query of ["録音", "code", "h1", "todo"]) expect(filterBlockChoices(query), query).toEqual([]);
     // 画像は一覧にあり、日本語でも英語でも絞れる。行の種類ではない
     for (const query of ["画像", "image", "がぞう"]) expect(filterBlockChoices(query).map((choice) => choice.id), query).toEqual(["image"]);
     expect(LINE_TYPE_CHOICES.map((choice) => choice.id)).not.toContain("image");
+    // 囲みは一覧にあり、日本語でも英語でも絞れる。引用と同じく行の種類でもある
+    for (const query of ["囲み", "callout", "かこみ", "補足"]) expect(filterBlockChoices(query).map((choice) => choice.id), query).toEqual(["callout"]);
+    expect(LINE_TYPE_CHOICES.map((choice) => choice.id)).toContain("callout");
   });
 
   it("opens the file picker for 画像 only when the page and the upload port are there", () => {

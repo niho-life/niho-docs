@@ -3,7 +3,7 @@ import { Fragment, type ReactNode } from "react";
 /**
  * 共有ページ（`/s/{token}`）の本文を React の要素にする（#34）。HTML の文字列は作らず、注入もしない。
  * 本文は TipTap の doc の content（ブロックの配列）。描くのは:
- * paragraph・heading（2 は h2、それ以外は h3）・bulletList・orderedList・listItem・blockquote・horizontalRule・hardBreak・text・image。
+ * paragraph・heading（2 は h2、それ以外は h3）・bulletList・orderedList・listItem・blockquote・callout・horizontalRule・hardBreak・text・image。
  * mark は bold・italic・link だけ（他の mark は無視して文字だけ）。リンクは https・http・mailto の絶対 URL だけを
  * リンクにし（javascript:・data:・相対・資格情報つきは文字だけ）、常に rel="noopener noreferrer nofollow ugc" を付ける。
  * 未知のノードは投げずに子だけを描く。再帰は深さ 64 で止める。
@@ -129,6 +129,13 @@ function renderNode(value: unknown, key: number, depth: number, assetSrc: AssetS
       return <li key={key}>{renderChildren(value, depth, assetSrc)}</li>;
     case "blockquote":
       return <blockquote key={key}>{renderChildren(value, depth, assetSrc)}</blockquote>;
+    case "callout":
+      // 囲み（#33）。編集画面と同じ `aside[data-callout]` で出す（見た目は docs-ui の editor.css）
+      return (
+        <aside key={key} data-callout="">
+          {renderChildren(value, depth, assetSrc)}
+        </aside>
+      );
     default:
       if (SKIPPED.has(String(value.type))) return null;
       // 未知のノードは子だけを描く

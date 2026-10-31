@@ -49,6 +49,7 @@ const MADE: Record<BlockChoiceId, JSONContent> = {
   bullet: { type: "bulletList", content: [{ type: "listItem", content: [paragraph()] }] },
   ordered: { type: "orderedList", content: [{ type: "listItem", content: [paragraph()] }] },
   quote: { type: "blockquote", content: [paragraph()] },
+  callout: { type: "callout", content: [paragraph()] },
   hr: { type: "horizontalRule" },
   image: paragraph(),
 };
@@ -244,7 +245,7 @@ describe("the format bar above the selected text", () => {
       await select(editor, 2, 4);
       await click(labelled("行の種類")!);
       const lineMenu = menu("行の種類");
-      expect(itemNames(lineMenu)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用"]);
+      expect(itemNames(lineMenu)).toEqual(["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "囲み"]);
       await click(menuItem(lineMenu, name));
       expect(menu("行の種類")).toBeNull();
       return savedBlocks(editor).slice(0, 1);
@@ -395,7 +396,7 @@ describe("the AI button of the format bar", () => {
 });
 
 describe("the 「/」 block list", () => {
-  const ALL = ["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "区切り線", "画像"];
+  const ALL = ["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "囲み", "区切り線", "画像"];
 
   it("opens on 「/」 in an empty line with the blocks this body can hold (no recording), keeping focus in the body", async () => {
     const editor = await renderHarness(doc(paragraph()));

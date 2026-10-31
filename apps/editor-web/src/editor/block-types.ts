@@ -11,7 +11,7 @@ import type { ShellIconName } from "niho-docs-ui/shell";
  * 画像（#33）はファイル選択を開く（選んだ画像を private bucket に入れてから、その行に入れる）。
  */
 
-export type BlockChoiceId = "paragraph" | "h2" | "h3" | "bullet" | "ordered" | "quote" | "hr" | "image";
+export type BlockChoiceId = "paragraph" | "h2" | "h3" | "bullet" | "ordered" | "quote" | "callout" | "hr" | "image";
 /** 行の種類（区切り線・画像は行の種類ではないので除く）。 */
 export type LineTypeId = Exclude<BlockChoiceId, "hr" | "image">;
 
@@ -33,6 +33,8 @@ export const BLOCK_CHOICES: readonly BlockChoice[] = [
   { id: "bullet", label: "箇条書き", icon: "list", hint: "-", aliases: ["bullet", "list", "ul", "kajougaki", "risuto", "りすと", "かじょうがき"] },
   { id: "ordered", label: "番号付き", icon: "list", hint: "1.", aliases: ["number", "numbered", "ordered", "list", "ol", "bangou", "ばんごう", "番号"] },
   { id: "quote", label: "引用", hint: ">", aliases: ["quote", "blockquote", "inyou", "いんよう"] },
+  // ローマ字は「kakoi」。「kakomi」にすると「mi」を含むので /mi（見出し）に混ざる（別名は部分一致なので「kako」で当たる）
+  { id: "callout", label: "囲み", hint: "", aliases: ["callout", "note", "box", "aside", "kakoi", "かこみ", "囲い", "メモ", "補足"] },
   { id: "hr", label: "区切り線", icon: "minus", hint: "---", aliases: ["divider", "hr", "line", "rule", "kugiri", "くぎり", "くぎりせん"] },
   { id: "image", label: "画像", icon: "img", hint: "", aliases: ["image", "img", "photo", "picture", "gazou", "がぞう", "しゃしん", "写真"] },
 ];
@@ -55,6 +57,7 @@ export function lineTypeOf(state: EditorState): LineTypeId | null {
   for (let depth = $from.depth - 1; depth > 0; depth--) {
     const node = $from.node(depth);
     if (node.type.name === "blockquote") return "quote";
+    if (node.type.name === "callout") return "callout";
     if (node.type.name === "listItem") return $from.node(depth - 1).type.name === "orderedList" ? "ordered" : "bullet";
   }
   return "paragraph";
@@ -87,6 +90,13 @@ export function setLineType(editor: Editor, id: LineTypeId): boolean {
       return chain
         .command(({ can, commands }) => can().setBlockquote() || commands.clearNodes())
         .setBlockquote()
+        .run();
+    case "callout":
+      if (editor.isActive("callout")) return chain.run();
+      // 引用と同じ: 包めないときは先に段落へ戻す
+      return chain
+        .command(({ can, commands }) => can().setCallout() || commands.clearNodes())
+        .setCallout()
         .run();
   }
 }
@@ -178,6 +188,8 @@ export function fillBlankLine(editor: Editor, id: BlockChoiceId, target: { range
       return chain.toggleOrderedList().run();
     case "quote":
       return chain.setBlockquote().run();
+    case "callout":
+      return chain.setCallout().run();
     case "hr":
       // 空の段落を区切り線に置き換え、次の行（無ければ空の段落を足す）へカーソルを移す
       return chain.setHorizontalRule().run();

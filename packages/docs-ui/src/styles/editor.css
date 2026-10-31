@@ -138,6 +138,24 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .doc hr.ProseMirror-selectednode {
   border-top-color: var(--niho-dark);
 }
+
+/* 囲み（#33。限定 AST の callout。editor-web の src/editor/callout.ts が aside[data-callout] で描く） */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .doc aside[data-callout] {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  /* 淡い面＋通常の文字（濃い色を面に使わない。color-style-guide の淡色面の作法） */
+  background: var(--niho-orange-pale);
+  color: var(--niho-text);
+}
+/* 中の最後のブロックの下の余白は入れ物が持つ */
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .doc aside[data-callout] > :last-child {
+  margin-bottom: 0;
+}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .doc aside[data-callout].ProseMirror-selectednode {
+  outline: 2px solid var(--niho-orange);
+  outline-offset: 1px;
+}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .doc :not(pre) > code {
   background: var(--docs-inset);
   border: 1px solid var(--docs-line-firm);

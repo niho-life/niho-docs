@@ -61,11 +61,11 @@ describe("the page editor schema matches the limited AST", () => {
     expect(Object.keys(current.schema.marks).filter((name) => !MARK_NAMES.includes(name))).toEqual([]);
   });
 
-  it("differs from the AST only by what has no way to be created yet (callout, recording)", () => {
+  it("differs from the AST only by what has no way to be created yet (recording)", () => {
     const current = makeEditor();
     const missing = [...BLOCK_NODE_NAMES, ...INLINE_NODE_NAMES, "listItem"].filter((name) => !(name in current.schema.nodes));
-    // 画像（#33）は入れ方があるので schema にある。囲み・録音はまだ作る手段が無い
-    expect(missing.sort()).toEqual(["callout", "recording"]);
+    // 画像・囲み（#33）は入れ方があるので schema にある。録音はまだ作る手段が無い
+    expect(missing.sort()).toEqual(["recording"]);
     expect(MARK_NAMES.filter((name) => !(name in current.schema.marks))).toEqual([]);
   });
 
