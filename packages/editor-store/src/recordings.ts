@@ -8,6 +8,7 @@ import type { OwnerId, PageLang, Queryable } from "./types.ts";
  * どれも null（呼び出し側は同じ 404 にする）。
  * 書き込みは revision を見る: 呼び出し側が読んだ revision と今の revision が違えば書かずに最新を返す（別の画面で先に直された）。
  * 段落・話者の操作そのもの（純粋な関数）は呼び出し側が持ち、ここは形の検査と保存だけをする。
+ * 音声から作る録音（source = 'audio'。#36 段 2a）は recording-audio.ts の startAudioRecording で作る（音声の資産と一緒に入れる）。
  */
 
 /** 段落の数の上限（0007 の CHECK と同じ）。1 時間の録音を数秒ごとに区切っても収まり、1 行の jsonb を数 MB に抑える。 */
@@ -34,6 +35,16 @@ export type RecordingSource = (typeof RECORDING_SOURCES)[number];
 /** 段落（docs-core の SpeechResultV1 の segments と同じ形）。時刻は秒（無ければ両方 null）、話者は 1 始まりの番号か null。 */
 export type RecordingSegment = { start: number | null; end: number | null; text: string; speaker: number | null };
 
+/** アップロードの状態（migrations/0008_recording_audio.sql の audio_status のうち、音声があるもの）。 */
+export const RECORDING_AUDIO_STATUSES = ["uploading", "uploaded"] as const;
+export type RecordingAudioStatus = (typeof RECORDING_AUDIO_STATUSES)[number];
+
+/**
+ * 録音の音声（#36 段 2a）。bytes と contentType はクライアントの申告の値（assets の行）。expiresAt は bucket のライフサイクル規則で
+ * 消える見込みの時刻（表示のためだけ。アプリは消さない）。
+ */
+export type RecordingAudio = { status: RecordingAudioStatus; bytes: number; contentType: string; expiresAt: string | null };
+
 /** 書き換えられる部分。speakerNames のキーは話者番号の 10 進の文字列（"1"）で、segments に出てくる話者だけ。 */
 export type RecordingData = { segments: RecordingSegment[]; speakerNames: Record<string, string> };
 
@@ -47,6 +58,8 @@ export type Recording = {
   sourceSha256: string | null;
   segments: RecordingSegment[];
   speakerNames: Record<string, string>;
+  /** 音声（#36 段 2a）。音声の無い録音（VTT の取り込み）は null。 */
+  audio: RecordingAudio | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -88,14 +101,14 @@ export class InvalidRecordingError extends TypeError {
   }
 }
 
-function assertOwner(owner: OwnerId): void {
+export function assertOwner(owner: OwnerId): void {
   // store.ts と同じ守り: 認証の層の誤りで空の owner が来たときに、誰のものでもない行を読み書きしない
   if (typeof owner !== "string" || owner.length === 0 || owner.length > 256) {
     throw new TypeError("editor-store: owner must be a non-empty stable user id");
   }
 }
 
-function isInvalidTextRepresentation(error: unknown): boolean {
+export function isInvalidTextRepresentation(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "22P02";
 }
 
@@ -103,16 +116,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function charCount(text: string): number {
+export function charCount(text: string): number {
   return Array.from(text).length;
 }
 
 /** 対になっていない surrogate（PostgreSQL の jsonb に入らない）。 */
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 /** 名前に入れない制御文字（docs-core の speech-result の speakerNames と同じ範囲）。 */
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+export const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const SPEAKER_KEY = /^[1-9]\d*$/;
-const SHA256 = /^[0-9a-f]{64}$/;
+export const SHA256 = /^[0-9a-f]{64}$/;
 
 /** 保存できる文字か（NUL・対になっていない surrogate を含まない）。 */
 export function isStorableText(text: string): boolean {
@@ -196,6 +209,8 @@ function assertData(data: unknown): asserts data is RecordingData {
 function metadataProblem(input: CreateRecordingInput): string | null {
   if (input.lang !== "ja" && input.lang !== "en") return "lang";
   if (!(RECORDING_SOURCES as readonly string[]).includes(input.source)) return "source";
+  // 音声の録音は資産と一緒に作る（recording-audio.ts の startAudioRecording）。ここでは作らない
+  if (input.source === "audio") return "source";
   const title = input.title ?? "";
   if (typeof title !== "string" || !isStorableText(title) || charCount(title) > PAGE_TITLE_MAX_CHARS) return "title";
   const engine = input.engine ?? null;
@@ -221,7 +236,7 @@ function metadataProblem(input: CreateRecordingInput): string | null {
   return null;
 }
 
-type RecordingRow = {
+export type RecordingRow = {
   revision: number;
   source: RecordingSource;
   language: PageLang;
@@ -231,15 +246,33 @@ type RecordingRow = {
   source_sha256: string | null;
   segments: RecordingSegment[];
   speaker_names: Record<string, string>;
+  audio_status: "none" | RecordingAudioStatus;
+  audio_bytes: string | null;
+  audio_content_type: string | null;
+  audio_expires_at: Date | null;
   created_at: Date;
   updated_at: Date;
 };
 
-// numeric は pg が文字列で返すので、float8 にして number で受ける
-const RECORDING_COLUMNS = `r.revision, r.source, r.language, r.engine, r.duration_sec::float8 AS duration_sec, r.source_name,
-       r.source_sha256, r.segments, r.speaker_names, r.created_at, r.updated_at`;
+// numeric は pg が文字列で返すので、float8 にして number で受ける。bigint（assets.bytes）は文字列で受けて数にする。
+// 音声の大きさと種類は assets の行から引く（UPDATE・INSERT の RETURNING でも使えるよう、join ではなく副問い合わせ）。
+export const RECORDING_COLUMNS = `r.revision, r.source, r.language, r.engine, r.duration_sec::float8 AS duration_sec, r.source_name,
+       r.source_sha256, r.segments, r.speaker_names, r.audio_status, r.audio_expires_at,
+       (SELECT a.bytes::text FROM assets AS a WHERE a.owner = r.owner AND a.id = r.audio_asset) AS audio_bytes,
+       (SELECT a.content_type FROM assets AS a WHERE a.owner = r.owner AND a.id = r.audio_asset) AS audio_content_type,
+       r.created_at, r.updated_at`;
 
-function toRecording(row: RecordingRow): Recording {
+function toAudio(row: RecordingRow): RecordingAudio | null {
+  if (row.audio_status === "none" || row.audio_bytes === null || row.audio_content_type === null) return null;
+  return {
+    status: row.audio_status,
+    bytes: Number(row.audio_bytes),
+    contentType: row.audio_content_type,
+    expiresAt: row.audio_expires_at ? row.audio_expires_at.toISOString() : null,
+  };
+}
+
+export function toRecording(row: RecordingRow): Recording {
   const data = copyData({ segments: row.segments, speakerNames: row.speaker_names });
   return {
     revision: row.revision,
@@ -251,13 +284,14 @@ function toRecording(row: RecordingRow): Recording {
     sourceSha256: row.source_sha256,
     segments: data.segments,
     speakerNames: data.speakerNames,
+    audio: toAudio(row),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
 }
 
 // 本人の・ゴミ箱でないページの録音。$1 owner / $2 page id。
-const GET_SQL = `
+export const GET_SQL = `
 SELECT ${RECORDING_COLUMNS}
   FROM page_recordings AS r
   JOIN pages AS p ON p.owner = r.owner AND p.id = r.page_id
@@ -266,7 +300,7 @@ SELECT ${RECORDING_COLUMNS}
 const LOCK_SQL = `${GET_SQL}
    FOR UPDATE OF r`;
 
-const INSERT_PAGE_SQL = `
+export const INSERT_PAGE_SQL = `
 INSERT INTO pages (owner, kind, title, lang, blocks)
 VALUES ($1, 'rec', $2, $3, '[]'::jsonb)
 RETURNING id, kind, title, lang, created_at, updated_at`;
@@ -290,12 +324,12 @@ UPDATE page_recordings AS r
 RETURNING ${RECORDING_COLUMNS}`;
 
 // 録音を直したらページの更新時刻も進める（サイドバーの更新順に反映する）。pages.revision は #33 のページ本文の保存の番号なので触らない。
-const TOUCH_PAGE_SQL = `
+export const TOUCH_PAGE_SQL = `
 UPDATE pages
    SET updated_at = GREATEST(clock_timestamp(), updated_at)
  WHERE owner = $1 AND id = $2`;
 
-async function rollback(client: Pick<PoolClient, "query">): Promise<void> {
+export async function rollback(client: Pick<PoolClient, "query">): Promise<void> {
   await client.query("ROLLBACK").catch(() => undefined);
 }
 

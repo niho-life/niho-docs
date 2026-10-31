@@ -9,7 +9,8 @@ import type { PageSummary } from "@niho/editor-store";
 import { EditorShell, ShellHeader, ShellSidebar, shellAccountItems, shellPublishButton, type NewPageKind } from "niho-docs-ui/shell";
 import { listPagesRequest } from "@/lib/pages-client";
 import { useShortcuts } from "@/lib/shortcuts";
-import { arrangeSidebarItems } from "@/lib/sidebar-items";
+import { arrangeSidebarItems, searchRows } from "@/lib/sidebar-items";
+import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
 import { useSearchShortcut } from "@/lib/use-search-shortcut";
 import { FramePublishSheet, PublishNotice, type FramePublishKind } from "./FramePublish";
 
@@ -76,6 +77,21 @@ type ListState = { pages: PageSummary[]; next: string | null; opened: PageSummar
 function toTop(pages: PageSummary[], page: PageSummary): PageSummary[] {
   return [page, ...pages.filter((item) => item.id !== page.id)];
 }
+
+/** 検索の状況を一言で（読み上げにも使う）。 */
+function searchMessage(found: PageSearchState): string {
+  if (found.status === "error") {
+    if (found.error === "too_long") return "検索の語が長すぎます（100 文字まで）";
+    if (found.error === "unauthorized") return "ログインし直してください";
+    if (found.error === "unavailable") return "いま検索できません。しばらくしてからもう一度";
+    return "検索できませんでした";
+  }
+  if (found.status === "ready") return found.results.length === 0 ? "見つかりませんでした" : `${found.results.length} 件`;
+  return "探しています…";
+}
+
+/** 一覧の下に出す検索の状況（枠の文言なので shell の色の token だけを使う）。 */
+const SEARCH_NOTE_STYLE = { margin: 0, padding: "10px 16px", fontSize: 13, color: "var(--ed-ink-mute)" } as const;
 
 /**
  * editor の枠（一覧＋ヘッダー＋ページ）。見た目は niho-docs-ui の shell（#48）。ここは状態と移動だけを持つ。
@@ -178,7 +194,13 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   );
   const frame = useMemo<EditorFrameApi>(() => ({ narrow, ...api }), [narrow, api]);
 
-  const items = useMemo(() => arrangeSidebarItems(list.pages, { now, query: search.value }), [list.pages, now, search.value]);
+  // 打つたびにサーバーで探す（題名と本文）。検索語が空のあいだは、ふつうの一覧のまま
+  const searching = search.open && search.value.trim() !== "";
+  const found = usePageSearch(search.open ? search.value : "");
+  const items = useMemo(
+    () => (searching ? searchRows(found.results, now) : arrangeSidebarItems(list.pages, { now })),
+    [searching, found.results, list.pages, now],
+  );
 
   const select = (id: string) => {
     if (id === currentId) setListFor(null);
@@ -269,7 +291,15 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 onClose: () => setSearch({ open: false, value: "" }),
                 onChange: (value) => setSearch({ open: true, value }),
               }}
-              listEnd={list.next !== null ? <div ref={setSentinel} aria-hidden="true" style={{ height: 1 }} /> : null}
+              listEnd={
+                searching ? (
+                  <p role="status" style={SEARCH_NOTE_STYLE}>
+                    {searchMessage(found)}
+                  </p>
+                ) : list.next !== null ? (
+                  <div ref={setSentinel} aria-hidden="true" style={{ height: 1 }} />
+                ) : null
+              }
               me={{
                 ...initial.me,
                 open: meOpen,

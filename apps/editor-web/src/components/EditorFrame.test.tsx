@@ -176,15 +176,98 @@ describe("EditorFrame", () => {
     expect(shell().sidebar).toBe("open");
   });
 
-  it("filters the loaded rows by title while searching", async () => {
-    await mount({ pages: [page("a", "NIHO 録音"), page("b", "日記")] });
-    await click('button[aria-label="探す"]');
-    const input = container!.querySelector<HTMLInputElement>('input[type="search"]')!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "ｎｉｈｏ");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+  describe("search (#35)", () => {
+    const hit = (id: string, title: string, snippet: string) => ({ id, kind: "note", title, snippet, updatedAt: "2026-10-31T02:30:00.000Z" });
+    const searchResponse = (results: unknown[], status = 200): Response =>
+      new Response(JSON.stringify(status === 200 ? { results } : { error: "unavailable" }), { status, headers: { "content-type": "application/json" } });
+    const type = async (value: string) => {
+      const input = container!.querySelector<HTMLInputElement>('input[type="search"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      // usePageSearch の待ち（150ms）と、その応答
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 260)));
+    };
+    const pressK = (init: KeyboardEventInit = { ctrlKey: true }) => act(async () => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true, cancelable: true, ...init })));
+    const note = () => container!.querySelector(".es-sb-list [role=\"status\"]")?.textContent;
+    const searchInput = () => container!.querySelector<HTMLInputElement>('[role="search"] input[type="search"]');
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("searches the server (title and body) while typing and shows the matched sentence; the plain list returns when the query is cleared", async () => {
+      const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => searchResponse([hit("h1", "鎌倉の朝", "…江ノ電の音で目が覚めた…"), hit("h2", "メモ", "朝の散歩の前に")]));
+      vi.stubGlobal("fetch", fetchMock);
+      vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+      await mount({ pages: [page("a", "日記"), page("b", "録音")], next: "cursor-1" });
+      expect(rows()).toEqual(["日記", "録音"]);
+      expect(container!.querySelector('.es-sb-list [aria-hidden="true"]')).not.toBeNull();
+
+      await click('button[aria-label="探す"]');
+      await type("朝");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toMatch(/^\/api\/search\?q=/);
+      expect(rows()).toEqual(["鎌倉の朝", "メモ"]);
+      expect([...container!.querySelectorAll(".es-sb-list .es-di-sub")].map((node) => node.textContent)).toEqual(["…江ノ電の音で目が覚めた…", "朝の散歩の前に"]);
+      expect(note()).toBe("2 件");
+      // 検索中は続きを読まない
+      expect(container!.querySelector('.es-sb-list [aria-hidden="true"]')).toBeNull();
+
+      await type("");
+      expect(rows()).toEqual(["日記", "録音"]);
+      expect(note()).toBeUndefined();
+      expect(container!.querySelector('.es-sb-list [aria-hidden="true"]')).not.toBeNull();
     });
-    expect(rows()).toEqual(["NIHO 録音"]);
+
+    it("says so when nothing is found, and when the search fails", async () => {
+      const fetchMock = vi.fn<(url: string) => Promise<Response>>().mockResolvedValueOnce(searchResponse([])).mockResolvedValueOnce(searchResponse([], 503));
+      vi.stubGlobal("fetch", fetchMock);
+      await mount({ pages: [page("a", "日記")] });
+      await click('button[aria-label="探す"]');
+      await type("ない");
+      expect(rows()).toEqual([]);
+      expect(note()).toBe("見つかりませんでした");
+      await type("ない2");
+      expect(note()).toBe("いま検索できません。しばらくしてからもう一度");
+    });
+
+    it("opens and focuses the search with the keyboard (Ctrl+K here; ⌘K on a Mac), also when it is already open", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => searchResponse([])));
+      await mount({ pages: [page("a", "日記")] });
+      expect(searchInput()).toBeNull();
+      await pressK();
+      expect(searchInput()).not.toBeNull();
+      expect(document.activeElement).toBe(searchInput());
+
+      await act(async () => searchInput()!.blur());
+      expect(document.activeElement).not.toBe(searchInput());
+      await pressK();
+      expect(document.activeElement).toBe(searchInput());
+      // 他の組み合わせでは開かない
+      await click('button[aria-label="やめる"]');
+      await pressK({ ctrlKey: true, shiftKey: true });
+      await pressK({ metaKey: true });
+      expect(searchInput()).toBeNull();
+    });
+
+    it("shows a folded list first: desktop (list closed) and narrow (page open)", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => searchResponse([])));
+      await mount({ pages: [page("a", "日記")] });
+      await click('button[aria-label="一覧をしまう"]');
+      expect(shell().sidebar).toBe("closed");
+      await pressK();
+      expect(shell().sidebar).toBe("open");
+      expect(document.activeElement).toBe(searchInput());
+      await act(async () => root!.unmount());
+
+      narrow = true;
+      nav.pathname = "/p/00000000-0000-4000-8000-000000000001";
+      await mount({ pages: [page("00000000-0000-4000-8000-000000000001", "合成の題名")], initialNarrow: true });
+      expect(shell().view).toBe("page");
+      await pressK();
+      expect(shell().view).toBe("list");
+      expect(document.activeElement).toBe(searchInput());
+    });
   });
 
   it("narrow: / is the list, a page is full screen with a list button, and picking the current row closes the list", async () => {
@@ -239,6 +322,7 @@ describe("EditorFrame", () => {
   });
 
   it("⌘K (Ctrl+K) brings the list back and focuses the search field, also when the search is already open", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ results: [] }), { status: 200, headers: { "content-type": "application/json" } })));
     await mount({ pages: [page("a", "NIHO 録音"), page("b", "日記")] });
     await click('button[aria-label="一覧をしまう"]');
     expect(shell().sidebar).toBe("closed");
@@ -253,8 +337,12 @@ describe("EditorFrame", () => {
     });
     await act(async () => input.blur());
     await shortcut("k");
-    expect(document.activeElement).toBe(container!.querySelector('input[type="search"]'));
-    expect(rows()).toEqual(["日記"]);
+    // 開いていた検索の入力を残したまま、もう一度フォーカスする（検索の結果はサーバーが返す。ここでは絞り込まない）
+    const again = container!.querySelector<HTMLInputElement>('input[type="search"]')!;
+    expect(document.activeElement).toBe(again);
+    expect(again.value).toBe("日記");
+    vi.unstubAllGlobals();
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
   });
 
   it("narrow: ⌘K on a page shows the list screen with the search field focused", async () => {
