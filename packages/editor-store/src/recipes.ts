@@ -310,6 +310,32 @@ export async function putRecipes(db: Database, owner: OwnerId, recipes: readonly
 }
 
 /**
+ * まだ無い手順だけを足す（既定の手順が増えたとき。`recipe-source.ts` が呼ぶ）。既にある行は中身も並びも触らない。
+ * 足した手順は今の並びの後ろに付く。入れたあとの一覧を返す。
+ */
+export async function addRecipes(db: Queryable, owner: OwnerId, recipes: readonly RecipeInput[]): Promise<StoredRecipe[]> {
+  assertOwner(owner);
+  assertStorable(recipes);
+  if (recipes.length > 0) {
+    const params = insertParams(owner, recipes);
+    await db.query(
+      // 並びは「今の末尾の次」から、渡した順に 1 つずつ（既にある手順は数えない）
+      `INSERT INTO recipes (owner, id, name, guide, steps, terms, samples, origin, sort_order, imported_from)
+       SELECT $1, t.id, t.name, t.guide, t.steps, t.terms, t.samples, t.origin,
+              base.next + (row_number() OVER (ORDER BY t.sort_order)) - 1,
+              t.imported_from
+         FROM unnest($2::text[], $3::text[], $4::text[], $5::jsonb[], $6::jsonb[], $7::jsonb[], $8::text[], $9::int[], $10::text[])
+           AS t(id, name, guide, steps, terms, samples, origin, sort_order, imported_from)
+        CROSS JOIN (SELECT COALESCE(max(sort_order), -1) + 1 AS next FROM recipes WHERE owner = $1) AS base
+        WHERE NOT EXISTS (SELECT 1 FROM recipes existing WHERE existing.owner = $1 AND existing.id = t.id)
+       ON CONFLICT (owner, id) DO NOTHING`,
+      params,
+    );
+  }
+  return listRecipes(db, owner);
+}
+
+/**
  * その人に手順が 1 つも無ければ、渡した手順を入れる（既定の 3 つの引き継ぎ。`recipe-source.ts` が呼ぶ）。
  * 行が 1 つでもあれば何も書かない（消した手順を勝手に戻さない）。どちらでも、入れたあとの一覧を返す。
  * 同時に 2 本走っても `ON CONFLICT DO NOTHING` で片方だけが入る。

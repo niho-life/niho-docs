@@ -70,6 +70,19 @@ describe.skipIf(databaseUrl === undefined)("ownerRecipes with PostgreSQL", () =>
     expect((await ownerRecipes(pool, owner)).map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-2", "tpl-3", "r-talk"]);
   });
 
+  it("adds a 既定の手順 that is missing from the table, so that a fourth default would reach someone who already has rows", async () => {
+    const owner = "synthetic-owner-topped-up";
+    await ownerRecipes(pool, owner);
+    // 既定の手順が 1 つ増えた状態を作る（表から 1 つ消して、読み直す）
+    await pool.query("DELETE FROM recipes WHERE owner = $1 AND id = $2", [owner, "tpl-2"]);
+    expect((await listRecipes(pool, owner)).map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-3"]);
+    const recipes = await ownerRecipes(pool, owner);
+    // 足りない既定だけが、今の並びの後ろに付く（ほかの行は動かない）
+    expect(recipes.map((recipe) => recipe.id)).toEqual(["tpl-1", "tpl-3", "tpl-2"]);
+    expect(recipes.find((recipe) => recipe.id === "tpl-2")).toEqual(DEFAULT_RECIPES[1]);
+    expect((await listRecipes(pool, owner)).map((recipe) => recipe.origin)).toEqual(["builtin", "builtin", "builtin"]);
+  });
+
   it("starts a run from a table-read recipe with the same 段階 and the same サブページ as the constant did", async () => {
     const owner = "synthetic-owner-run";
     const store = pgStepRunStore(pool);

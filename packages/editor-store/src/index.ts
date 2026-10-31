@@ -64,6 +64,7 @@ export {
 export {
   RECIPE_LIMITS,
   RECIPE_ORIGINS,
+  addRecipes,
   cleanRecipe,
   isRecipeOrigin,
   isRecipeSample,

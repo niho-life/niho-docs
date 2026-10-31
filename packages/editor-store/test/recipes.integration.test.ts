@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import type { Pool as PgPool } from "pg";
 import { applyMigrations } from "../src/migrate.ts";
-import { listRecipes, putRecipes, recipesProblem, seedRecipes, type RecipeInput } from "../src/recipes.ts";
+import { addRecipes, listRecipes, putRecipes, recipesProblem, seedRecipes, type RecipeInput } from "../src/recipes.ts";
 import { saveEditorSettings } from "../src/settings.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -154,10 +154,27 @@ describe("recipes table (0021)", { skip: databaseUrl === undefined }, () => {
     assert.deepEqual((await listRecipes(pool, OWNER)).map((recipe) => recipe.id), kept);
   });
 
+  it("adds only the recipes that are not there yet, after the ones already saved (既定が増えたとき)", async () => {
+    await putRecipes(pool, OWNER, [article, added]);
+    const before = await listRecipes(pool, OWNER);
+    // すでにある手順は中身も並びも版も変えず、無いものだけを後ろに足す
+    const after = await addRecipes(pool, OWNER, [{ ...article, name: "書き換えない" }, minutes]);
+    assert.deepEqual(after.map((recipe) => [recipe.id, recipe.sortOrder]), [
+      ["tpl-1", 0],
+      ["r-talk", 1],
+      ["tpl-2", 2],
+    ]);
+    assert.equal(after[0]?.name, "記事制作");
+    assert.equal(after[0]?.revision, before[0]!.revision);
+    // もう一度足しても増えない
+    assert.deepEqual((await addRecipes(pool, OWNER, [minutes])).map((recipe) => recipe.id), ["tpl-1", "r-talk", "tpl-2"]);
+  });
+
   it("refuses an empty owner before reaching the database", async () => {
     await assert.rejects(() => listRecipes(pool, ""), TypeError);
     await assert.rejects(() => putRecipes(pool, "", [added]), TypeError);
     await assert.rejects(() => seedRecipes(pool, "", [added]), TypeError);
+    await assert.rejects(() => addRecipes(pool, "", [added]), TypeError);
   });
 
   it("holds an imported recipe with the old id, so that 旧 NIHO docs の取り込み can be added later", async () => {

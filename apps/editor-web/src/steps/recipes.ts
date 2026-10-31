@@ -3,7 +3,11 @@ import { SETTINGS_ID_PATTERN, type RecipeInput, type RecipeSample, type Settings
 
 /**
  * 手順の定義（設計 §7.2）。docs-core のテンプレート（指示文の正）から、記事制作・議事録・インサイト整理の 3 つを写す。
- * コーチング（tpl-4）は §7.2 に無いので含めない。テンプレートが無ければ読み込んだ時点で落とす（起動・build で気づく）。
+ * コーチング（tpl-4）は §7.2 に無いので含めない（旧 NIHO docs にはあるので、入れ直すかはオーナー確認待ち）。
+ * テンプレートが無ければ読み込んだ時点で落とす（起動・build で気づく）。
+ *
+ * **既定の手順を増やすのはこの `DEFAULT_RECIPE_IDS` に 1 つ足すだけ**（docs-core にテンプレートがあれば中身はそこから来る）。
+ * もう表に行がある人にも、次の読み出しで足りない既定だけが入る（`src/server/recipe-source.ts`）。
  *
  * 実行のときに使う手順は、表 `recipes`（migration 0021）から読む（`src/server/recipe-source.ts`）。この定数はその表の
  * 既定の中身で、手順が 1 つも無い人の最初の読み出しで表へ写される。設定（#108）で段階の名前・指示・お手本を変えたもの・

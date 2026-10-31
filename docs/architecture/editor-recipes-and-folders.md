@@ -31,6 +31,7 @@ recipes (owner, id)   -- 主キー。人ごとに 1 行ずつ
 - **値の形と上限を決めるのは [packages/editor-store/src/recipes.ts](../../packages/editor-store/src/recipes.ts) の 1 か所**（`recipesProblem`）。表の `CHECK` は配列であることと件数だけを守る。上限は設定（0013）と同じ値を使う（手順 20・工程 12・指示 8,000 字・お手本 20,000 字）。
 - **既定の中身（指示文の正）は docs-core の `FLOW_TEMPLATES`**。表にその文字列を SQL で書き込むことはしない（migration は行を持たない。`test/schema.test.ts` がそれを守る）。
 - **既定が表に入るのは、その人の行が 1 つも無い最初の読み出しのとき**（[apps/editor-web/src/server/recipe-source.ts](../../apps/editor-web/src/server/recipe-source.ts)）。行が 1 つでもあれば書かない（消した手順を勝手に戻さない）。
+- **既定の手順を増やすのは `DEFAULT_RECIPE_IDS` に 1 つ足すだけ。** もう表に行がある人にも、次の読み出しで足りない既定だけが並びの後ろに入る（`addRecipes`）。既にある行は中身も並びも版も動かさない。コーチング（docs-core の `tpl-4`）を入れ直すかは**オーナー確認待ち**で、この PR では足していない。
 - **0013 の列からの引き継ぎはその 1 回だけ**。写すときに `editor_settings.recipes`（既定に手を入れた分・足した分）をかぶせる。設定の形には工程のプロファイルが無いので、同じ id の工程のプロファイルを既定から引き継ぎ、足した手順・新しい工程は「標準」にする。
 - **列を落とすのは引き継ぎが要らなくなる配備の 1 つ後**（expand → contract）。0021 では `editor_settings.recipes` に触らない。
 - 工程を 1 つも持たない行は読み出しで落とす（実行できない手順を runner に渡さない）。
