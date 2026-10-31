@@ -8,7 +8,9 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageSummary } from "@niho/editor-store";
 import { EditorShell, ShellHeader, ShellSidebar, shellAccountItems, type NewPageKind } from "niho-docs-ui/shell";
 import { listPagesRequest } from "@/lib/pages-client";
-import { arrangeSidebarItems } from "@/lib/sidebar-items";
+import { arrangeSidebarItems, searchRows } from "@/lib/sidebar-items";
+import { usePageSearch, type PageSearchState } from "@/lib/use-page-search";
+import { useSearchShortcut } from "@/lib/use-search-shortcut";
 
 /** shell.css と同じ境目（これ以下は一覧・ページのどちらかを全画面で出す）。 */
 const NARROW_QUERY = "(max-width: 900px)";
@@ -72,6 +74,21 @@ function toTop(pages: PageSummary[], page: PageSummary): PageSummary[] {
   return [page, ...pages.filter((item) => item.id !== page.id)];
 }
 
+/** 検索の状況を一言で（読み上げにも使う）。 */
+function searchMessage(found: PageSearchState): string {
+  if (found.status === "error") {
+    if (found.error === "too_long") return "検索の語が長すぎます（100 文字まで）";
+    if (found.error === "unauthorized") return "ログインし直してください";
+    if (found.error === "unavailable") return "いま検索できません。しばらくしてからもう一度";
+    return "検索できませんでした";
+  }
+  if (found.status === "ready") return found.results.length === 0 ? "見つかりませんでした" : `${found.results.length} 件`;
+  return "探しています…";
+}
+
+/** 一覧の下に出す検索の状況（枠の文言なので shell の色の token だけを使う）。 */
+const SEARCH_NOTE_STYLE = { margin: 0, padding: "10px 16px", fontSize: 13, color: "var(--ed-ink-mute)" } as const;
+
 /**
  * editor の枠（一覧＋ヘッダー＋ページ）。見た目は niho-docs-ui の shell（#48）。ここは状態と移動だけを持つ。
  * - 一覧は最初の区切りをサーバーから受け、末尾が近づいたら続きを読む。
@@ -91,6 +108,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
+  // ⌘K のたびに増やし、検索の入力へフォーカスを移す合図にする（すでに開いているときも）
+  const [searchFocus, setSearchFocus] = useState(0);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
@@ -157,7 +177,30 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   );
   const frame = useMemo<EditorFrameApi>(() => ({ narrow, ...api }), [narrow, api]);
 
-  const items = useMemo(() => arrangeSidebarItems(list.pages, { now, query: search.value }), [list.pages, now, search.value]);
+  // 打つたびにサーバーで探す（題名と本文）。検索語が空のあいだは、ふつうの一覧のまま
+  const searching = search.open && search.value.trim() !== "";
+  const found = usePageSearch(search.open ? search.value : "");
+  const items = useMemo(
+    () => (searching ? searchRows(found.results, now) : arrangeSidebarItems(list.pages, { now })),
+    [searching, found.results, list.pages, now],
+  );
+
+  // ⌘K（Mac 以外は Ctrl+K）: 一覧が隠れていれば出し、検索の入力を開いてフォーカスする
+  useSearchShortcut(() => {
+    if (narrow) {
+      if (pathname !== "/") setListFor(pathname);
+    } else {
+      setCollapsed(false);
+    }
+    setSearch((current) => ({ open: true, value: current.open ? current.value : "" }));
+    setSearchFocus((tick) => tick + 1);
+  });
+  useEffect(() => {
+    if (searchFocus === 0) return;
+    const input = rootRef.current?.querySelector<HTMLInputElement>('[role="search"] input');
+    input?.focus();
+    input?.select();
+  }, [searchFocus]);
 
   const select = (id: string) => {
     if (id === currentId) setListFor(null);
@@ -196,7 +239,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
 
   return (
     <FrameContext.Provider value={frame}>
-      <div data-docs-app-root="" data-docs-shared-ui="" style={{ position: "fixed", inset: 0 }}>
+      <div ref={rootRef} data-docs-app-root="" data-docs-shared-ui="" style={{ position: "fixed", inset: 0 }}>
         <EditorShell
           sidebarOpen={sidebarOpen}
           railOpen={false}
@@ -214,7 +257,15 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
                 onClose: () => setSearch({ open: false, value: "" }),
                 onChange: (value) => setSearch({ open: true, value }),
               }}
-              listEnd={list.next !== null ? <div ref={setSentinel} aria-hidden="true" style={{ height: 1 }} /> : null}
+              listEnd={
+                searching ? (
+                  <p role="status" style={SEARCH_NOTE_STYLE}>
+                    {searchMessage(found)}
+                  </p>
+                ) : list.next !== null ? (
+                  <div ref={setSentinel} aria-hidden="true" style={{ height: 1 }} />
+                ) : null
+              }
               me={{
                 ...initial.me,
                 open: meOpen,
