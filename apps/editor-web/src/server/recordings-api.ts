@@ -10,20 +10,22 @@ import type {
   UpdateRecordingResult,
 } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
+import { appendTranscript, type AppendRejection } from "../recording/append-transcript";
 import { SEGMENT_EDITS_MAX, editSegments, type SegmentEdit, type SegmentEditRejection } from "../recording/edit-segments";
 import { listSpeakers, mergeSpeakers, renameSpeaker, type SpeakerRejection, type SpeakerSummary } from "../recording/speakers";
-import { VTT_IMPORT_ENGINE, VTT_IMPORT_MAX_BYTES, importVtt, type VttImportFailure } from "../recording/vtt-import";
+import { VTT_IMPORT_ENGINE, VTT_IMPORT_MAX_BYTES, importVtt, readVtt, type VttImportFailure } from "../recording/vtt-import";
 import { errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 import { transcriptionRunBody } from "./transcription-api";
 
 /**
- * 録音と文字起こし（#36 段 1）の API: VTT の取り込み（録音ページを作る）、録音の読み取り、段落の編集・話者名の変更・話者をまとめる。
+ * 録音と文字起こし（#36 段 1）の API: VTT の取り込み（録音ページを作る）、録音の読み取り、段落の編集・話者名の変更・話者をまとめる・
+ * あとの音声の文字起こし（.vtt）を足す（段 3b-3。時刻は前の音声の長さだけずらす）。
  * 全て本人の・ゴミ箱でないページだけ。未認証 401、DB なし 503、別の人・存在しない・不正な id・削除済み・録音の無いページは同じ 404、
  * 更新系は同じ origin の画面からだけ（違えば 403）。エラーの本文は短い code と理由だけ（内部の情報を出さない）。
  * 書き込みは revision を見る: 別の画面で先に直されていたら上書きせず 409 で最新を返す（自分の文章は呼び出し側に残る）。
  */
 
-export type RecordingMutationRejection = SpeakerRejection | SegmentEditRejection;
+export type RecordingMutationRejection = SpeakerRejection | SegmentEditRejection | AppendRejection;
 
 /** 録音の API が使う store の操作（packages/editor-store の関数に Pool を渡したもの）。null はページ（録音）が無い。 */
 export type RecordingsStore = {
@@ -51,8 +53,11 @@ export type RecordingsApiDeps = {
  * その分の余裕（1 MiB）を足す。超えたら 413。VTT が 4 MiB を超えるだけなら 400（vtt_too_large）。
  */
 export const VTT_IMPORT_BODY_MAX_BYTES = VTT_IMPORT_MAX_BYTES + 1024 * 1024;
-/** 録音の書き換えの要求の本文の上限（段落 200 件 × 5,000 文字が日本語で収まる大きさ）。 */
-export const RECORDING_PATCH_BODY_MAX_BYTES = 4 * 1024 * 1024;
+/**
+ * 録音の書き換えの要求の本文の上限。段落 200 件 × 5,000 文字が日本語で収まる 4 MiB に、`appendVtt`（4 MiB までの VTT を
+ * JSON の文字列にしたもの）が入る余裕（1 MiB）を足す（取り込みの VTT_IMPORT_BODY_MAX_BYTES と同じ）。
+ */
+export const RECORDING_PATCH_BODY_MAX_BYTES = VTT_IMPORT_BODY_MAX_BYTES;
 
 export type BadRequestReason = "body" | "name" | "lang" | VttImportFailure | RecordingMutationRejection;
 
@@ -198,8 +203,9 @@ export async function readRecordingSeconds(store: Pick<RecordingsStore, "getReco
 }
 
 type Patch = { baseRevision: number; mutate: RecordingMutation<RecordingMutationRejection> };
+type PatchResult = { ok: true; value: Patch } | { ok: false; reason: BadRequestReason };
 
-const PATCH_OPERATIONS = ["edits", "renameSpeaker", "mergeSpeakers"] as const;
+const PATCH_OPERATIONS = ["edits", "renameSpeaker", "mergeSpeakers", "appendVtt"] as const;
 
 function parseEdits(value: unknown): SegmentEdit[] | null {
   if (!Array.isArray(value) || value.length === 0 || value.length > SEGMENT_EDITS_MAX) return null;
@@ -213,35 +219,47 @@ function parseEdits(value: unknown): SegmentEdit[] | null {
 }
 
 /**
- * 書き換えの要求: `baseRevision` と、edits・renameSpeaker・mergeSpeakers のちょうど 1 つ。形が違えば null（400 body）。
- * 値の中身（範囲の外の index・規則に合わない名前・存在しない話者）は mutate が断る（400 index・text・name・speaker・merge）。
+ * 書き換えの要求: `baseRevision` と、edits・renameSpeaker・mergeSpeakers・appendVtt のちょうど 1 つ。形が違えば body（400）。
+ * 値の中身（範囲の外の index・規則に合わない名前・存在しない話者・足せない段落）は mutate が断る
+ * （400 index・text・name・speaker・merge・append_*）。
+ * appendVtt の VTT は、ここ（DB に触る前）で段落にする: 読めなければ取り込みと同じ理由で 400、読めたら mutate は純粋な結合だけ。
  */
-function parsePatch(body: unknown): Patch | null {
-  if (!isPlainObject(body) || !hasOnlyKeys(body, ["baseRevision", ...PATCH_OPERATIONS])) return null;
+function parsePatch(body: unknown): PatchResult {
+  if (!isPlainObject(body) || !hasOnlyKeys(body, ["baseRevision", ...PATCH_OPERATIONS])) return { ok: false, reason: "body" };
   const { baseRevision } = body;
-  if (typeof baseRevision !== "number" || !Number.isSafeInteger(baseRevision) || baseRevision < 1) return null;
+  if (typeof baseRevision !== "number" || !Number.isSafeInteger(baseRevision) || baseRevision < 1) return { ok: false, reason: "body" };
   const present = PATCH_OPERATIONS.filter((operation) => body[operation] !== undefined);
-  if (present.length !== 1) return null;
+  if (present.length !== 1) return { ok: false, reason: "body" };
   if (body.edits !== undefined) {
     const edits = parseEdits(body.edits);
-    return edits ? { baseRevision, mutate: (data) => editSegments(data, edits) } : null;
+    return edits ? { ok: true, value: { baseRevision, mutate: (data) => editSegments(data, edits) } } : { ok: false, reason: "body" };
   }
   if (body.renameSpeaker !== undefined) {
     const rename = body.renameSpeaker;
-    if (!isPlainObject(rename) || !hasOnlyKeys(rename, ["speaker", "name"]) || !("name" in rename)) return null;
+    if (!isPlainObject(rename) || !hasOnlyKeys(rename, ["speaker", "name"]) || !("name" in rename)) return { ok: false, reason: "body" };
     const { speaker, name } = rename;
-    if (typeof speaker !== "number" || (name !== null && typeof name !== "string")) return null;
-    return { baseRevision, mutate: (data) => renameSpeaker(data, speaker, name) };
+    if (typeof speaker !== "number" || (name !== null && typeof name !== "string")) return { ok: false, reason: "body" };
+    return { ok: true, value: { baseRevision, mutate: (data) => renameSpeaker(data, speaker, name) } };
+  }
+  if (body.appendVtt !== undefined) {
+    const append = body.appendVtt;
+    if (!isPlainObject(append) || !hasOnlyKeys(append, ["name", "vtt"])) return { ok: false, reason: "body" };
+    if (typeof append.vtt !== "string") return { ok: false, reason: "body" };
+    if (typeof append.name !== "string") return { ok: false, reason: "name" };
+    const read = readVtt({ name: append.name, vtt: append.vtt });
+    if (!read.ok) return { ok: false, reason: read.reason };
+    const { segments, speakerNames, durationSec } = read.value;
+    return { ok: true, value: { baseRevision, mutate: (data) => appendTranscript(data, { segments, speakerNames, durationSec }) } };
   }
   const merge = body.mergeSpeakers;
-  if (!isPlainObject(merge) || !hasOnlyKeys(merge, ["from", "into"])) return null;
+  if (!isPlainObject(merge) || !hasOnlyKeys(merge, ["from", "into"])) return { ok: false, reason: "body" };
   const { from, into } = merge;
-  if (typeof from !== "number" || typeof into !== "number") return null;
-  return { baseRevision, mutate: (data) => mergeSpeakers(data, from, into) };
+  if (typeof from !== "number" || typeof into !== "number") return { ok: false, reason: "body" };
+  return { ok: true, value: { baseRevision, mutate: (data) => mergeSpeakers(data, from, into) } };
 }
 
 /**
- * PATCH /api/pages/{id}/recording — 段落の編集・話者名の変更・話者をまとめる（1 回に 1 つ）。
+ * PATCH /api/pages/{id}/recording — 段落の編集・話者名の変更・話者をまとめる・あとの .vtt を足す（1 回に 1 つ）。
  * 200 `{ recording, speakers }`。別の画面で先に直されていたら 409 `{ error: "conflict", recording, speakers }`（最新。何も書かない）。
  */
 export function patchRecordingRoute(request: Request, id: string, deps: RecordingsApiDeps): Promise<Response> {
@@ -255,8 +273,8 @@ export function patchRecordingRoute(request: Request, id: string, deps: Recordin
     const body = await readBody(request, RECORDING_PATCH_BODY_MAX_BYTES);
     if (!body.ok) return body.response;
     const patch = parsePatch(body.value);
-    if (!patch) return badRequest("body");
-    const result = await store.updateRecording(session.userId, id, patch.baseRevision, patch.mutate);
+    if (!patch.ok) return badRequest(patch.reason);
+    const result = await store.updateRecording(session.userId, id, patch.value.baseRevision, patch.value.mutate);
     if (!result) return notFoundResponse();
     if (result.status === "rejected") return badRequest(result.reason);
     if (result.status === "conflict") return jsonResponse(409, { error: "conflict", ...withSpeakers(result.recording) });

@@ -458,6 +458,15 @@ function hoursLabel(seconds: number): string {
   return Number.isInteger(hours) ? `${hours} 時間` : `${Math.round(seconds / 60)} 分`;
 }
 
+/**
+ * 画面に出す上限の案内（設計 §12「1 ファイルの長さと容量の上限を設定に明記」と、クラウドの音声の保持日数）。
+ * 上限がまだ読めていなければ空（案内を出さない。数を推測で出さない）。
+ */
+export function audioLimitsNote(limits: Pick<AudioLimits, "maxBytes" | "maxDurationSec" | "retentionDays"> | null | undefined): string {
+  if (!limits) return "";
+  return `音声は 1 つ ${hoursLabel(limits.maxDurationSec)}・${bytesLabel(limits.maxBytes)} まで。クラウドの音声は ${limits.retentionDays} 日で消えます（文字起こしは残ります）`;
+}
+
 /** 失敗を、画面に出す日本語の短い文言にする（URL・内部の情報を含めない）。上限は分かれば添える。 */
 export function audioUploadMessage(kind: AudioUploadFailureKind, limits?: Pick<AudioLimits, "maxBytes" | "maxDurationSec" | "extensions"> | null): string {
   switch (kind) {

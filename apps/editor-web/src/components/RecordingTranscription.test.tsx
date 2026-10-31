@@ -183,7 +183,7 @@ describe("録音ページの文字起こしの開始と状態（#36 段 3b-1）"
     // 段落があるときは、外部のサービスの一言は確かめる欄に出す
     expect(text()).not.toContain("音声は文字起こしのため外部のサービスに送られます");
     await click("もう一度文字起こしする");
-    expect(text()).toContain("いまの文字起こしは置き換えられます");
+    expect(text()).toContain("いまの文字起こしは、足した分も含めて置き換えられます");
     expect(text()).toContain("音声は文字起こしのため外部のサービスに送られます");
     expect(document.activeElement?.textContent).toBe("やめる");
     await click("やめる");

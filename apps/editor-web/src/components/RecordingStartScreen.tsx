@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 import { RecordingStart, type RecordingHow, type RecordingNext } from "niho-docs-ui/shell";
 import { AUDIO_FILE_ACCEPT, AUDIO_FILE_EXTENSIONS_LABEL, isAudioFileName } from "@/lib/audio-formats";
 import { probeAudioDuration } from "@/lib/audio-duration";
-import { audioUploadMessage, checkAudioFile, getAudioLimitsCached, type AudioLimits } from "@/lib/audio-upload-client";
+import { audioLimitsNote, audioUploadMessage, checkAudioFile, getAudioLimitsCached, type AudioLimits } from "@/lib/audio-upload-client";
 import type { MicRecording } from "@/lib/mic-recorder";
 import { RecordingRequestError, VTT_FILE_MAX_BYTES, importVtt, recordingErrorMessage } from "@/lib/recording-client";
+import { recordingKeep, type KeptTake, type RecordingKeep } from "@/lib/recording-keep";
 import { formatClock } from "@/lib/recording-view";
 import { AUDIO_STAGE_LABELS, useAudioImport } from "@/lib/use-audio-import";
 import { micErrorMessage, useMicCapture } from "@/lib/use-mic-capture";
@@ -46,9 +47,21 @@ const UNKNOWN_FILE: Message = { kind: "error", text: "このファイルは取�
  *   進み具合（段階と %）が見え、中止できる。終わったら録音ページへ移る（文字起こしは録音ページで始める）。
  * - 「録音する」→「録音をはじめる」でマイクから録音し、「止める」と同じ取り込みの流れに乗る。「やり直す」は確認してから捨てる。
  * - 取り込み中・録音中・まだ取り込んでいない録音があるときは、閉じる前にブラウザの確認を出す。失敗しても選んだファイル・録音は残す。
+ * - 録っている間は端末の控え（recording-keep.ts）にも書く。**録音中に画面を閉じても失わない**ので、次に開いたときに
+ *   「前回の録音が残っています」を出して取り込める（「消す」で捨てる）。取り込めた控えは消す。
+ * - 上限（長さ・容量）とクラウドの音声が消える日数は、ページ（server）から渡った値で欄の下に出す（audioLimitsNote。
+ *   画面に数を埋め込まない・そのための要求を増やさない）。
  * 背景情報・登場人物・「このあと」は、手順（#37）ができるまで使われない。
  */
-export function RecordingStartScreen() {
+export function RecordingStartScreen({
+  limits: given,
+  keep: injected,
+}: {
+  /** 上限（server が持っている値。案内に出す。選んだファイルの検査は API の値で行う）。 */
+  limits?: AudioLimits;
+  /** テスト用の控え（既定はこの画面の IndexedDB）。 */
+  keep?: RecordingKeep | null;
+} = {}) {
   const router = useRouter();
   const frame = useEditorFrame();
   const [how, setHow] = useState<RecordingHow>("file");
@@ -56,18 +69,22 @@ export function RecordingStartScreen() {
   const [next, setNext] = useState<RecordingNext>("article");
   const [file, setFile] = useState<File | null>(null);
   const [fileDuration, setFileDuration] = useState<number | null>(null);
-  const [limits, setLimits] = useState<AudioLimits | null>(null);
+  const [limits, setLimits] = useState<AudioLimits | null>(given ?? null);
   const [message, setMessage] = useState<Message | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // 前回の録音（画面を閉じた・取り込めなかった控え）
+  const [kept, setKept] = useState<readonly KeptTake[]>([]);
   const input = useRef<HTMLInputElement>(null);
+  // 端末の控え（この画面の間は同じもの。IndexedDB が無ければ null）
+  const [keep] = useState<RecordingKeep | null>(() => (injected === undefined ? recordingKeep() : injected));
   // いま選んでいるファイル（非同期の検査の結果が、選び直したあとのファイルに当たらないため）
   const fileRef = useRef<File | null>(null);
   // 取り込み中の二重送信を、再描画を待たずに止める
   const importing = useRef(false);
   const audio = useAudioImport();
 
-  const importAudio = async (source: File, durationSec: number | null) => {
+  const importAudio = async (source: File, durationSec: number | null, keepId: string | null = null) => {
     if (importing.current) return;
     importing.current = true;
     setBusy(true);
@@ -76,6 +93,11 @@ export function RecordingStartScreen() {
     if (outcome.ok) {
       const { page } = outcome.result;
       setMessage({ kind: "info", text: AUDIO_STAGE_LABELS.completing });
+      // サーバーに入ったので、端末の控えは残さない
+      if (keepId !== null) {
+        void keep?.remove(keepId).catch(() => undefined);
+        setKept((takes) => takes.filter((take) => take.id !== keepId));
+      }
       frame.pageCreated(page.id, page.title, "rec");
       router.push(`/p/${page.id}`);
       // 移るまで、もう一度取り込ませない（この画面は移ると外れる）
@@ -88,8 +110,9 @@ export function RecordingStartScreen() {
   };
 
   const mic = useMicCapture({
+    keep,
     // 止めたら（6 時間で自動で止まったときも）そのまま取り込む
-    onRecorded: (recording: MicRecording) => void importAudio(recording.file, recording.durationSec),
+    onRecorded: (recording: MicRecording) => void importAudio(recording.file, recording.durationSec, recording.keepId),
   });
   const micStatus = mic.capture.status;
   const micBusy = micStatus === "requesting" || micStatus === "recording" || micStatus === "stopping";
@@ -175,7 +198,7 @@ export function RecordingStartScreen() {
     if (how === "mic") {
       if (micStatus === "idle" || micStatus === "error") await startMic();
       else if (micStatus === "recording") await mic.stop();
-      else if (micStatus === "ready") await importAudio(mic.capture.recording.file, mic.capture.recording.durationSec);
+      else if (micStatus === "ready") await importAudio(mic.capture.recording.file, mic.capture.recording.durationSec, mic.capture.recording.keepId);
       return;
     }
     if (!file) {
@@ -198,6 +221,41 @@ export function RecordingStartScreen() {
     mic.discard();
     setConfirmDiscard(false);
     setMessage(null);
+  };
+
+  // 前回の録音（控え）を読む。消えていれば何も出さない
+  useEffect(() => {
+    if (!keep) return undefined;
+    let cancelled = false;
+    void keep.list().then(
+      (takes) => {
+        if (!cancelled) setKept(takes);
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [keep]);
+
+  /** 前回の録音を取り込む。 */
+  const importKept = async (take: KeptTake) => {
+    if (locked || !keep) return;
+    setMessage(null);
+    const loaded = await keep.load(take.id).catch(() => null);
+    if (!loaded) {
+      setKept((takes) => takes.filter((item) => item.id !== take.id));
+      setMessage({ kind: "error", text: "前回の録音が読み出せませんでした。" });
+      return;
+    }
+    await importAudio(loaded.file, loaded.take.durationSec > 0 ? loaded.take.durationSec : null, take.id);
+  };
+
+  /** 前回の録音を捨てる。 */
+  const discardKept = (take: KeptTake) => {
+    if (!keep) return;
+    void keep.remove(take.id).catch(() => undefined);
+    setKept((takes) => takes.filter((item) => item.id !== take.id));
   };
 
   // 録音の失敗（録音中に止まった）
@@ -246,6 +304,7 @@ export function RecordingStartScreen() {
           }}
           file={file ? { name: file.name, detail: fileDetail } : undefined}
           fileHint={FILE_HINT}
+          limitsNote={audioLimitsNote(limits)}
           startLabel={startLabel}
           background={background}
           onBackground={setBackground}
@@ -269,6 +328,20 @@ export function RecordingStartScreen() {
         }}
       />
       <div className="es-start" aria-busy={busy}>
+        {kept.map((take) => (
+          <div key={take.id} style={PANEL_STYLE} role="group" aria-label="前回の録音" data-mic-kept={take.finished ? "stopped" : "interrupted"}>
+            <span className="es-note">
+              前回の録音が残っています{take.finished ? "" : "（録音中に画面が閉じました）"} · {formatClock(take.durationSec)} · {sizeLabel(take.bytes)}
+            </span>
+            <span className="es-sp" />
+            <button type="button" className="es-btn es-btn--outline es-btn--sm" aria-disabled={locked || undefined} onClick={() => void importKept(take)}>
+              取り込む
+            </button>
+            <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-disabled={locked || undefined} onClick={() => discardKept(take)}>
+              消す
+            </button>
+          </div>
+        ))}
         {how === "mic" && (micStatus === "recording" || micStatus === "stopping") && (
           <div style={PANEL_STYLE} data-mic="recording">
             <span className="es-note">録音中</span>

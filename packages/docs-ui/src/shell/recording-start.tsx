@@ -17,6 +17,8 @@ export type RecordingStartProps = {
   file?: { name: string; detail: string };
   /** ファイルを選ぶ前の欄の一言（取り込める形式）。無ければ「.m4a .mp3 .wav、文字起こし済みの .vtt も」。 */
   fileHint?: string;
+  /** 欄の下の一言（長さ・容量の上限と、クラウドの音声が消える日数）。無ければ出さない。 */
+  limitsNote?: string;
   background: string;
   onBackground: (value: string) => void;
   /** 登場人物。話者の名前になる。 */
@@ -42,7 +44,8 @@ export type RecordingStartProps = {
 };
 
 /**
- * 「録音から」の開始画面。録音する／音声ファイルを置く → 背景情報・登場人物・固有名詞 → このあと。
+ * 「録音から」の開始画面。録音する／音声ファイルを置く → 上限の案内 → 背景情報・登場人物・固有名詞 → このあと。
+ * 上限（limitsNote）は呼び出し側がサーバーの値から組む（画面に数を埋め込まない）。
  * 文字起こしをどこで行うかは `engineNote` で渡す（Mac は「この Mac」も選べる。既定は NIHO クラウド）。
  */
 export function RecordingStart(props: RecordingStartProps) {
@@ -72,6 +75,7 @@ export function RecordingStart(props: RecordingStartProps) {
           </>
         )}
       </button>
+      {props.limitsNote && <p className="es-note">{props.limitsNote}</p>}
       <div className="es-fld">
         <h2>
           <label htmlFor={backgroundId}>背景情報</label> <em>任意</em>
