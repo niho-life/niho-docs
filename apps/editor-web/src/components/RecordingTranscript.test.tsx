@@ -304,6 +304,46 @@ describe("RecordingTranscript: someone fixed it elsewhere first (409)", () => {
     expect(status().textContent).toBe("保存済み");
   });
 
+  it("holds every draft on a conflict, including paragraphs fixed while the save was in flight: none is laid over the latest without asking", async () => {
+    const server = await mount();
+    await until(() => paragraphs().length === 4);
+    let release!: () => void;
+    server.state.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // 別の画面が 2 つ目の段落を直した（この画面は知らない）。1 つ目を送ると競合になる
+    server.external((data) => ({
+      segments: data.segments.map((segment, index) => (index === 1 ? { ...segment, text: "別の画面で直した二つ目。" } : segment)),
+      speakerNames: data.speakerNames,
+    }));
+    await edit(0, "私の一つ目");
+    expect(server.state.patches).toHaveLength(1);
+    // 送っている間に、別の段落（別の画面が直したもの）と、送っている段落をもう一度直す。どちらも順番を待つ
+    await edit(1, "私の二つ目");
+    await edit(0, "私の一つ目（書き直し）");
+    server.state.hold = null;
+    release();
+    await until(() => status().textContent?.includes("保存されていない段落") ?? false);
+    await settle(20);
+    // 待っていた送信は出ない（別の画面の二つ目を、確かめないまま上書きしない）
+    expect(server.state.patches).toHaveLength(1);
+    expect(server.state.data.segments[1]!.text).toBe("別の画面で直した二つ目。");
+    expect(status().textContent).toContain("保存されていない段落が 2 つあります");
+    expect(paragraphs()[0]!.textContent).toBe("私の一つ目（書き直し）");
+    expect(paragraphs()[1]!.textContent).toBe("私の二つ目");
+    // 確かめて「もう一度保存」を押すと、2 つとも最新の版の上に送る
+    await act(async () => buttonByText("もう一度保存").click());
+    await settle();
+    expect(server.state.patches[1]).toEqual({
+      baseRevision: 2,
+      edits: [
+        { index: 0, text: "私の一つ目（書き直し）" },
+        { index: 1, text: "私の二つ目" },
+      ],
+    });
+    expect(status().textContent).toBe("保存済み");
+  });
+
   it("keeps the text and offers to try again when the save fails (not a conflict)", async () => {
     const server = await mount();
     await until(() => paragraphs().length === 4);
@@ -326,6 +366,59 @@ describe("RecordingTranscript: someone fixed it elsewhere first (409)", () => {
     expect(notice()).toContain("5,000 字");
     expect(paragraphs()[0]!.textContent).toHaveLength(5001);
     expect(server.state.data.segments[0]!.text).toBe("最初の段落です。");
+  });
+});
+
+describe("RecordingTranscript: leaving with unsaved writing", () => {
+  const unload = () => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+
+  it("counts a paragraph I am still typing in (not confirmed yet): it says so and closing the tab asks first", async () => {
+    const server = await mount();
+    await until(() => paragraphs().length === 4);
+    expect(status().textContent).toBe("保存済み");
+    expect(unload()).toBe(false);
+
+    write(paragraphs()[1]!, "書いている途中");
+    expect(server.state.patches).toHaveLength(0);
+    expect(status().textContent).toBe("保存待ち");
+    expect(unload()).toBe(true);
+
+    // 確定すると下書きになり、送られて、保存済みに戻る
+    blur(paragraphs()[1]!);
+    await until(() => status().textContent === "保存済み");
+    expect(server.state.patches).toHaveLength(1);
+    expect(unload()).toBe(false);
+  });
+
+  it("does not ask after typing is undone before it is confirmed", async () => {
+    const server = await mount();
+    await until(() => paragraphs().length === 4);
+    write(paragraphs()[0]!, "変えた");
+    write(paragraphs()[0]!, "最初の段落です。");
+    expect(unload()).toBe(true);
+    blur(paragraphs()[0]!);
+    await settle();
+    expect(server.state.patches).toHaveLength(0);
+    expect(status().textContent).toBe("保存済み");
+    expect(unload()).toBe(false);
+  });
+
+  it("keeps asking while composing (IME) with focus gone, until the composition ends", async () => {
+    const server = await mount();
+    await until(() => paragraphs().length === 4);
+    compose(paragraphs()[2]!, "compositionstart");
+    write(paragraphs()[2]!, "へんかんちゅう");
+    blur(paragraphs()[2]!);
+    expect(unload()).toBe(true);
+    expect(server.state.patches).toHaveLength(0);
+    compose(paragraphs()[2]!, "compositionend");
+    await until(() => status().textContent === "保存済み");
+    expect(server.state.patches).toHaveLength(1);
+    expect(unload()).toBe(false);
   });
 });
 

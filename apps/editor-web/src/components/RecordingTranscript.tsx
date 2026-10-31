@@ -24,7 +24,9 @@ type Load = { state: "loading" } | { state: "ready" } | { state: "missing" } | {
 /**
  * 録音ページの文字起こし（設計 §7.1。本文の上）。録音を読み、段落をその場で直し（確定は blur・Enter）、話者の名前を変え・まとめる。
  * - 保存は 1 本ずつ順に送る。`baseRevision` は直前の応答の revision（送る直前に読む）。
- * - 別の画面が先に直していたら（409）、自分の文章は消さず、最新に合わせて知らせる。直した段落は止めておき、もう一度確定すると送る。
+ * - 別の画面が先に直していたら（409）、自分の文章は消さず、最新に合わせて知らせる。まだ送っていない下書きは（送っている間に直した段落も）
+ *   すべて止めておき、もう一度確定する（か「もう一度保存」）と送る。最新に合わせた版の上に、確かめないまま重ねて書かない。
+ * - 書いている途中（まだ確定していない入力）も「保存待ち」で、閉じようとしたらブラウザの確認を出す。
  * - 再生は無い（音声は後段）。時刻の表示は端末ごとの好み。
  */
 export function RecordingTranscript({ pageId }: { pageId: string }) {
@@ -35,6 +37,9 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  // 書いている途中（段落・話者の入力に input があり、まだ blur・変換の確定をしていない）。下書きになる前の入力も失わないための印
+  const [typing, setTyping] = useState(false);
+  const composing = useRef(false);
   const [showTimestamps, setShowTimestamps] = useState(readTimestampsPreference);
 
   // 送る直前に読む最新の値（非同期の保存が、古い render の値を掴まないため）
@@ -94,12 +99,18 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
         applyDrafts(rest);
         setNotice(null);
       } catch (error) {
-        if (error instanceof RecordingConflictError) applySnapshot(error.snapshot);
-        // 送ろうとした段落は止める（自分の文章は画面に残す）。もう一度確定すると送る
         const held = { ...draftsRef.current };
-        for (const edit of batch) {
-          const draft = held[edit.index];
-          if (draft?.text === edit.text) held[edit.index] = { text: draft.text, held: true };
+        if (error instanceof RecordingConflictError) {
+          applySnapshot(error.snapshot);
+          // 競合: 最新に合わせた版では、ほかの段落も別の画面に直されているかもしれない。送っている間に直した段落も含めて、
+          // 下書きをすべて止める（順番を待っている flush が、確かめないまま最新の版に重ねて書かない）
+          for (const [index, draft] of Object.entries(held)) held[Number(index)] = { text: draft.text, held: true };
+        } else {
+          // 送ろうとした段落は止める（自分の文章は画面に残す）。もう一度確定すると送る
+          for (const edit of batch) {
+            const draft = held[edit.index];
+            if (draft?.text === edit.text) held[edit.index] = { text: draft.text, held: true };
+          }
         }
         applyDrafts(held);
         setNotice(recordingErrorMessage(error, "edit"));
@@ -148,7 +159,7 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
     });
 
   const held = Object.values(drafts).filter((draft) => draft.held).length;
-  const unsaved = Object.keys(drafts).length > 0;
+  const unsaved = typing || Object.keys(drafts).length > 0;
   // 保存されていない文章があるまま閉じようとしたら、ブラウザの確認を出す
   useEffect(() => {
     if (!unsaved) return;
@@ -185,7 +196,23 @@ export function RecordingTranscript({ pageId }: { pageId: string }) {
   const status = saving ? "saving" : held > 0 ? "held" : unsaved ? "pending" : "saved";
   const statusText = { saving: "保存中", held: `保存されていない段落が ${held} つあります`, pending: "保存待ち", saved: "保存済み" }[status];
   return (
-    <section aria-label="文字起こし" data-transcript="ready">
+    <section
+      aria-label="文字起こし"
+      data-transcript="ready"
+      onInput={() => setTyping(true)}
+      onCompositionStart={() => {
+        composing.current = true;
+      }}
+      onCompositionEnd={(event) => {
+        composing.current = false;
+        // 変換の途中で外れたフォーカスは、子が変換の終わりに確定する（下書きになる）。中にフォーカスが無ければ書き終わり
+        if (!event.currentTarget.contains(document.activeElement)) setTyping(false);
+      }}
+      onBlur={() => {
+        // 確定は子（段落は blur、話者は送信）。変換の途中なら変換が終わるまで書いている扱いのまま
+        if (!composing.current) setTyping(false);
+      }}
+    >
       <ShellRecording
         segments={shellSegments(snapshot.recording, Object.fromEntries(Object.entries(drafts).map(([index, draft]) => [index, draft.text])))}
         speakers={shellSpeakers(snapshot.speakers)}
