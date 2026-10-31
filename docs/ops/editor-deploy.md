@@ -34,6 +34,7 @@
 | `EDITOR_TRANSCRIBE_ENGINE` | `deepgram` | 文字起こしのエンジン。`niho-editor-deepgram-key` に有効な版があるときだけ渡す（§12） |
 | `DEEPGRAM_API_KEY` | Secret | 同上 |
 | `EDITOR_TRANSCRIBE_TIMEOUT_SEC` | `TRANSCRIBE_TIMEOUT_SEC` | 同上。任意。空ならアプリの既定（1200 秒） |
+| `EDITOR_TRANSCRIBE_MODE` ほか 3 つ | `TRANSCRIBE_MODE=cloud-tasks` のときだけ | 文字起こしの呼び出し口（キュー・worker の URL・OIDC の身元。§12） |
 | `DATABASE_URL` | Secret | アプリ用ロール |
 | `ANTHROPIC_API_KEY` | Secret | AI の鍵。`niho-editor-anthropic-key` の最新の版が有効なときだけ渡す（§10） |
 | `EDITOR_AI_MODE` | `anthropic` | 同上。版が無ければ渡さない（AI は 503 のまま） |
@@ -54,7 +55,7 @@ migrate ジョブには `DATABASE_URL`（migrate ロール）と `EDITOR_APP_DAT
 4. Secret 4 つと、読める人の限定（AI と文字起こしの鍵は版なしで作る。鍵はオーナーが §10・§12 の手順で入れる）
 5. Artifact Registry（直近 5 個だけ残す）
 6. 資産バケット（private）
-7. 手順の実行基盤（`scripts/editor-deploy/steps-infra.sh`。§11）
+7. 手順の実行基盤（`scripts/editor-deploy/steps-infra.sh`。§11）と文字起こしの実行基盤（`scripts/editor-deploy/transcribe-infra.sh`。§12）
 
 続けて `scripts/editor-deploy/deploy.sh`、そのあと `gcp-bootstrap.sh domain`（§6）。
 
@@ -222,35 +223,98 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 
 ### 制約
 
-- 1 つの段階は 1 回の要求。今の `deploy.sh` の Cloud Run の要求の上限（`--timeout 60`）を超える段階は途中で切れる（Cloud Tasks が再試行し、lease が切れれば掃除が拾う）。偽物の実行器はすぐ終わるので今は当たらない。本物の実行器をつなぐ段で、段階の長さに合わせて上げる（上限は task の 30 分）。
+- 1 つの段階は 1 回の要求。今の `deploy.sh` の Cloud Run の要求の上限（`lib.sh` の `service_request_timeout`。既定 300 秒）を超える段階は途中で切れる（Cloud Tasks が再試行し、lease が切れれば掃除が拾う）。偽物の実行器はすぐ終わるので今は当たらない。本物の実行器をつなぐ段で、段階の長さに合わせて上げる（上限は task の 30 分）。
 
 ## 12. 文字起こし（#36）
 
 録音の音声をサーバー側で文字起こしする。エンジンは Deepgram（`apps/editor-web/src/transcription/deepgram.ts`）。
 
-> **いまは本番で音声からの文字起こしができません。** 呼び出し口（dispatcher）が本番に無いためです:
-> `apps/editor-web/src/transcription/dispatch.ts` の `resolveDispatcherKind()` は `NODE_ENV=production` で必ず `null` を返し
-> （inline は開発と CI だけ）、`getTranscriptionRunner()` も `null` になります。**鍵を入れても、起こす処理は動きません**（開始は 503）。
-> 手順（#37）と同じ Cloud Tasks の呼び出し口を足すのが残りの作業で、Issue #36 に残しています。
-> この節は**鍵を入れる所まで**の手順です。鍵は先に入れておいても害がなく（版が有効でも呼び出し口が無ければ起こせないだけ）、
-> 呼び出し口が入った配備で、そのまま有効になります。鍵は Secret Manager の `niho-editor-deepgram-key` に置き、画面の実行 ID（`niho-editor-runner`）だけが読める。**Secret に版が無い、または最新の版が無効なあいだ、エンジンは閉じたまま**（文字起こしの開始は 503）。`deploy.sh` は配備のたびに最新の版の状態を見て、有効なときだけ鍵と環境変数を足す（ログに `transcription: on` / `transcription: off`）。
+音声から起こすには **2 つ**が要ります。どちらかが欠けていれば、開始は 503 `transcription_unavailable` のままです。
 
-**VTT の取り込みは鍵を必要としません。** 既に文字起こし済みのファイルを持ち込む経路は、エンジンが閉じていても動きます。鍵が要るのは音声から起こすときだけです。
+1. **エンジンの鍵**: Secret Manager の `niho-editor-deepgram-key`。画面の実行 ID（`niho-editor-runner`）だけが読める。**Secret に版が無い、または最新の版が無効なあいだ、エンジンは閉じたまま。** `deploy.sh` は配備のたびに最新の版の状態を見て、有効なときだけ鍵と環境変数を足す（ログに `transcription: on` / `transcription: off`）。
+2. **呼び出し口（dispatcher）**: `deploy.env` の `TRANSCRIBE_MODE=cloud-tasks`。1 回の文字起こしは最長 20 分かかり、**1 回の要求に収まりません**（Cloud Run は応答のあとに CPU を絞る）。そこで手順（#37、§11）と同じ形で、Cloud Tasks に積み、同じサービスの OIDC で守った worker の route が実行します。空のままだと、鍵があっても起こす処理は動きません（ログに `transcription dispatcher: off`）。
+
+**VTT の取り込みは、鍵も呼び出し口も必要としません。** 既に文字起こし済みのファイルを持ち込む経路は、どちらが閉じていても動きます。
 
 鍵の扱いは AI（§10）と同じ規則です。**鍵は公開リポジトリ・Issue・PR・チャット・ログ・シェルの履歴に出さない。** 入れる経路は `set-transcribe-key.sh` だけ（標準入力から読み、画面・ファイル・コマンドラインに出さない。引数では受け付けない）。
 
 ### 有効にする
 
-1. （初回だけ）`scripts/editor-deploy/gcp-bootstrap.sh resources` — Secret `niho-editor-deepgram-key` を版なしで作り、実行 ID に `roles/secretmanager.secretAccessor` を付ける。
+1. （初回だけ）`scripts/editor-deploy/gcp-bootstrap.sh resources` — Secret `niho-editor-deepgram-key` を版なしで作り、実行 ID に `roles/secretmanager.secretAccessor` を付ける。あわせて呼び出し口の資源（`transcribe-infra.sh`。キュー・サービスアカウント・掃除の Scheduler）も冪等に作る。Scheduler は作った時から 5 分おきに呼ぶが、次の 4 つが済むまでは worker の route が 404 を返す（ジョブの失敗として残るだけで、再試行しない）。
 2. Deepgram の Console で、この用途だけの API キーを作る（使用上限も付けておくと歯止めになる）。
 3. `scripts/editor-deploy/set-transcribe-key.sh` — 端末で実行すると、入力を画面に出さずに鍵を求める。パスワード管理の CLI から渡すときは `<鍵を出すコマンド> | scripts/editor-deploy/set-transcribe-key.sh`。
-4. `scripts/editor-deploy/deploy.sh --no-build` — `DEEPGRAM_API_KEY`（Secret の `latest`）と `EDITOR_TRANSCRIBE_ENGINE=deepgram` が付く。
-5. （呼び出し口が入ったあと）短い音声を 1 つ起こして、段落と話者が出ることを確かめる。
+4. `deploy.env` に `TRANSCRIBE_MODE=cloud-tasks`（任意で `TRANSCRIBE_TIMEOUT_SEC`）。
+5. `scripts/editor-deploy/deploy.sh --no-build` — `DEEPGRAM_API_KEY`（Secret の `latest`）・`EDITOR_TRANSCRIBE_ENGINE=deepgram` と、呼び出し口の 4 つの環境変数が付く。要求の上限も時間切れに合わせて上がる。smoke で worker の route が OIDC トークンなしで 401 を返すことを確かめる。
+6. 短い音声を 1 つ起こして、段落と話者が出ることを確かめる。
 
 ### 無効にする・回す
 
-AI（§10）と同じ手順です。版を無効にして `deploy.sh --no-build`（ログに `transcription: off`）。回すときは新しい版を足して配備し、古い版を無効にします。
+**鍵**は AI（§10）と同じ手順です。版を無効にして `deploy.sh --no-build`（ログに `transcription: off`）。回すときは新しい版を足して配備し、古い版を無効にします。
+
+**呼び出し口**を止めるときは、`deploy.env` の `TRANSCRIBE_MODE` を空にして `deploy.sh --no-build`（開始は 503、worker の route は 404 になる）。あわせて掃除を止めるなら `gcloud scheduler jobs pause niho-editor-transcribe-sweep --location <region>`（戻すときは `resume`）。`transcribe-infra.sh` を流し直しても、止めた状態は保たれます。積まれている task を止めるなら `gcloud tasks queues pause niho-editor-transcribe --location <region>`（任意。止めなくても worker の route が 404 を返し、3 回の試行で消える。run は queued のまま残り、時間切れ ＋ 5 分を過ぎたら掃除が失敗にする）。
+
+### 呼び出し口の構成（`TRANSCRIBE_MODE=cloud-tasks`）
+
+```text
+画面 ── POST /api/pages/{id}/recording/transcribe ──▶ niho-editor（受付: run を queued で作り、task を積む）
+                                               │ tasks.create（名前 = <run>-<世代>。同じ名前は ALREADY_EXISTS ＝積み済み）
+                                               ▼
+                                  Cloud Tasks キュー niho-editor-transcribe
+                                               │ POST /api/internal/transcription/run（OIDC: niho-editor-tasks、audience = run.app の URL）
+                                               ▼
+                                  niho-editor の内部の route（同じサービス）: claim → 保存先の音声 → エンジン → 段落を確定
+
+Cloud Scheduler niho-editor-transcribe-sweep ── 5 分おき POST /api/internal/transcription/sweep（同じ OIDC）──▶ niho-editor
+    (a) 時間切れ ＋ 5 分を過ぎた有効な run を失敗にする（running は engine_timeout、queued は internal）
+    (b) まだ queued の run（1 分より前に作られたもの）を同じ名前で積み直す（積み済みなら重複で無視される）
+```
+
+| 資源 | 名前（既定） | 内容 |
+| --- | --- | --- |
+| Cloud Tasks キュー | `niho-editor-transcribe` | 最大 3 回・60〜300 秒の間隔で再試行・同時 3 本。1 つの task の上限は積むときにアプリが決める（時間切れ ＋ 2 分。上限は 30 分） |
+| サービスアカウント | `niho-editor-tasks`（deploy.env の `TASKS_SA`） | **手順（§11）と同じ 1 つ**。task と掃除の OIDC トークンの身元だけで、どの資源の権限も持たない |
+| Cloud Scheduler | `niho-editor-transcribe-sweep` | `*/5 * * * *`（Asia/Tokyo）・試行の期限 300 秒・再試行なし |
+| 権限 | 実行 ID（`niho-editor-runner`） | キューへの `roles/cloudtasks.enqueuer` と、`niho-editor-tasks` への `roles/iam.serviceAccountUser` |
+
+守り方は手順の worker（§11）とまったく同じです。サービスは誰でも呼べる設定のまま（invoker の IAM は使わない）なので、worker の route が自分で Google の ID トークンを検証します（`apps/editor-web/src/server/google-oidc.ts`）: アルゴリズムは RS256 だけ、鍵は Google の JWKS（固定の URL）、`iss` は Google、`aud` は run.app の URL と完全一致、期限は時計のずれ 60 秒まで、`email` は `niho-editor-tasks` と完全一致かつ確認済み。通らない要求は本文を読まずに 401、`Origin` の付いた要求（ブラウザ）は 403、`TRANSCRIBE_MODE` が空なら 404。
+
+`deploy.sh` が足す環境変数（`TRANSCRIBE_MODE=cloud-tasks` のときだけ。4 つが揃い形が正しいときだけアプリは呼び出し口を開く）:
+
+| 変数 | 値 |
+| --- | --- |
+| `EDITOR_TRANSCRIBE_MODE` | `cloud-tasks` |
+| `EDITOR_TRANSCRIBE_QUEUE` | `projects/<project>/locations/<region>/queues/niho-editor-transcribe` |
+| `EDITOR_TRANSCRIBE_WORKER_URL` | サービスの run.app の URL（独自ドメインではない。OIDC の audience にも使う） |
+| `EDITOR_TRANSCRIBE_INVOKER_SA` | `niho-editor-tasks@<project>.iam.gserviceaccount.com` |
 
 ### 時間切れと費用
 
-1 回の文字起こしの時間切れは `TRANSCRIBE_TIMEOUT_SEC`（空ならアプリの既定 1200 秒＝20 分。60〜3300 秒）。音声の長さと容量の上限は `apps/editor-web/src/recording/audio-limits.ts` にあり、超えたら保存の前に断ります。クラウドに置いた音声は 30 日で消えます（バケットのライフサイクル規則）。請求の正は Deepgram の Console です。
+1 回の文字起こしの時間切れは `TRANSCRIBE_TIMEOUT_SEC`（空ならアプリの既定 1200 秒＝20 分。60〜3300 秒）。3 つの上限が噛み合うようにしてあり、**いちばん短いのがエンジンの時間切れ**です（run が `engine_timeout` で終わり、「もう一度」ができる）:
+
+| 上限 | 値 | 決める所 |
+| --- | --- | --- |
+| エンジンの時間切れ | `TRANSCRIBE_TIMEOUT_SEC`（既定 1200 秒） | `EDITOR_TRANSCRIBE_TIMEOUT_SEC`。`executeRun` の `AbortSignal` |
+| Cloud Run の 1 要求 | 時間切れ ＋ 2 分（既定 1320 秒。`TRANSCRIBE_MODE` が空なら 300 秒。上限 3600 秒） | `deploy.sh` の `--timeout`（`lib.sh` の `service_request_timeout`） |
+| 1 つの task（`dispatchDeadline`） | 時間切れ ＋ 2 分（上限 1800 秒＝Cloud Tasks の決まり） | アプリが積むときに（`src/transcription/cloud-tasks.ts`） |
+| 掃除が取り残しと見なす | 時間切れ ＋ 5 分 | `src/server/transcription-worker-api.ts` の `STALE_MARGIN_SECONDS` |
+
+`TRANSCRIBE_TIMEOUT_SEC` を 1700 秒より長くすると、task の上限（1800 秒）が先に来ます。その場合 Cloud Tasks は task を失敗と見て積み直しますが、run は `running` のままなので claim できず、2 本目は何もせず終わります（二重に起こすことはない）。長い音声を扱うときも、まず音声の上限（`apps/editor-web/src/recording/audio-limits.ts`）に収まるかを見てください。超えたら保存の前に断ります。クラウドに置いた音声は 30 日で消えます（バケットのライフサイクル規則）。
+
+| 項目 | 見込み |
+| --- | --- |
+| Deepgram | 請求の正は Deepgram の Console。音声の長さに応じた従量 |
+| Cloud Tasks | 月 100 万回まで無料。1 回の文字起こしで 1 回（再試行・掃除の積み直しも 1 回）。無料の範囲 |
+| Cloud Scheduler | ジョブ 1 件で月 15 円ほど（§11 の手順の掃除と合わせて 2 件。無料枠は 3 件まで） |
+| Cloud Run | 5 分おきの掃除で、使われていなくても 1 日 288 回起こす。1 回は DB の問い合わせ 2 つで短いので、無料の範囲。文字起こしの最中は 1 要求が最長 20 分 CPU を持つので、そのぶんの秒課金が増える |
+
+### 失敗の見方
+
+- **Cloud Tasks のキュー**（コンソールの Cloud Tasks → `niho-editor-transcribe`）: 積まれている数と試行の回数。worker の route が 200 以外を返した task は 3 回まで試され、その後消える。run は queued のまま残り、掃除が拾う（ただし Cloud Tasks は同じ名前を最大 1 時間使わせないので、拾われるのはその後。それまでに時間切れ ＋ 5 分を過ぎれば、掃除が失敗にする）。
+- **Cloud Run のログ**（短い code だけ。トークン・本文・クレームの値・音声・鍵は出さない）:
+  - `editor-web: transcription worker request refused`: 検証に通らなかった（`code` は `missing_token`・`bad_audience`・`bad_email`・`expired`・`bad_signature`・`jwks_unavailable` など）。Scheduler・Cloud Tasks からの要求でこれが出るなら、`EDITOR_TRANSCRIBE_WORKER_URL` と `--oidc-token-audience`、`TASKS_SA` の食い違いを疑う。
+  - `editor-web: transcription dispatch failed`: 開始が task を積めなかった（run は失敗にして、画面から「もう一度」ができる）。実行 ID の `roles/cloudtasks.enqueuer` と、キューが止まっていないかを見る。
+  - `editor-web: transcription failed`: run そのものの失敗。`code` は `audio_missing`・`audio_expired`・`engine_unavailable`・`engine_rejected`・`engine_timeout`・`engine_bad_response`・`too_large`・`internal`。
+  - `editor-web: transcription sweep could not requeue every run`: 掃除の積み直しの一部が失敗した（次の回でまた拾う）。
+  - `editor-web: transcription sweep read only the oldest queued runs`: queued の run が 100 件を超えて残っている（1 ページで有効な run は 1 つなので、これが出るのは異常。キューが止まっていないかを見る）。
+- **文字起こしの失敗の理由**: 録音ページの状態（`GET /api/pages/{id}/recording/transcription` の `errorCode`）。
+- **Cloud Scheduler のジョブ**の最後の実行: 成功は 200 `{"failed": n, "requeued": m}`。

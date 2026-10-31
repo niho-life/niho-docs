@@ -22,7 +22,8 @@ import { errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, rea
  *   段落が既にある録音は、`replace: true` が無ければ 409（直した文章を失わせない）。
  * - 作法は録音の API（recordings-api.ts）と同じ: 未認証 401、更新系は同じ origin からだけ（403）、別の人・存在しない・不正な id・
  *   削除済み・録音の無いページは同じ 404、エラーの本文は短い code と理由だけ。音声・鍵・bucket 名・object の場所は出さない。
- * - 本番は実行の口（Cloud Tasks と worker）ができるまで 503 `transcription_unavailable`（偽物の実行器・同じプロセスの実行を本番に出さない）。
+ * - 呼び出し口が無いときは 503 `transcription_unavailable`（本番は `EDITOR_TRANSCRIBE_MODE=cloud-tasks` と
+ *   キュー・worker の URL・OIDC の身元が揃ったときだけ開く。inline は開発と CI だけ。src/transcription/dispatch.ts）。
  */
 
 /** 文字起こしの API が使う store の操作（packages/editor-store の関数に Pool を渡したもの）。null はページ（録音）が無い。 */
@@ -39,7 +40,7 @@ export type TranscriptionApiDeps = {
   auth: () => AuthProvider;
   /** DB が使えないときは null（503 unavailable）。 */
   store: () => TranscriptionStore | null;
-  /** 文字起こしが使えないとき（off・本番・設定の誤り・保存先なし）は null（503 transcription_unavailable）。 */
+  /** 文字起こしが使えないとき（off・呼び出し口なし・設定の誤り・保存先なし）は null（503 transcription_unavailable）。 */
   runner: () => TranscriptionRunnerDeps | null;
   env?: Readonly<Record<string, string | undefined>>;
 };

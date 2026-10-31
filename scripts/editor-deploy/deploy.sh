@@ -4,7 +4,7 @@
 #   2. the migrate job applies the migrations and the app role's privileges with the new image (stops on failure)
 #   3. the web service is deployed with the new image
 #   4. smoke checks: every response is noindex, and the API refuses a caller with no session
-#      (with STEPS_MODE=cloud-tasks, also the worker routes refuse a caller with no OIDC token)
+#      (with STEPS_MODE / TRANSCRIBE_MODE = cloud-tasks, also the worker routes refuse a caller with no OIDC token)
 # Usage: scripts/editor-deploy/deploy.sh [--no-build] [--allow-dirty]
 #   --no-build  redeploys the image that is serving now (picks up new secret versions and turns AI on or off; no build)
 # Needs scripts/editor-deploy/deploy.env (see deploy.env.example) and a gcloud login with access to the project.
@@ -58,6 +58,13 @@ if transcribe_key_ready; then
 else
   log "transcription: off (the newest version of $SECRET_DEEPGRAM_KEY is missing or not enabled)"
 fi
+# The dispatcher is the other half (#36, §12): the key alone cannot transcribe audio, because a transcription does not fit
+# in one request of the app. With TRANSCRIBE_MODE=cloud-tasks the start enqueues, and the worker route runs it apart.
+if [[ "$TRANSCRIBE_MODE" == cloud-tasks ]]; then
+  log "transcription dispatcher: cloud-tasks (queue $TRANSCRIBE_QUEUE, sweep $TRANSCRIBE_SWEEP_JOB)"
+else
+  log "transcription dispatcher: off (TRANSCRIBE_MODE is empty: transcribing audio answers 503; the VTT import still works)"
+fi
 
 if [[ $build -eq 1 ]]; then
   log "build $IMAGE:$TAG (Cloud Build)"
@@ -85,11 +92,11 @@ gcp run deploy "$SERVICE" \
   --service-account "$RUNNER_SA_EMAIL" \
   --no-invoker-iam-check --ingress all \
   --port 8080 --min-instances 0 --max-instances 2 \
-  --cpu 1 --memory 512Mi --cpu-boost --concurrency 40 --timeout 300 \
+  --cpu 1 --memory 512Mi --cpu-boost --concurrency 40 --timeout "$(service_request_timeout)" \
   --add-cloudsql-instances "$CONNECTION" \
   --network "$VPC_NETWORK" --subnet "$VPC_SUBNET" --vpc-egress private-ranges-only \
   --set-secrets "$(service_secrets "$ai" "$tr")" \
-  --set-env-vars "$(service_env_vars "$ai" "$tr")$(steps_env_vars)" \
+  --set-env-vars "$(service_env_vars "$ai" "$tr")$(steps_env_vars)$(transcribe_env_vars)" \
   --labels "$COST_LABEL,commit=${TAG:0:12}"
 
 # 一度でも特定の revision へ traffic を割り当てる（docs/ops/editor-deploy.md §9 の戻し方）と、Cloud Run は以降のデプロイもその割り当てを
@@ -108,13 +115,14 @@ done
 status="$(curl -sS -o /dev/null -w '%{http_code}' --retry 5 --retry-all-errors --max-time 20 "$SERVICE_URL/api/pages")"
 [[ "$status" == 401 ]] || die "/api/pages answered $status to a caller with no session (expected 401)"
 log "ok 401      /api/pages with no session"
-if [[ "$STEPS_MODE" == cloud-tasks ]]; then
-  # The worker routes check Google's OIDC token themselves (the service is public): no token must be 401.
-  for path in /api/internal/steps/run /api/internal/steps/sweep; do
-    status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' \
-      --retry 5 --retry-all-errors --max-time 20 "$SERVICE_URL$path")"
-    [[ "$status" == 401 ]] || die "$path answered $status to a caller with no token (expected 401)"
-    log "ok 401      $path with no token"
-  done
-fi
+# The worker routes check Google's OIDC token themselves (the service is public): no token must be 401.
+worker_paths=()
+if [[ "$STEPS_MODE" == cloud-tasks ]]; then worker_paths+=(/api/internal/steps/run /api/internal/steps/sweep); fi
+if [[ "$TRANSCRIBE_MODE" == cloud-tasks ]]; then worker_paths+=(/api/internal/transcription/run /api/internal/transcription/sweep); fi
+for path in ${worker_paths+"${worker_paths[@]}"}; do
+  status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' \
+    --retry 5 --retry-all-errors --max-time 20 "$SERVICE_URL$path")"
+  [[ "$status" == 401 ]] || die "$path answered $status to a caller with no token (expected 401)"
+  log "ok 401      $path with no token"
+done
 log "done: $TAG  $(app_origin)"

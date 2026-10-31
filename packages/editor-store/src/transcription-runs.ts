@@ -460,8 +460,36 @@ UPDATE transcription_runs
     OR (status = 'queued' AND created_at < $1::timestamptz - make_interval(secs => $2::double precision))
 RETURNING id`;
 
+/** 積み直しの対象（queued の run。世代は task の名前に入れる）。 */
+export type QueuedTranscriptionRun = { id: string; generation: number };
+
+/** $1 olderThan / $2 limit。transcription_runs_queued_idx（0014）の並び。 */
+const LIST_QUEUED_SQL = `
+SELECT id, generation
+  FROM transcription_runs
+ WHERE status = 'queued' AND created_at < $1::timestamptz
+ ORDER BY created_at, id
+ LIMIT $2`;
+
+/** 1 回の読み込みで拾う数の上限。 */
+export const LIST_QUEUED_LIMIT_MAX = 1000;
+
 /**
- * 古くなった有効な run の掃除（DB だけ。呼ぶのは将来の worker・定期の実行）:
+ * まだ queued の run（古い順・上限つき）。定期の掃除が、同じ task の名前（世代を含む）で積み直す対象
+ * （積み込みの失敗・失われた task を拾う。まだ積まれていれば、名前の重複で無視される）。読むだけ。
+ * `olderThan` より後に作られた run は返さない（開始の API が積んでいる最中の run を掃除が二重に積まないため）。
+ * 上限に達したら、残りは次の掃除が拾う（この表は 1 ページで有効な run が 1 つだけなので、queued が積み上がるのは異常）。
+ */
+export async function listQueuedRuns(db: Queryable, options: { olderThan: Date; limit?: number }): Promise<QueuedTranscriptionRun[]> {
+  const { olderThan } = options;
+  if (!(olderThan instanceof Date) || Number.isNaN(olderThan.getTime())) throw new TypeError("editor-store: olderThan must be a valid Date");
+  const limit = Math.max(1, Math.min(options.limit ?? 100, LIST_QUEUED_LIMIT_MAX));
+  const result = await db.query<{ id: string; generation: number }>(LIST_QUEUED_SQL, [olderThan.toISOString(), limit]);
+  return result.rows.map((row) => ({ id: row.id, generation: row.generation }));
+}
+
+/**
+ * 古くなった有効な run の掃除（DB だけ。呼ぶのは worker の `/api/internal/transcription/sweep`。定期の実行は Cloud Scheduler）:
  * - running のまま started_at が now − olderThanSec より前: failed（engine_timeout）。実行する側が落ちた・時間切れ
  * - queued のまま created_at が now − olderThanSec より前: failed（internal）。積めなかった・実行する側が claim の前に落ちた
  * 失敗にした run の id を返す。遅れて返った実行の確定・失敗は、running でなくなったので通らない。

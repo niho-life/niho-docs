@@ -16,6 +16,7 @@ import {
   failRun,
   finishRun,
   latestRun,
+  listQueuedRuns,
   sweepStaleRuns,
   transcriptionStatus,
   type EnqueueTranscriptionInput,
@@ -159,6 +160,8 @@ describe("transcription runs without a database", () => {
     await assert.rejects(() => finishRun(untouchable, id, 1, { segments: RESULT, durationSec: -1 }), InvalidRecordingError);
     await assert.rejects(() => sweepStaleRuns(untouchable, new Date(), 0), RangeError);
     await assert.rejects(() => sweepStaleRuns(untouchable, new Date(Number.NaN), 60), TypeError);
+    await assert.rejects(() => listQueuedRuns(untouchable, { olderThan: new Date(Number.NaN) }), TypeError);
+    await assert.rejects(() => listQueuedRuns(untouchable, { olderThan: "2026-10-31" as never }), TypeError);
   });
 });
 
@@ -484,6 +487,38 @@ describe("transcription runs on PostgreSQL", { skip: databaseUrl === undefined }
     assert.deepEqual((await getRecording(pool, OWNER, stuck))?.segments, []);
     assert.deepEqual(await sweepStaleRuns(pool, new Date(), 30 * 60), [], "nothing is swept twice");
     assert.equal(await finishRun(pool, freshRun.id, freshRun.generation, { segments: RESULT, durationSec: 5 }), "succeeded");
+  });
+
+  it("lists the runs that are still queued, oldest first, without the ones a start may still be enqueueing", async () => {
+    const olderPage = await uploadedRecording(pool);
+    const older = await enqueueTranscription(pool, OWNER, olderPage, run());
+    assert.ok(older?.status === "created");
+    const newerPage = await uploadedRecording(pool);
+    const newer = await enqueueTranscription(pool, OWNER, newerPage, run());
+    assert.ok(newer?.status === "created");
+    // 掃除が拾うのは、積んでいる最中でない（少し前に作られた）run だけ
+    await pool.query("UPDATE transcription_runs SET created_at = created_at - interval '10 minutes' WHERE id = $1", [older.run.id]);
+    await pool.query("UPDATE transcription_runs SET created_at = created_at - interval '5 minutes' WHERE id = $1", [newer.run.id]);
+    const runningPage = await uploadedRecording(pool);
+    const running = await claimed(pool, runningPage);
+
+    const queued = await listQueuedRuns(pool, { olderThan: new Date() });
+    assert.deepEqual(
+      queued.map((item) => item.id),
+      [older.run.id, newer.run.id],
+      "oldest first, and a claimed run is not in the list",
+    );
+    // queued の run はまだ claim されていないので、世代 0（task の名前が開始と同じになる）
+    assert.deepEqual(new Set(queued.map((item) => item.generation)), new Set([0]));
+    assert.ok(!queued.some((item) => item.id === running.id));
+
+    const grace = new Date(Date.now() - 7 * 60 * 1000);
+    assert.deepEqual((await listQueuedRuns(pool, { olderThan: grace })).map((item) => item.id), [older.run.id], "newer than the grace period is left alone");
+    assert.deepEqual((await listQueuedRuns(pool, { olderThan: new Date(), limit: 1 })).map((item) => item.id), [older.run.id], "the limit takes the oldest");
+
+    // 失敗・成功した run は積み直さない
+    assert.equal(await failRun(pool, older.run.id, 0, "internal"), true);
+    assert.deepEqual((await listQueuedRuns(pool, { olderThan: new Date() })).map((item) => item.id), [newer.run.id]);
   });
 
   it("keeps the invariants when the code is bypassed", async () => {
