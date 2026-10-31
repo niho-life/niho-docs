@@ -1,4 +1,4 @@
-import type { JSONContent } from "@tiptap/core";
+import type { Editor, JSONContent } from "@tiptap/core";
 
 /**
  * 保存されている blocks（限定 AST。src/ast/blocks.ts）と TipTap の doc の行き来。
@@ -40,4 +40,19 @@ export function imageAttrsOf(node: unknown): ImageAttrs | null {
   const assetId = typeof attrs.assetId === "string" ? attrs.assetId : null;
   if (assetId === null) return null;
   return { assetId, alt: text(attrs.alt), credit: text(attrs.credit), consent: attrs.consent === true };
+}
+
+/**
+ * 本文を blocks に差し替える（端末の下書き・AI の採用の結果・競合の応答のページ）。今の schema で読めなければ載せずに false。
+ * 載せたこと自体は Undo の対象にしない（直後の Undo で載せた本文を消さない）。onUpdate（自動保存・下書き）も起こさない。
+ */
+export function replaceBlocks(editor: Editor, blocks: unknown[]): boolean {
+  const doc = docFromBlocks(blocks);
+  try {
+    editor.schema.nodeFromJSON(doc).check();
+  } catch {
+    return false;
+  }
+  editor.chain().setMeta("addToHistory", false).setContent(doc, { emitUpdate: false }).run();
+  return true;
 }

@@ -1,5 +1,6 @@
 import type { PageSummary } from "@niho/editor-store";
 import type { ShellListItem } from "niho-docs-ui/shell";
+import type { SearchHit } from "./search-client";
 
 /** 東京の日付で数える（日本は夏時間が無いので、UTC に 9 時間を足した日付）。 */
 const TOKYO_OFFSET_MS = 9 * 60 * 60 * 1000;
@@ -30,10 +31,13 @@ export function formatWhen(iso: string, now: number): string {
   return date.getUTCFullYear() === new Date(now + TOKYO_OFFSET_MS).getUTCFullYear() ? monthDay : `${date.getUTCFullYear()}年${monthDay}`;
 }
 
-/** 題名での絞り込み（読み込んだ行だけ。題名と本文の検索は #35 でこれを差し替える）。 */
-export function searchPages(pages: readonly PageSummary[], query: string): PageSummary[] {
-  const needle = query.normalize("NFKC").toLowerCase().trim();
-  return pages.filter((page) => page.title.normalize("NFKC").toLowerCase().includes(needle));
+/** 検索の結果の行。サーバーが並べた順（更新順）のまま、当たった所の一文を 2 行目に添える。入れ子にしない。 */
+export function searchRows(hits: readonly SearchHit[], now: number): ShellListItem[] {
+  return hits.map((hit) => {
+    const item: ShellListItem = { id: hit.id, title: hit.title, when: formatWhen(hit.updatedAt, now) };
+    if (hit.snippet.trim() !== "") item.sub = { text: hit.snippet };
+    return item;
+  });
 }
 
 function rowOf(page: PageSummary, now: number, child: boolean): ShellListItem {
@@ -67,11 +71,10 @@ function byCreated(a: PageSummary, b: PageSummary): number {
 
 /**
  * サイドバーの行。上の段は渡した順（更新順）。親（か祖先）を読み込んである行は、いちばん上の祖先の直後に作った順で少し下げて並べる。
- * 親を読み込んでいない行は上の段に出す。query があるときは題名で絞り、入れ子にせずに並べる。
+ * 親を読み込んでいない行は上の段に出す。検索の結果は `searchRows`（サーバーの検索）で出す。
  */
-export function arrangeSidebarItems(pages: readonly PageSummary[], options: { now: number; query?: string }): ShellListItem[] {
+export function arrangeSidebarItems(pages: readonly PageSummary[], options: { now: number }): ShellListItem[] {
   const { now } = options;
-  if (options.query?.trim()) return searchPages(pages, options.query).map((page) => rowOf(page, now, false));
   const byId = new Map(pages.map((page) => [page.id, page]));
   const children = new Map<string, PageSummary[]>();
   const tops: PageSummary[] = [];
