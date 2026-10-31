@@ -84,7 +84,6 @@ describe("SharedBlocks", () => {
 
   it("renders the children of unknown nodes without throwing, and skips images", () => {
     const html = render([
-      { type: "callout", content: [paragraph(text("囲みの中"))] },
       { type: "table", content: [{ type: "tableRow", content: [{ type: "tableCell", content: [paragraph(text("表の中"))] }] }] },
       { type: "image", attrs: { src: "https://example.com/a.png", alt: "写真" } },
       { type: "docAssetImage", attrs: { name: "a.png" } },
@@ -96,8 +95,13 @@ describe("SharedBlocks", () => {
       [paragraph(text("配列"))],
       { content: [text("型なし")] },
     ]);
-    expect(html).toBe("<p>囲みの中</p><p>表の中</p>const a = 1;型なし");
+    expect(html).toBe("<p>表の中</p>const a = 1;型なし");
     expect(html).not.toMatch(/img|example\.com|写真/);
+  });
+
+  it("renders a callout as aside[data-callout], with its blocks inside (#33)", () => {
+    const html = render([{ type: "callout", content: [paragraph(text("囲みの中")), { type: "bulletList", content: [{ type: "listItem", content: [paragraph(text("項目"))] }] }] }]);
+    expect(html).toBe('<aside data-callout=""><p>囲みの中</p><ul><li><p>項目</p></li></ul></aside>');
   });
 
   it("renders an image of the shared page through the token's relay, with alt and the credit as a caption", () => {
