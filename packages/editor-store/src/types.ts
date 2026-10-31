@@ -59,6 +59,8 @@ export type PagePublicationSummary = {
  */
 export type PageSummary = Pick<Page, "id" | "kind" | "title" | "lang" | "parent" | "stepStatus" | "createdAt" | "updatedAt"> & {
   publication: PagePublicationSummary | null;
+  /** 同じ親の中の手動の並び（小さいほど上。0 は並べ替えていない）。 */
+  sortOrder: number;
 };
 
 /** 一覧のひと区切り。next は続きを読むときに cursor に渡す値（続きが無ければ null）。 */
@@ -97,6 +99,15 @@ export type SaveOptions = {
  * `too_deep` は段が深くなりすぎる移動、`cycle` は自分自身・自分の子孫の下へ入れる移動（どちらも何も書かない）。
  */
 export type MovePageResult = "moved" | "too_deep" | "cycle";
+
+/** 手動の並びを 1 つ動かす向き。 */
+export type OrderMove = "up" | "down";
+
+/**
+ * 手動の並びを動かした結果（ページが無いときは null）。`edge` はもう端にいる（何も書かない）。
+ * 動かすと、同じ親の中の全ての行に 1 から振り直す。
+ */
+export type MoveOrderResult = "moved" | "edge";
 
 /** 保存の結果（該当するページが無いときは null）。競合のときは何も書かず、今のページを返す。 */
 export type SaveResult = { status: "saved"; page: Page } | { status: "conflict"; page: Page };
