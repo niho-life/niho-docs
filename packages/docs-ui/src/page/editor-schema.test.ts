@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { Editor } from "@tiptap/core";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { BLOCK_NODE_NAMES, INLINE_NODE_NAMES, MARK_NAMES, validateBlocks } from "@/ast/blocks";
+import { BLOCK_NODE_NAMES, INLINE_NODE_NAMES, MARK_NAMES, validateBlocks } from "./blocks";
 import { normalizePastedHtml } from "./paste";
 import { buildPageExtensions } from "./page-extensions";
 

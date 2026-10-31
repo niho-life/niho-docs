@@ -867,6 +867,16 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.equal(await tooLarge.text(), '{"error":"bad_request","reason":"too_large"}');
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1", [STUB_OWNER])).rows[0].n, pagesBefore);
 
+    // ブラウザのマイク録音（#36 段 3b-1）: .webm と、パラメータつきの content type（除いた形で持つ）
+    assert.ok(limitsBody.extensions.includes("webm") && limitsBody.contentTypes.includes("audio/webm"));
+    const webm = await write("POST", "/api/recordings/audio/start", { name: "録音 2030-01-02 09-05.webm", contentType: "audio/webm;codecs=opus", sizeBytes: 4, sha256 });
+    assert.equal(webm.status, 201);
+    const webmBody = await webm.json();
+    createdIds.push(webmBody.page.id);
+    assert.equal(webmBody.page.title, "録音 2030-01-02 09-05");
+    assert.equal(webmBody.recording.audio.contentType, "audio/webm");
+    assert.equal(webmBody.upload.headers["Content-Type"], "audio/webm");
+
     // 別の owner の音声のページは、存在しない id と同じ 404
     const theirs = await pool.query("INSERT INTO pages (owner, kind, title) VALUES ($1, 'rec', 'synthetic other audio') RETURNING id", [OTHER_OWNER]);
     const theirId = theirs.rows[0].id;

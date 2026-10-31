@@ -1,3 +1,4 @@
+import type { ImageMeta, ImageProblem, PageImageUploadResult, PageImages } from "niho-docs-ui/page/images";
 import { isAllowedImageSize, isAllowedImageType } from "@/image/image-limits";
 import { imageAssetPath } from "@/image/image-paths";
 
@@ -11,20 +12,8 @@ import { imageAssetPath } from "@/image/image-paths";
  * - API の呼び出しは同じ origin。PUT は credentials を付けない（保存先は別の origin）。
  */
 
-export type ImageMeta = { alt: string | null; credit: string | null; consent: boolean };
-
-/** 断る理由（画面に出す文は src/editor/image-node.ts が持つ）。 */
-export type ImageProblem = "no_page" | "content_type" | "too_large" | "too_many" | "failed";
-
-export type PageImageUploadResult = { ok: true; assetId: string; meta: ImageMeta } | { ok: false; problem: ImageProblem };
-
-/** エディタ（src/editor/image-node.ts）が使う口。テストでは差し替える。 */
-export type PageImages = {
-  /** ファイルを private bucket に入れ、資産の id を返す。上限を超えるものは送らずに断る。 */
-  upload: (file: File, pageId: string) => Promise<PageImageUploadResult>;
-  /** alt・クレジット・掲載許諾を保存する（資産の行が正本。本文の attrs は別に自動保存される）。 */
-  saveMeta: (assetId: string, patch: Partial<ImageMeta>) => Promise<boolean>;
-};
+/** 口の型は共通（packages/docs-ui の page/images.ts。Mac・Web で同じエディタが読む）。実装（通信）だけがここにある。 */
+export type { ImageMeta, ImageProblem, PageImageUploadResult, PageImages } from "niho-docs-ui/page/images";
 
 export type ImageUploadTicket = {
   url: string;

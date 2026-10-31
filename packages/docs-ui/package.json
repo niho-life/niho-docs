@@ -5,6 +5,10 @@
   "description": "NIHO docs の Mac・Web/PWA 共通画面と DocsHost 接続契約。",
   "exports": {
     "./editor/*": "./src/editor/*.ts",
+    "./page": "./src/page/index.ts",
+    "./page/ImageNodeView": "./src/page/ImageNodeView.tsx",
+    "./page/PageChrome": "./src/page/PageChrome.tsx",
+    "./page/*": "./src/page/*.ts",
     "./sharing": "./src/sharing/page-sharing-panel.tsx",
     "./shell": "./src/shell/index.ts",
     "./flow/*": "./src/flow/*.tsx",

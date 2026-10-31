@@ -2,9 +2,8 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
-import { IMAGE_ALT_MAX_CHARS, IMAGE_CREDIT_MAX_CHARS } from "@/image/image-limits";
-import { imageAssetPath } from "@/image/image-paths";
-import type { PageImages } from "@/lib/image-upload-client";
+import { IMAGE_ALT_MAX_CHARS, IMAGE_CREDIT_MAX_CHARS } from "./image-limits";
+import type { ImageSrcOf, PageImages } from "./images";
 import { imageAttrsOf } from "./doc";
 
 /**
@@ -51,7 +50,8 @@ const WARN_STYLE = { margin: 0, color: "var(--docs-warn-ink)", fontSize: "12px" 
 export function ImageNodeView(props: NodeViewProps) {
   const { node, selected, editor, updateAttributes, extension } = props;
   const attrs = imageAttrsOf(node.toJSON());
-  const images = (extension.options as { images?: PageImages | null }).images ?? null;
+  const options = extension.options as { images?: PageImages | null; srcOf?: ImageSrcOf | null };
+  const images = options.images ?? null;
   const editable = editor.isEditable;
   const timer = useRef<number | null>(null);
   const pending = useRef<{ alt?: string | null; credit?: string | null; consent?: boolean }>({});
@@ -95,8 +95,8 @@ export function ImageNodeView(props: NodeViewProps) {
 
   return (
     <NodeViewWrapper as="figure" data-image="" data-selected={selected ? "" : undefined}>
-      {/* eslint-disable-next-line @next/next/no-img-element -- 中継の path をそのまま読む（next/image の最適化・外部 loader を通さない） */}
-      <img src={imageAssetPath(attrs.assetId)} alt={attrs.alt ?? ""} data-doc-asset="" data-drag-handle="" draggable={false} />
+      {/* 保存先の src をそのまま読む（画像の最適化・外部 loader を通さない） */}
+      <img src={options.srcOf?.(attrs.assetId) ?? ""} alt={attrs.alt ?? ""} data-doc-asset="" data-drag-handle="" draggable={false} />
       {attrs.credit && !(selected && editable) ? (
         <figcaption style={CAPTION_STYLE} contentEditable={false}>
           {attrs.credit}

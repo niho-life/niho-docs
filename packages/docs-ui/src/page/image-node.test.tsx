@@ -6,14 +6,16 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { validateBlocks } from "@/ast/blocks";
-import type { ImageMeta, PageImages } from "@/lib/image-upload-client";
+import { validateBlocks } from "./blocks";
+import type { ImageMeta, PageImages } from "./images";
 import { IMAGE_PROBLEM_TEXT } from "./image-node";
 import { buildPageExtensions, type PageExtensionsOptions } from "./page-extensions";
 
 // 合成のページ・資産の id と、1 バイトの偽のファイルだけを使う（実在の画像は入れない）
 const PAGE = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
 const ASSET = "9a1f3b1c-0d11-4c39-9a52-6f6c6f1d0d7c";
+/** 画像を描く src を組む口（Web はサーバーの中継の path、Mac は asset protocol の URL）。 */
+const srcOf = (assetId: string) => `/api/assets/${assetId}`;
 
 beforeAll(() => {
   const rect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }) as DOMRect;
@@ -55,7 +57,7 @@ function stubImages(result?: Awaited<ReturnType<PageImages["upload"]>>) {
 
 function Harness({ options }: { options: PageExtensionsOptions }) {
   const editor = useEditor({
-    extensions: buildPageExtensions(options),
+    extensions: buildPageExtensions({ srcOf, ...options }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
     immediatelyRender: false,
     editorProps: { attributes: { class: "doc", "aria-label": "本文" } },
@@ -134,7 +136,7 @@ describe("the image node", () => {
     expect(savedBlocks(editor)).toEqual([{ type: "image", attrs: { assetId: ASSET, consent: false } }, { type: "paragraph" }]);
     expect(JSON.stringify(editor.getJSON())).not.toContain("/api/assets");
     // 描くときだけ中継の path を使う
-    expect(images().map((item) => item.getAttribute("src"))).toEqual([`/api/assets/${ASSET}`]);
+    expect(images().map((item) => item.getAttribute("src"))).toEqual([srcOf(ASSET)]);
     expect(images()[0]!.getAttribute("alt")).toBe("");
   });
 
@@ -238,7 +240,7 @@ describe("the image node", () => {
       });
     });
     await flush();
-    expect(images().map((item) => item.getAttribute("src"))).toEqual([`/api/assets/${ASSET}`]);
+    expect(images().map((item) => item.getAttribute("src"))).toEqual([srcOf(ASSET)]);
     expect(savedBlocks(editor)[0]).toEqual({ type: "image", attrs: { assetId: ASSET, alt: "保存済み", credit: "提供元", consent: true } });
     // 外の画像の HTML は読み取らない（id を持たない img・外の src は本文に入らない）
     await act(async () => {
