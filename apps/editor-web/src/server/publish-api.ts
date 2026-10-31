@@ -36,6 +36,7 @@ import {
   type SheetSelection,
   type SheetSlug,
   type StatusState,
+  type StorageBlock,
   type Target,
 } from "@niho/editor-publish";
 import type { AuthProvider, Session } from "../auth/types";
@@ -101,6 +102,8 @@ export type PublishSheetDto = {
   ranges: PublicationRange[];
   extras: { key: ExtraKey; checked: boolean }[];
   selectionError: "range" | "extras" | null;
+  /** 保存先がクラウドでないため公開できない理由（公開の主ボタンは出ない）。 */
+  storageBlock: StorageBlock | null;
   problems: Problem[];
   notices: Notice[];
   url: string | null;
@@ -217,6 +220,7 @@ export async function loadPublishSheet(
 ): Promise<PublishSheetDto | null> {
   const ports = wiring.publish;
   const roles = await ports.roles.read(actorId);
+  const storageMode = await ports.storage.read(actorId);
   const listed = await new ConnectionService(wiring.connections).listConnections({ actorId });
   if (!listed.ok) throw new Error("connections are not available");
   const sites = listed.connections.map((connection) => connection.handle);
@@ -268,6 +272,7 @@ export async function loadPublishSheet(
     pageId,
     title: page.title,
     roles,
+    storageMode,
     sites,
     declarations,
     selection,
@@ -332,6 +337,7 @@ export async function loadPublishSheet(
     ranges: [...plan.ranges],
     extras: plan.extras.map((entry) => ({ ...entry })),
     selectionError: plan.selectionError,
+    storageBlock: plan.storageBlock,
     problems: [...plan.problems.map((problem) => ({ ...problem })), ...(photosBlocked ? [{ ...PHOTOS_UNAVAILABLE }] : [])],
     notices: plan.notices.map((notice) => ({ ...notice })),
     url: plan.url,
@@ -369,6 +375,8 @@ export function publishFailureResponse(result: Exclude<PublishResult, { ok: true
       const message = result.detail === "role" ? PUBLISH_MESSAGES.forbiddenRole : result.detail === "connection" ? PUBLISH_MESSAGES.forbiddenConnection : PUBLISH_MESSAGES.forbiddenSetting;
       return jsonResponse(setting ? 400 : 403, { error: result.reason, detail: result.detail, message });
     }
+    case "storage_not_cloud":
+      return jsonResponse(403, { error: result.reason, detail: result.detail, message: PUBLISH_MESSAGES.storageNotCloud });
     case "not_ready":
       return jsonResponse(409, { error: result.reason, problems: result.problems, notices: result.notices, message: PUBLISH_MESSAGES.notReady });
     case "slug_locked":

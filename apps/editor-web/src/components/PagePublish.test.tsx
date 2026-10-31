@@ -62,6 +62,7 @@ function sheet(patch: Partial<PublishSheetDto> = {}): PublishSheetDto {
     ranges: [],
     extras: [],
     selectionError: null,
+    storageBlock: null,
     problems: [],
     notices: [],
     url: null,
@@ -393,6 +394,15 @@ describe("公開のシート", () => {
     expect(calls.filter((url) => url.includes(PAGE))).toHaveLength(1);
     expect(calls.filter((url) => url.includes(PAGE_B))).toHaveLength(1);
     expect($(".es-pubbtn")?.textContent).toContain("公開中");
+  });
+
+  it("保存先がクラウドでないときは、理由を一言出して公開は押せない（storageBlock）", async () => {
+    server({ sheets: [sheet(), sheet({ storageBlock: "LOCAL", selection: { handle: "niho", range: "live", extras: NONE, slug: null } }), nihoPlan({ storageBlock: "LOCAL", primary: null })] });
+    await mount();
+    await click($(".es-pubbtn"));
+    await click(dest("NIHO"));
+    expect($('[role="alert"]')!.textContent).toBe("保存先が NIHO クラウドではないので、公開できません（公開は保存先がクラウドのときだけです）");
+    expect(primary().disabled).toBe(true);
   });
 
   it("「接続する」「発信先を追加」は発信先の設定へ移る", async () => {

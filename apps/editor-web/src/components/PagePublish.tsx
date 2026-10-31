@@ -347,7 +347,7 @@ export function usePagePublish(input: {
 
   const selectedDest: ShellDest | undefined =
     selection === null ? undefined : selection.handle === "exp" || selection.handle === "niho" ? selection.handle : selection.handle === site ? "site" : undefined;
-  const selectionError = sheet?.selectionError === "range" ? PUBLISH_MESSAGES.rangeNotOffered : sheet?.selectionError === "extras" ? PUBLISH_MESSAGES.extrasNotOffered : null;
+  const selectionError = sheet?.storageBlock ? PUBLISH_MESSAGES.storageNotCloud : sheet?.selectionError === "range" ? PUBLISH_MESSAGES.rangeNotOffered : sheet?.selectionError === "extras" ? PUBLISH_MESSAGES.extrasNotOffered : null;
   const live = sheet?.publication && !sheet.publication.stopped ? sheet.publication : null;
 
   let overlay: ReactNode = null;

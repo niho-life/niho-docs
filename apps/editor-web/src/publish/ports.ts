@@ -14,6 +14,7 @@ import {
   type FactsSource,
   type PublishPorts,
   type RoleReader,
+  type StorageModeReader,
 } from "@niho/editor-publish";
 import type { Session } from "../auth/types";
 import { publishConfig, type DeclarationPlan, type PublishConfig, type PublishEnv } from "./config";
@@ -84,6 +85,18 @@ export function roleReaderOf(config: PublishConfig, session: Session): RoleReade
   };
 }
 
+/**
+ * 保存先（設計 §2.1）。アカウントの設定で、保存しない。stub と niho の方式とも、NIHO から読む契約が出るまでは「未選択」（UNSET。
+ * クラウドと同じ扱い）。要求の本人でなければ、読めないものとして LOCAL（公開しない）にする。
+ */
+export function storageModeReaderOf(session: Session): StorageModeReader {
+  return {
+    async read(actorId) {
+      return actorId === session.userId ? "UNSET" : "LOCAL";
+    },
+  };
+}
+
 export function sessionAuthors(session: Session): AuthorSource {
   return {
     async read(actorId) {
@@ -147,6 +160,7 @@ export function wirePublishPorts(store: ConnectionStore, session: Session, optio
     publish: {
       store,
       roles: roleReaderOf(config, session),
+      storage: storageModeReaderOf(session),
       connections: connectionSource(store),
       declarations: siteDeclarationSource(store, faceDeclarations(config.declarations, options.fetch)),
       authors: sessionAuthors(session),
