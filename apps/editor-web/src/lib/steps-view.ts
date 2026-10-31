@@ -91,6 +91,8 @@ const FAILURES: Readonly<Record<string, StepFailure>> = {
   quota_exceeded: WAIT("今月の AI の使用量が上限に達しました。来月まで手順を実行できません。", "usage"),
   invalid_output: FIX("AI の答えを本文にできませんでした。手順の指示やお手本を見直すと直ることがあります。", "steps"),
   ai_bad_request: FIX("AI がこの指示を受け付けませんでした。手順の指示やお手本を短くすると直ることがあります。", "steps"),
+  // 続きを使い切っても終わらなかった（T5 の続きは 8 回まで）。もう一度頼んでも同じ長さで切れるので、待っても直らない
+  output_too_long: FIX("長すぎて書き切れませんでした。この段階の指示で扱う範囲を分けて頼むと通ることがあります。", "steps"),
   usage_unavailable: RETRY(`使用量を数えられませんでした。${LATER}`),
   ai_rate_limit: RETRY(`AI への問い合わせが混み合っています。${LATER}`),
   ai_overloaded: RETRY(`AI が混み合っています。${LATER}`),
