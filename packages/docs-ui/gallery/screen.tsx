@@ -232,7 +232,7 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
     />
   );
   const rail = hasRail ? (
-    <ShellRail>
+    <ShellRail onClose={() => setRailOpen(false)}>
       {steps && (
         <ShellRailSection title={steps.root.recipe ?? "手順"} icon="spark" summary={steps.steps.find((s) => s.id === page.id)?.label ?? ""} open={cards.steps} onToggle={() => setCards((c) => ({ ...c, steps: !c.steps }))}>
           <ShellSteps steps={steps.steps} currentId={page.id} onSelect={(stepId) => navigate(`page:${stepId}`)} onRedo={page.parent ? () => undefined : undefined} />

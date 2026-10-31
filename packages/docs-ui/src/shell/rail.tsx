@@ -1,12 +1,56 @@
-import { useId, type ReactNode } from "react";
+import { useId, useSyncExternalStore, type ReactNode } from "react";
 import { Icon } from "./icons";
+import { ShellSheet } from "./sheet";
 import type { ShellIconName } from "./types";
+
+/** shell.css のスマホの境目（@media (max-width:900px)）と同じ。 */
+const NARROW_QUERY = "(max-width:900px)";
+
+const narrowQuery = (): MediaQueryList | null =>
+  typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(NARROW_QUERY) : null;
+
+function subscribeNarrow(onChange: () => void): () => void {
+  const query = narrowQuery();
+  query?.addEventListener("change", onChange);
+  return () => query?.removeEventListener("change", onChange);
+}
+
+const isNarrow = () => narrowQuery()?.matches ?? false;
+const isNarrowOnServer = () => false;
+
+export type ShellRailProps = {
+  children: ReactNode;
+  /** レールの名前。900px 未満のシートでは、ダイアログの名前と見出しにもなる。 */
+  label?: string;
+  /**
+   * 渡すと、900px 未満ではレールを下からのシートにする（ShellSheet と同じ: dialog、Esc・幕・「閉じる」で onClose、
+   * Tab は中で回る、外は inert、閉じたら開く前の要素へフォーカスを戻す）。渡さなければ従来どおりヘッダーの下の全画面。#43。
+   */
+  onClose?: () => void;
+};
 
 /**
  * 右のレール。節は横の罫線で区切るだけ。上の節（手順・ページ設定）は押すと開閉し、下の「AIと作る」が残りの高さを使う
  * （最低 220px。開いている節は中でスクロールする）。
  */
-export function ShellRail({ children, label = "このページの設定と AI" }: { children: ReactNode; label?: string }) {
+export function ShellRail({ children, label = "このページの設定と AI", onClose }: ShellRailProps) {
+  const narrow = useSyncExternalStore(subscribeNarrow, isNarrow, isNarrowOnServer);
+  if (narrow && onClose) {
+    return (
+      <ShellSheet label={label} onClose={onClose} className="es-sheet--rail">
+        <div className="es-sh-hd">
+          <h2>{label}</h2>
+          <span className="es-sp" />
+          <button type="button" className="es-btn es-btn--quiet es-btn--sm" onClick={onClose}>
+            閉じる
+          </button>
+        </div>
+        <div id="es-rail" className="es-rail">
+          {children}
+        </div>
+      </ShellSheet>
+    );
+  }
   return (
     <aside id="es-rail" className="es-rail" aria-label={label}>
       {children}

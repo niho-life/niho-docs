@@ -2,13 +2,15 @@
 import { useState } from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AccountPage,
   EditorShell,
   PublishSheet,
   SettingsPage,
   ShellField,
+  ShellRail,
+  ShellRailSection,
   ShellSettingsPage,
   ShellToggle,
   SitePage,
@@ -199,6 +201,141 @@ describe("公開のシート（外を inert にする。#43）", () => {
     click(byText(host, "button", "公開"));
     expect(outside.hasAttribute("inert")).toBe(false);
     expect(host.hasAttribute("inert")).toBe(false);
+  });
+});
+
+/** レールを開閉する呼ぶ側。withClose が false なら ShellRail に onClose を渡さない（従来の全画面）。 */
+function RailOpener({ withClose = true }: { withClose?: boolean }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <EditorShell
+      sidebar={
+        <aside className="es-sb" aria-label="ページ">
+          <button type="button">一覧の項目</button>
+        </aside>
+      }
+      header={
+        <header className="es-dt">
+          <button type="button" aria-expanded={open} aria-controls="es-rail" onClick={() => setOpen((value) => !value)}>
+            このページの設定と AI
+          </button>
+        </header>
+      }
+      rail={
+        <ShellRail onClose={withClose ? () => setOpen(false) : undefined}>
+          <ShellRailSection title="ページ設定" open onToggle={() => undefined}>
+            <button type="button">言語</button>
+          </ShellRailSection>
+          <ShellRailSection title="AIと作る" fill>
+            <input type="text" aria-label="AI に相談" />
+          </ShellRailSection>
+        </ShellRail>
+      }
+      sidebarOpen={false}
+      railOpen={open}
+    >
+      本文
+    </EditorShell>
+  );
+}
+
+describe("レールのシート（900px 未満。#43）", () => {
+  let narrow = true;
+  beforeEach(() => {
+    narrow = true;
+    window.matchMedia = ((query: string) => ({ matches: narrow && query === "(max-width:900px)", media: query, addEventListener: () => undefined, removeEventListener: () => undefined })) as unknown as typeof window.matchMedia;
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(window, "matchMedia");
+  });
+
+  const open = (host: HTMLElement) => {
+    const opener = byText(host, "button", "このページの設定と AI")!;
+    act(() => opener.focus());
+    click(opener);
+    return opener;
+  };
+
+  it("onClose があると role=dialog（aria-modal・レールの名前）の下からのシートになり、開くと中へフォーカスが移る", () => {
+    const host = mount(<RailOpener />);
+    open(host);
+    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.getAttribute("aria-label")).toBe("このページの設定と AI");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(dialog.classList.contains("es-sheet--rail")).toBe(true);
+    expect(dialog.querySelector("h2")?.textContent).toBe("このページの設定と AI");
+    // aria-controls の先（#es-rail）はシートの中。aside（landmark）は重ねない
+    expect(dialog.querySelector("#es-rail")).not.toBeNull();
+    expect(host.querySelector("aside.es-rail")).toBeNull();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it("Esc で閉じ、フォーカスは開いたボタンへ戻る。AI の入力欄の中の Esc でも閉じる", () => {
+    const host = mount(<RailOpener />);
+    const opener = open(host);
+    key(document.activeElement!, "Escape");
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(opener);
+
+    open(host);
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="AI に相談"]')!;
+    act(() => input.focus());
+    key(input, "Escape");
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("幕と「閉じる」で閉じる。シートの中を押しても閉じない", () => {
+    const host = mount(<RailOpener />);
+    open(host);
+    act(() => {
+      host.querySelector(".es-sheet")!.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    act(() => {
+      host.querySelector(".es-veil")!.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    open(host);
+    click(byText(host, '[role="dialog"] button', "閉じる"));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("Tab はシートの中で回る（「閉じる」から AI の入力欄まで）", () => {
+    const host = mount(<RailOpener />);
+    open(host);
+    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+    const first = byText(dialog, "button", "閉じる")!;
+    const last = dialog.querySelector<HTMLInputElement>('input[aria-label="AI に相談"]')!;
+    act(() => last.focus());
+    key(last, "Tab");
+    expect(document.activeElement).toBe(first);
+    key(first, "Tab", { shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("開いているあいだ、シートの外（本文・ヘッダー・一覧・本文へ移動）は inert。閉じると外す", () => {
+    const host = mount(<RailOpener />);
+    open(host);
+    const inert = [...host.querySelectorAll("[inert]")].map((el) => el.className);
+    expect(inert.sort()).toEqual(["es-canvas", "es-dt", "es-sb", "es-skip"]);
+    expect(host.querySelector('[role="dialog"]')!.closest("[inert]")).toBeNull();
+    key(document.activeElement!, "Escape");
+    expect(host.querySelectorAll("[inert]")).toHaveLength(0);
+  });
+
+  it("900px 以上、または onClose が無いときは、従来どおり aside（ダイアログにしない）", () => {
+    narrow = false;
+    const wide = mount(<RailOpener />);
+    open(wide);
+    expect(wide.querySelector('[role="dialog"]')).toBeNull();
+    expect(wide.querySelector('aside.es-rail[aria-label="このページの設定と AI"]')).not.toBeNull();
+
+    narrow = true;
+    const legacy = mount(<RailOpener withClose={false} />);
+    open(legacy);
+    expect(legacy.querySelector('[role="dialog"]')).toBeNull();
+    expect(legacy.querySelector("aside.es-rail")).not.toBeNull();
   });
 });
 
