@@ -48,6 +48,12 @@ export type Autosave<Patch extends object> = {
   change: (patch: LazyPatch<Patch>) => void;
   /** 時計を待たずに今たまっている変更を保存する（変換中・前の保存の最中は、その後へ送る）。 */
   flush: (options?: FlushOptions) => Promise<void>;
+  /**
+   * たまった変更を今送り、送り終えるまで待つ（前の保存の最中・変換中は、その後に送ったものまで待つ）。
+   * 返すのは終わったときの状態（全て届いたら `saved`。送った分が失敗した・止まっているときはその状態）。
+   * AI に頼む前に、今の本文の revision を確かめるのに使う。
+   */
+  settle: () => Promise<SaveState>;
   /** 自動保存を止める（開いたときに競合していた下書きなど）。変更はため続ける。 */
   stop: () => void;
   /** 止まった自動保存を再開し、たまった変更をすぐ送る（「この内容で上書き」）。 */
@@ -90,11 +96,17 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
   let stopped = false;
   let failures = 0;
   let state: SaveState = "saved";
+  // settle の待ち（保存が終わったとき・状態が変わったときに起こす）
+  const waiters: Array<() => void> = [];
+  const wake = () => {
+    for (const resolve of waiters.splice(0)) resolve();
+  };
 
   const setState = (next: SaveState, error?: unknown) => {
     if (next === state && error === undefined) return;
     state = next;
     options.onState(next, error);
+    wake();
   };
   const inFailure = () => state === "offline" || state === "error" || state === "signedOut";
 
@@ -162,6 +174,9 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
       // 保存の最中に入力があれば、その入力の時計（1 秒）を優先する
       if (timer === null) later(retryDelay());
       return;
+    } finally {
+      // 状態が変わらない終わり方（同じ失敗の繰り返し・保存中のまま次へ）でも settle を起こす（起きるのは、この後の同期の処理の後）
+      wake();
     }
     inFlight = false;
     failures = 0;
@@ -190,6 +205,25 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
       later(delay);
     },
     flush,
+    async settle() {
+      let sent = false;
+      for (;;) {
+        if (disposed || closing || stopped) return state;
+        if (!inFlight && pending === null) return state;
+        // 自分で送った分が失敗した（送り直しの待ち・ログイン切れ）
+        if (!inFlight && sent && inFailure()) return state;
+        // 保存が終わる（状態が変わる・止まる・閉じる）まで待つ。前の保存の最中・変換中でなければ、今送る
+        const woken = new Promise<void>((resolve) => waiters.push(resolve));
+        if (!inFlight && !options.isComposing()) {
+          sent = true;
+          void flush();
+        } else if (!inFlight) {
+          // 変換中: 確定のあとに送る（送り直しの待ちの時計が長くても、それを待たない）
+          later(delay);
+        }
+        await woken;
+      }
+    },
     stop() {
       if (disposed || closing) return;
       stopped = true;
@@ -222,11 +256,13 @@ export function createAutosave<Patch extends object>(options: AutosaveOptions<Pa
       clear();
       unsubscribeOnline();
       void flush();
+      wake();
     },
     dispose() {
       disposed = true;
       clear();
       unsubscribeOnline();
+      wake();
     },
   };
 }
