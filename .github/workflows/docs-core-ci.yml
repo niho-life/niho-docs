@@ -65,7 +65,8 @@ jobs:
             # チェックアウトは queue の先頭（PR + 先に並んだ変更）。main は base_sha
             merge_group) git fetch --no-tags --depth=1 origin "$MERGE_GROUP_BASE" && base="$MERGE_GROUP_BASE" || base="" ;;
           esac
-          if [ -n "$base" ] && files=$(git diff --name-only "$base" HEAD); then
+          # --no-renames: 改名は移動先だけが出るので、見るディレクトリの外へ移したとき（移動元が消えたとき）を見落とす
+          if [ -n "$base" ] && files=$(git diff --name-only --no-renames "$base" HEAD); then
             echo "changed files:"; printf '%s\n' "$files" | sed 's/^/  /'
             if ! printf '%s\n' "$files" | grep -Eq "$mac_paths"; then result=false; fi
           else
