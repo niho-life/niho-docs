@@ -13,7 +13,6 @@ import {
   ShellProposal,
   ShellRail,
   ShellRailSection,
-  ShellRecording,
   ShellSidebar,
   ShellSteps,
   ShellTools,
@@ -30,10 +29,11 @@ import {
   type ShellStep,
   type ShellToolAction,
 } from "../src/shell";
-import { DEST, EXPERIENCES, ME, TRANSCRIPT, byId, isPublished, missingFor, publicationOf, urlOf, PAGES, type GalleryPage } from "./data";
+import { DEST, EXPERIENCES, ME, byId, isPublished, missingFor, publicationOf, urlOf, PAGES, type GalleryPage } from "./data";
 import { PublishFlow, type SheetKind } from "./publish-flow";
 import { findScreen } from "./screens";
 import { isNarrow, listItems, navigate } from "./shared";
+import { TranscriptDemo, type TranscriptForced } from "./transcript-demo";
 
 /** 文字を選んだとき: 3つ目の段落の頭 22 文字を選択に置き換える（モックの withSelection と同じ）。 */
 function withSelection(blocks: ShellBodyBlock[]): ShellBodyBlock[] {
@@ -95,7 +95,7 @@ function stepsFor(page: GalleryPage): { root: GalleryPage; steps: ShellStep[] } 
   };
 }
 
-export type ScreenForced = { sidebar?: boolean; rail?: boolean; pick?: ShellDest; conn?: boolean; page?: string };
+export type ScreenForced = { sidebar?: boolean; rail?: boolean; pick?: ShellDest; conn?: boolean; page?: string } & TranscriptForced;
 
 export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
   const [name = "", arg = ""] = id.split(":");
@@ -126,7 +126,6 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
   const [draft, setDraft] = useState("");
   const [proposalOpen, setProposalOpen] = useState(Boolean(def?.proposal));
   const [proposalDone, setProposalDone] = useState<string[]>([]);
-  const [editing, setEditing] = useState(false);
   const [how, setHow] = useState<RecordingHow>("mic");
   const [next, setNext] = useState<RecordingNext>("article");
   const [background, setBackground] = useState("NIHO kamakura のコミュニティディナーのはじまりについて、ホストの Takuya さんに聞いた。旅行者向けの英語記事にする。");
@@ -304,16 +303,7 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
         media={
           page.kind === "rec" ? (
             <>
-              <ShellRecording
-                segments={TRANSCRIPT}
-                speakers={[
-                  { name: "Takuya", tone: "a" },
-                  { name: "Mika", tone: "b" },
-                ]}
-                position="05:12 / 14:38"
-                editing={editing}
-                onToggleEdit={() => setEditing((v) => !v)}
-              />
+              <TranscriptDemo forced={forced} />
               {!started && <ShellMakeFrom />}
             </>
           ) : undefined
