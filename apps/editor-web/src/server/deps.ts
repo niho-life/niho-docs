@@ -13,6 +13,7 @@ import {
 import { getAuthProvider } from "../auth";
 import { getPool, getStore } from "./db";
 import type { PagesApiDeps } from "./pages-api";
+import type { PublishApiDeps } from "./publish-api";
 import type { RecordingsApiDeps } from "./recordings-api";
 import type { SearchApiDeps } from "./search-api";
 import type { ShareApiDeps } from "./share-api";
@@ -63,4 +64,13 @@ export const recordingDeps: RecordingsApiDeps = {
       updateRecording: (owner, pageId, baseRevision, mutate) => updateRecording(pool, owner, pageId, baseRevision, mutate),
     };
   },
+};
+
+/**
+ * 公開のシート（#39）の実行時の依存。段 2 で Postgres の store（src/publish/pg-store.ts の pgPublishStore）をつなぐまでは 503。
+ * つなぐときは `ports: (session) => { const pool = getPool(); return pool ? wirePublishPorts(pgPublishStore(pool), session) : null; }`。
+ */
+export const publishDeps: PublishApiDeps = {
+  auth: () => getAuthProvider(),
+  ports: () => null,
 };

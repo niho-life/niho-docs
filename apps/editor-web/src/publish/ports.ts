@@ -1,0 +1,152 @@
+import "server-only";
+import {
+  connectionSource,
+  draftFingerprint,
+  siteDeclarationSource,
+  type AssetBytes,
+  type AssetUrls,
+  type AuthorSource,
+  type Clock,
+  type ConnectionPorts,
+  type ConnectionStore,
+  type DeclarationSource,
+  type DraftFingerprints,
+  type FactsSource,
+  type PublishPorts,
+  type RoleReader,
+} from "@niho/editor-publish";
+import type { Session } from "../auth/types";
+import { publishConfig, type DeclarationPlan, type PublishConfig, type PublishEnv } from "./config";
+import { FetchedDeclarations, type FetchLike } from "./declarations";
+import { DEV_DECLARATIONS } from "./dev-declarations";
+
+/**
+ * 公開（#39）のポートの組み立て。store（Postgres）以外を、要求の本人（session）ごとに作る。
+ * store は段 2 で `pgPublishStore(pool)`（src/publish/pg-store.ts）を渡す。テストは MemoryPublishStore。
+ *
+ * - roles: stub の方式は `EDITOR_STUB_ROLES`（既定 writer,kamakura）。niho の方式は役割なし（fail closed。役割の契約は #42 と niho-app 側）。
+ * - declarations: 本人のサイトは接続の設定から（editor-publish の siteDeclarationSource）、面は config.ts の DeclarationPlan に従う。
+ * - authors: session の profile の名前（handle・url は null）。名前が無ければ公開を失敗にする。
+ * - facts: 関連する体験が掲載中かは、まだ読めない（null＝不明＝満たさない）。
+ * - assetUrls: `EDITOR_ASSET_ORIGIN` から `${origin}/assets/${sha256}.${ext}`。未設定なら例外（写真のあるページの公開は失敗する）。
+ */
+
+export type PublishWiring = {
+  /** PublishService と、シートの評価が使う。 */
+  readonly publish: PublishPorts;
+  /** ConnectionService が使う（シートでは本人の接続の一覧だけ）。 */
+  readonly connections: ConnectionPorts;
+};
+
+export type PublishWiringOptions = {
+  readonly env?: PublishEnv;
+  readonly fetch?: FetchLike;
+  readonly clock?: Clock;
+};
+
+export const systemClock: Clock = { now: () => new Date().toISOString() };
+
+/** 関連する体験が掲載中かは不明（NIHO の体験の API は #42 の後）。 */
+export const UNKNOWN_FACTS: FactsSource = { read: async () => ({ relatedLive: null }) };
+
+/** 書き出し（#41）の写真の読み出しは、資産の置き場をつなぐまで無い（シートは使わない）。 */
+export const NO_ASSET_BYTES: AssetBytes = { read: async () => null };
+
+const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
+  "image/avif": "avif",
+  "image/gif": "gif",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+export class AssetOriginMissing extends Error {
+  override readonly name = "AssetOriginMissing";
+  constructor() {
+    super("EDITOR_ASSET_ORIGIN is not set");
+  }
+}
+
+export function roleReaderOf(config: PublishConfig, session: Session): RoleReader {
+  return {
+    async read(actorId) {
+      // 役割は保存しない。stub は設定の値、niho は契約が出るまで無し
+      if (config.mode !== "stub" || actorId !== session.userId) return [];
+      return [...config.stubRoles];
+    },
+  };
+}
+
+export function sessionAuthors(session: Session): AuthorSource {
+  return {
+    async read(actorId) {
+      const name = session.profile?.name.trim();
+      if (actorId !== session.userId || !name) throw new Error("author profile is not available");
+      return { name, handle: null, url: null };
+    },
+  };
+}
+
+export function assetUrlsOf(origin: string | null): AssetUrls {
+  return {
+    urlFor(asset) {
+      if (origin === null) throw new AssetOriginMissing();
+      const extension = IMAGE_EXTENSIONS[asset.contentType];
+      if (!extension || !/^[0-9a-f]{64}$/.test(asset.sha256)) throw new Error("unsupported asset");
+      return `${origin}/assets/${asset.sha256}.${extension}`;
+    },
+  };
+}
+
+/** 今の下書きの fingerprint（「更新あり」の判定）。store の page と資産から作る。 */
+export function storeDraftFingerprints(store: ConnectionStore): DraftFingerprints {
+  return {
+    async read(pageId) {
+      const read = await store.transaction(async (tx) => {
+        const page = await tx.getPage(pageId);
+        return page ? { page, assets: await tx.listAssets(pageId) } : null;
+      });
+      return read ? draftFingerprint(read.page, read.assets) : null;
+    },
+  };
+}
+
+const devFaces: DeclarationSource = {
+  async get(handle) {
+    return handle === "exp" || handle === "niho" ? structuredClone(DEV_DECLARATIONS[handle]) : null;
+  },
+};
+
+const noFaces: DeclarationSource = { get: async () => null };
+
+// 面の宣言は要求をまたいでメモリに置く（dev の再読み込みで増えないよう process に 1 つ。URL が変われば作り直す）
+const holder = globalThis as typeof globalThis & { __nihoEditorDeclarations?: { key: string; source: FetchedDeclarations } };
+
+export function faceDeclarations(plan: DeclarationPlan, fetch?: FetchLike): DeclarationSource {
+  if (plan.kind === "dev") return devFaces;
+  if (plan.kind === "none") return noFaces;
+  // テストが fetch を渡したときは、共有のメモリを使わない
+  if (fetch) return new FetchedDeclarations({ urls: plan.urls, fetch });
+  const key = JSON.stringify(plan.urls);
+  if (holder.__nihoEditorDeclarations?.key !== key) holder.__nihoEditorDeclarations = { key, source: new FetchedDeclarations({ urls: plan.urls }) };
+  return holder.__nihoEditorDeclarations.source;
+}
+
+/** store 以外の PublishPorts・ConnectionPorts を組み立てる（段 2 の配線は deps.ts から `wirePublishPorts(pgPublishStore(pool), session)`）。 */
+export function wirePublishPorts(store: ConnectionStore, session: Session, options: PublishWiringOptions = {}): PublishWiring {
+  const config = publishConfig(options.env);
+  const clock = options.clock ?? systemClock;
+  return {
+    publish: {
+      store,
+      roles: roleReaderOf(config, session),
+      connections: connectionSource(store),
+      declarations: siteDeclarationSource(store, faceDeclarations(config.declarations, options.fetch)),
+      authors: sessionAuthors(session),
+      facts: UNKNOWN_FACTS,
+      assetUrls: assetUrlsOf(config.assetOrigin),
+      clock,
+    },
+    connections: { store, clock, drafts: storeDraftFingerprints(store), assetBytes: NO_ASSET_BYTES },
+  };
+}
