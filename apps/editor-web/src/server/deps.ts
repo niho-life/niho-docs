@@ -170,7 +170,7 @@ export const audioStreamDeps: AudioStreamApiDeps = {
 
 /**
  * 録音の文字起こし（#36 段 2b）の実行時の依存（DB・エンジン・実行の呼び出し口は要求のたびに遅延して決める。Pool は getStore と共有）。
- * 本番は実行の口（Cloud Tasks と worker）ができるまで runner が null（開始は 503 transcription_unavailable）。
+ * 呼び出し口が無ければ runner が null（開始は 503 transcription_unavailable）。本番の呼び出し口は Cloud Tasks（docs/ops/editor-deploy.md §12）。
  */
 export const transcriptionDeps: TranscriptionApiDeps = {
   auth: () => getAuthProvider(),

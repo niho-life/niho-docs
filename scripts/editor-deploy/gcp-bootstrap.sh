@@ -131,6 +131,7 @@ resources() {
       --member "serviceAccount:$RUNNER_SA_EMAIL" --role "$role" > /dev/null
   done
   "$SCRIPT_DIR/steps-infra.sh"
+  "$SCRIPT_DIR/transcribe-infra.sh"
   log "resources: done. Next: scripts/editor-deploy/deploy.sh"
 }
 

@@ -25,6 +25,8 @@ import type { OwnerId, PageLang, Queryable } from "./types.ts";
  *
  * 状態遷移は step-runs.ts と同じ流儀で、すべて「世代（generation）と状態を条件にした UPDATE」で行う。claim のたびに世代が進み、
  * 確定・失敗は claim のときの世代と一致して running のときだけ通る（掃除のあとに遅れて返った実行の結果で上書きしない）。
+ * 掃除が積み直すときも世代を進める（requeueRun）。実行の口（Cloud Tasks）の task の名前に世代が入るので、消えた task の名前
+ * （Cloud Tasks は最大 24 時間は同じ名前を作らせない）とぶつからず、取りこぼした run をすぐ積み直せる。
  * 1 つのページで有効な run（queued・running）は 1 つだけ（部分 unique index と、録音の行の FOR UPDATE）。
  * 段落を書くのは replace の run か、段落が空の録音だけ（直した文章を失わせない）。
  * 読み書きは全て本人の・ゴミ箱でないページだけ（claimRun・finishRun・failRun は実行する側が run の id で呼ぶ）。
@@ -336,8 +338,9 @@ UPDATE transcription_runs
        finished_at = GREATEST(clock_timestamp(), started_at)
  WHERE id = $1 AND generation = $2 AND status = 'running'`;
 
-// $1 run id / $2 generation / $3 error code。queued の run は世代 0 のままなので、世代 0 を渡すと「claim される前」の run だけを失敗にできる
-// （積めなかったとき）。claim のあとは世代が 1 以上なので、世代 0 の呼び出しは何もしない。
+// $1 run id / $2 generation / $3 error code。作ったばかりの queued の run は世代 0 なので、世代 0 を渡すと「一度も claim も積み直しも
+// されていない」run だけを失敗にできる（積めなかったとき）。claim のあと・掃除が積み直したあとは世代が 1 以上なので、
+// 世代 0 の呼び出しは何もしない（その run は掃除が拾う）。
 const FAIL_SQL = `
 UPDATE transcription_runs
    SET status = 'failed',
@@ -460,8 +463,59 @@ UPDATE transcription_runs
     OR (status = 'queued' AND created_at < $1::timestamptz - make_interval(secs => $2::double precision))
 RETURNING id`;
 
+/** 積み直しの対象（queued の run。世代は task の名前に入れる）。 */
+export type QueuedTranscriptionRun = { id: string; generation: number };
+
+/** $1 olderThan / $2 limit。transcription_runs_queued_idx（0014）の並び。 */
+const LIST_QUEUED_SQL = `
+SELECT id, generation
+  FROM transcription_runs
+ WHERE status = 'queued' AND created_at < $1::timestamptz
+ ORDER BY created_at, id
+ LIMIT $2`;
+
+/** 1 回の読み込みで拾う数の上限。 */
+export const LIST_QUEUED_LIMIT_MAX = 1000;
+
 /**
- * 古くなった有効な run の掃除（DB だけ。呼ぶのは将来の worker・定期の実行）:
+ * まだ queued の run（古い順・上限つき）。定期の掃除が、同じ task の名前（世代を含む）で積み直す対象
+ * （積み込みの失敗・失われた task を拾う。まだ積まれていれば、名前の重複で無視される）。読むだけ。
+ * `olderThan` より後に作られた run は返さない（開始の API が積んでいる最中の run を掃除が二重に積まないため）。
+ * 上限に達したら、残りは次の掃除が拾う（この表は 1 ページで有効な run が 1 つだけなので、queued が積み上がるのは異常）。
+ */
+export async function listQueuedRuns(db: Queryable, options: { olderThan: Date; limit?: number }): Promise<QueuedTranscriptionRun[]> {
+  const { olderThan } = options;
+  if (!(olderThan instanceof Date) || Number.isNaN(olderThan.getTime())) throw new TypeError("editor-store: olderThan must be a valid Date");
+  const limit = Math.max(1, Math.min(options.limit ?? 100, LIST_QUEUED_LIMIT_MAX));
+  const result = await db.query<{ id: string; generation: number }>(LIST_QUEUED_SQL, [olderThan.toISOString(), limit]);
+  return result.rows.map((row) => ({ id: row.id, generation: row.generation }));
+}
+
+// $1 run id / $2 generation。まだ claim されていない run の世代だけを 1 つ進める（状態は queued のまま）。
+const REQUEUE_SQL = `
+UPDATE transcription_runs
+   SET generation = generation + 1
+ WHERE id = $1 AND generation = $2 AND status = 'queued'
+RETURNING generation`;
+
+/**
+ * 掃除が積み直す前に、まだ claim されていない run の世代を 1 つ進める。新しい世代を返す（queued でない・世代が違う・無い・
+ * 不正な id なら null＝積み直さない）。状態は queued のままなので、積んだ task は今までと同じように claim できる。
+ *
+ * 世代を進めるのは、task の名前（`<run>-<世代>`）を前の task と別にするため。**Cloud Tasks は消した task の名前を最大 24 時間
+ * 使わせない**ので、同じ名前で積み直すと「まだ積まれている」と区別がつかず、取りこぼした run がその間だまって止まる
+ * （試行を使い切って task が消えた・積み込みが途中で落ちた、など）。世代が進めば名前が変わるので、次の掃除でそのまま拾える。
+ * 手順（step-runs.ts）の attempt も、同じ理由で世代を task の名前に入れている。
+ */
+export async function requeueRun(db: Queryable, runId: string, generation: number): Promise<number | null> {
+  if (!Number.isSafeInteger(generation) || generation < 0) throw new TypeError("editor-store: generation must be a non-negative integer");
+  if (typeof runId !== "string" || !isPageId(runId)) return null;
+  const row = (await db.query<{ generation: number }>(REQUEUE_SQL, [runId, generation])).rows[0];
+  return row ? row.generation : null;
+}
+
+/**
+ * 古くなった有効な run の掃除（DB だけ。呼ぶのは worker の `/api/internal/transcription/sweep`。定期の実行は Cloud Scheduler）:
  * - running のまま started_at が now − olderThanSec より前: failed（engine_timeout）。実行する側が落ちた・時間切れ
  * - queued のまま created_at が now − olderThanSec より前: failed（internal）。積めなかった・実行する側が claim の前に落ちた
  * 失敗にした run の id を返す。遅れて返った実行の確定・失敗は、running でなくなったので通らない。

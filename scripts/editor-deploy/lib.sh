@@ -41,10 +41,18 @@ load_deploy_env() {
     (( TRANSCRIBE_TIMEOUT_SEC >= 60 && TRANSCRIBE_TIMEOUT_SEC <= 3300 )) \
       || die "TRANSCRIBE_TIMEOUT_SEC must be between 60 and 3300 seconds in $DEPLOY_ENV"
   fi
+  # The dispatcher that runs a transcription apart from the request: off unless TRANSCRIBE_MODE=cloud-tasks (§12).
+  # Without it the engine cannot be reached in production at all (the start answers 503), key or no key.
+  TRANSCRIBE_MODE="${TRANSCRIBE_MODE:-}"
+  [[ -z "$TRANSCRIBE_MODE" || "$TRANSCRIBE_MODE" == cloud-tasks ]] || die "TRANSCRIBE_MODE must be empty or cloud-tasks in $DEPLOY_ENV"
   TASKS_SA="${TASKS_SA:-niho-editor-tasks}"
   TASKS_SA_EMAIL="$TASKS_SA@$GCP_PROJECT.iam.gserviceaccount.com"
   STEPS_QUEUE=niho-editor-steps
   STEPS_SWEEP_JOB=niho-editor-steps-sweep
+  # The transcription has its own queue: one run takes up to 20 minutes, where a step is quick, so the retries, the number
+  # that run at once and the deadline of one task are all different (docs/ops/editor-deploy.md §12).
+  TRANSCRIBE_QUEUE=niho-editor-transcribe
+  TRANSCRIBE_SWEEP_JOB=niho-editor-transcribe-sweep
   # Every resource that takes labels carries this one: Cloud Billing reports filter on it.
   COST_LABEL="app=niho-editor"
   RUNNER_SA_EMAIL="$RUNNER_SA@$GCP_PROJECT.iam.gserviceaccount.com"
@@ -123,4 +131,31 @@ steps_env_vars() {
   [[ "$STEPS_MODE" == cloud-tasks ]] || return 0
   printf ',EDITOR_STEPS_MODE=cloud-tasks,EDITOR_STEPS_QUEUE=projects/%s/locations/%s/queues/%s,EDITOR_STEPS_WORKER_URL=%s,EDITOR_STEPS_INVOKER_SA=%s' \
     "$GCP_PROJECT" "$GCP_REGION" "$STEPS_QUEUE" "$(service_url "$SERVICE")" "$TASKS_SA_EMAIL"
+}
+
+# Transcription (#36): same shape as steps_env_vars, with the transcription's own queue and worker routes
+# (/api/internal/transcription/**). Prints nothing while TRANSCRIBE_MODE is empty, and then the app has no dispatcher in
+# production, so starting a transcription answers 503 (the VTT import, which needs neither engine nor dispatcher, still works).
+transcribe_env_vars() {
+  [[ "$TRANSCRIBE_MODE" == cloud-tasks ]] || return 0
+  printf ',EDITOR_TRANSCRIBE_MODE=cloud-tasks,EDITOR_TRANSCRIBE_QUEUE=projects/%s/locations/%s/queues/%s,EDITOR_TRANSCRIBE_WORKER_URL=%s,EDITOR_TRANSCRIBE_INVOKER_SA=%s' \
+    "$GCP_PROJECT" "$GCP_REGION" "$TRANSCRIBE_QUEUE" "$(service_url "$SERVICE")" "$TASKS_SA_EMAIL"
+}
+
+# Cloud Run's limit on one request. A whole transcription runs inside one request of the worker route, so the limit has to
+# be longer than the engine's own timeout: the engine stops first and the run ends as engine_timeout, instead of Cloud Run
+# cutting the request while the run stays `running` until the sweep. The margin is the one the task's dispatchDeadline uses
+# (DISPATCH_MARGIN_SECONDS in apps/editor-web/src/transcription/cloud-tasks.ts).
+SERVICE_TIMEOUT_BASE_SEC=300
+TRANSCRIBE_TIMEOUT_DEFAULT_SEC=1200
+TRANSCRIBE_TIMEOUT_MARGIN_SEC=120
+CLOUD_RUN_TIMEOUT_MAX_SEC=3600
+service_request_timeout() {
+  local seconds=$SERVICE_TIMEOUT_BASE_SEC
+  if [[ "$TRANSCRIBE_MODE" == cloud-tasks ]]; then
+    local wanted=$(( ${TRANSCRIBE_TIMEOUT_SEC:-$TRANSCRIBE_TIMEOUT_DEFAULT_SEC} + TRANSCRIBE_TIMEOUT_MARGIN_SEC ))
+    if (( wanted > seconds )); then seconds=$wanted; fi
+  fi
+  if (( seconds > CLOUD_RUN_TIMEOUT_MAX_SEC )); then seconds=$CLOUD_RUN_TIMEOUT_MAX_SEC; fi
+  printf '%s' "$seconds"
 }

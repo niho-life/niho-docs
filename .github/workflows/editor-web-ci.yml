@@ -122,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -x scripts/editor-deploy/lib.sh scripts/editor-deploy/gcp-bootstrap.sh scripts/editor-deploy/deploy.sh scripts/editor-deploy/set-ai-key.sh scripts/editor-deploy/set-transcribe-key.sh scripts/editor-deploy/steps-infra.sh scripts/editor-deploy/lib-test.sh scripts/editor-deploy/steps-infra.test.sh
+        run: shellcheck -x scripts/editor-deploy/lib.sh scripts/editor-deploy/gcp-bootstrap.sh scripts/editor-deploy/deploy.sh scripts/editor-deploy/set-ai-key.sh scripts/editor-deploy/set-transcribe-key.sh scripts/editor-deploy/steps-infra.sh scripts/editor-deploy/transcribe-infra.sh scripts/editor-deploy/lib-test.sh scripts/editor-deploy/steps-infra.test.sh scripts/editor-deploy/transcribe-infra.test.sh
       - name: The example env file sets every variable the scripts require
         run: |
           set -euo pipefail
@@ -130,6 +130,8 @@ jobs:
           DEPLOY_ENV="$RUNNER_TEMP/deploy.env" bash -c 'source scripts/editor-deploy/lib.sh && load_deploy_env && test "$DB_NAME" = niho_editor'
       - name: The steps infrastructure script builds the expected gcloud calls (fake gcloud, nothing reaches GCP)
         run: scripts/editor-deploy/steps-infra.test.sh
+      - name: The transcription infrastructure script and the request timeout (fake gcloud, nothing reaches GCP)
+        run: scripts/editor-deploy/transcribe-infra.test.sh
       - name: The service's secrets and env with and without the AI key (gcloud is stubbed)
         run: bash scripts/editor-deploy/lib-test.sh
       - name: Build the migrate image
