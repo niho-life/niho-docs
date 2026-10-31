@@ -4,6 +4,7 @@
 #   2. the migrate job applies the migrations and the app role's privileges with the new image (stops on failure)
 #   3. the web service is deployed with the new image
 #   4. smoke checks: every response is noindex, and the API refuses a caller with no session
+#      (with STEPS_MODE=cloud-tasks, also the worker routes refuse a caller with no OIDC token)
 # Usage: scripts/editor-deploy/deploy.sh [--no-build] [--allow-dirty]
 #   --no-build  redeploys the image that is serving now (picks up new secret versions; no build)
 # Needs scripts/editor-deploy/deploy.env (see deploy.env.example) and a gcloud login with access to the project.
@@ -68,7 +69,7 @@ gcp run deploy "$SERVICE" \
   --add-cloudsql-instances "$CONNECTION" \
   --network "$VPC_NETWORK" --subnet "$VPC_SUBNET" --vpc-egress private-ranges-only \
   --set-secrets "DATABASE_URL=$SECRET_DATABASE_URL:latest" \
-  --set-env-vars "$(service_env_vars)" \
+  --set-env-vars "$(service_env_vars)$(steps_env_vars)" \
   --labels "$COST_LABEL,commit=${TAG:0:12}"
 
 # 一度でも特定の revision へ traffic を割り当てる（docs/ops/editor-deploy.md §9 の戻し方）と、Cloud Run は以降のデプロイもその割り当てを
@@ -87,4 +88,13 @@ done
 status="$(curl -sS -o /dev/null -w '%{http_code}' --retry 5 --retry-all-errors --max-time 20 "$SERVICE_URL/api/pages")"
 [[ "$status" == 401 ]] || die "/api/pages answered $status to a caller with no session (expected 401)"
 log "ok 401      /api/pages with no session"
+if [[ "$STEPS_MODE" == cloud-tasks ]]; then
+  # The worker routes check Google's OIDC token themselves (the service is public): no token must be 401.
+  for path in /api/internal/steps/run /api/internal/steps/sweep; do
+    status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' \
+      --retry 5 --retry-all-errors --max-time 20 "$SERVICE_URL$path")"
+    [[ "$status" == 401 ]] || die "$path answered $status to a caller with no token (expected 401)"
+    log "ok 401      $path with no token"
+  done
+fi
 log "done: $TAG  $(app_origin)"

@@ -714,6 +714,24 @@ export async function sweepExpiredLeases(db: StepRunsDb, options: { limit?: numb
   return requeue;
 }
 
+/**
+ * queued の attempt（run が進行中のものだけ）。定期の掃除が、同じ task の名前（世代を含む）で積み直す対象
+ * （積み込みの失敗・失われた task を拾う。まだ積まれていれば、名前の重複で無視される）。古い run から、上限つき。読むだけ。
+ */
+export async function listQueuedAttempts(db: Queryable, options: { limit?: number } = {}): Promise<AttemptRef[]> {
+  const limit = Math.max(1, Math.min(options.limit ?? 100, 1000));
+  const queued = await db.query<{ run_id: string; step_index: number; generation: number }>(
+    `SELECT a.run_id, a.step_index, a.generation
+       FROM step_attempts a
+       JOIN step_runs r ON r.id = a.run_id
+      WHERE a.state = 'queued' AND r.state IN ('queued', 'running')
+      ORDER BY r.created_at, a.run_id, a.step_index
+      LIMIT $1`,
+    [limit],
+  );
+  return queued.rows.map((row) => ({ runId: row.run_id, stepIndex: row.step_index, generation: row.generation }));
+}
+
 type StalePageRow = { id: string; blocks: Block[]; step_status: StepStatus | null; version: string };
 
 /**

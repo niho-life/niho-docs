@@ -5,9 +5,11 @@ import {
   createRun,
   failAttempt,
   heartbeatAttempt,
+  listQueuedAttempts,
   listRun,
   readStepInput,
   refreshStale,
+  sweepExpiredLeases,
   type AttemptRef,
   type ClaimResult,
   type CommitInput,
@@ -51,5 +53,18 @@ export function pgStepRunStore(db: StepRunsDb): StepRunStore {
     readStepInput: (claim) => readStepInput(db, claim),
     commitAttempt: (input) => commitAttempt(db, input),
     failAttempt: (input) => failAttempt(db, input),
+  };
+}
+
+/** 定期の掃除（worker の sweep の route）が使う操作。期限切れの lease を queued に戻し、queued の一覧を読む。 */
+export type StepSweepStore = {
+  sweepExpiredLeases(options?: { limit?: number }): Promise<AttemptRef[]>;
+  listQueuedAttempts(options?: { limit?: number }): Promise<AttemptRef[]>;
+};
+
+export function pgStepSweepStore(db: StepRunsDb): StepSweepStore {
+  return {
+    sweepExpiredLeases: (options) => sweepExpiredLeases(db, options),
+    listQueuedAttempts: (options) => listQueuedAttempts(db, options),
   };
 }

@@ -12,7 +12,25 @@ describe("resolveStepsMode", () => {
     expect(resolveStepsMode({ EDITOR_STEPS_MODE: "inline" })).toBe("inline");
     expect(resolveStepsMode({ EDITOR_STEPS_MODE: "inline", NODE_ENV: "development" })).toBe("inline");
     expect(resolveStepsMode({ EDITOR_STEPS_MODE: "inline", NODE_ENV: "production" })).toBeNull();
-    for (const value of [undefined, "", "off", "Inline", "cloud-tasks"]) expect(resolveStepsMode({ EDITOR_STEPS_MODE: value })).toBeNull();
+    for (const value of [undefined, "", "off", "Inline", "cloud-tasks", "Cloud-Tasks"]) expect(resolveStepsMode({ EDITOR_STEPS_MODE: value })).toBeNull();
+  });
+
+  it("accepts cloud-tasks (also in production) only when the queue, the worker URL and the invoker service account are all set and well formed", () => {
+    const cloud = {
+      EDITOR_STEPS_MODE: "cloud-tasks",
+      EDITOR_STEPS_QUEUE: "projects/synthetic-project/locations/asia-northeast1/queues/synthetic-queue",
+      EDITOR_STEPS_WORKER_URL: "https://worker.example.test",
+      EDITOR_STEPS_INVOKER_SA: "synthetic-tasks@synthetic-project.iam.gserviceaccount.com",
+    };
+    expect(resolveStepsMode(cloud)).toBe("cloud-tasks");
+    expect(resolveStepsMode({ ...cloud, NODE_ENV: "production" })).toBe("cloud-tasks");
+    for (const name of ["EDITOR_STEPS_QUEUE", "EDITOR_STEPS_WORKER_URL", "EDITOR_STEPS_INVOKER_SA"]) {
+      expect(resolveStepsMode({ ...cloud, [name]: undefined }), name).toBeNull();
+    }
+    expect(resolveStepsMode({ ...cloud, EDITOR_STEPS_WORKER_URL: "http://worker.example.test" })).toBeNull();
+    expect(resolveStepsMode({ ...cloud, EDITOR_STEPS_QUEUE: "synthetic-queue" })).toBeNull();
+    // 3 つが揃っていても、方式が inline なら本番では拒む
+    expect(resolveStepsMode({ ...cloud, EDITOR_STEPS_MODE: "inline", NODE_ENV: "production" })).toBeNull();
   });
 });
 

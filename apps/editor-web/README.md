@@ -27,7 +27,10 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | `EDITOR_ORIGIN` | 任意。更新系の要求の Origin 検査に使う origin（未設定なら Host と転送の header から） |
 | `EDITOR_AI_MODE` | 任意。未設定・`off` は AI を使わない（提案・採用は 503 `ai_unavailable`）。`fake` は偽物のモデル（開発・CI だけ。`NODE_ENV=production` では 503） |
 | `EDITOR_AI_MONTHLY_LIMIT_USD` | 任意。owner ごとの月の上限（見込みの USD）。未設定は上限なし。0 以上の数でない値は 0（AI を止める） |
-| `EDITOR_STEPS_MODE` | 手順の実行の方式。`inline`（開発・CI だけ）。未設定・`off`・未知の値と、本番（`NODE_ENV=production`）の `inline` では手順の開始は 503 |
+| `EDITOR_STEPS_MODE` | 手順の実行の方式。`inline`（開発・CI だけ）か `cloud-tasks`（本番。下の 3 つが揃い形が正しいときだけ）。未設定・`off`・未知の値、本番（`NODE_ENV=production`）の `inline`、3 つが欠けた `cloud-tasks` では手順の開始は 503 |
+| `EDITOR_STEPS_QUEUE` | `cloud-tasks` のキュー（`projects/<p>/locations/<l>/queues/<q>`） |
+| `EDITOR_STEPS_WORKER_URL` | `cloud-tasks` の worker の基点（`https://<host>`。path なし）。task の宛先と OIDC の audience |
+| `EDITOR_STEPS_INVOKER_SA` | `cloud-tasks` の task と掃除の OIDC トークンの身元（`<name>@<project>.iam.gserviceaccount.com`）。worker の route はこの 1 つだけを通す |
 
 確認のコマンド: `typecheck`・`lint`・`test`（vitest）・`build`・`test:startup`（build の後。本番の起動の守り）・`test:e2e`（`DATABASE_URL` と migration が要る。`next dev` を起動して API と画面を確かめ、作った行は消す）。
 
@@ -84,9 +87,13 @@ const found = usePageSearch(find.open ? find.value : ""); // found.results を�
 - **API**: `POST /api/pages/{id}/steps/runs`（`{ recipe, fromStep? }`、任意の `Idempotency-Key`。202。進行中は 409 `run_in_progress`、上流が済んでいない `fromStep` は 400 `invalid_from_step`、方式が無いと 503 `steps_unavailable`）、`GET /api/pages/{id}/steps`（最新の run。返す前に前提変更を再計算）、`POST /api/pages/{id}/steps/runs/{runId}/cancel`（冪等）。作法は `/api/pages` と同じ（401・403・404 は同一・413・noindex）。
 - **状態の正**は `packages/editor-store/src/step-runs.ts`（表は migration `0006_step_runs.sql`）。遷移はすべて世代と状態を条件にした UPDATE で、claim のたびに世代が進み、確定・失敗・生存確認は世代が一致するときだけ通る（取消・lease 切れの後に遅れて返った結果で上書きしない）。確定（サブページの本文と状態・次の段階）は 1 transaction。
 - **サブページの id** は親・recipe・段階から決定的に作る（作り直しても同じページ）。`fromStep` から作り直すと、前の段階の済んだサブページを再利用する。
-- **失敗**: 一時的な失敗は 3 回まで（間隔を空けて積み直す）、超えるか入力の誤りなら失敗。後続は取り消し、上流は残す。lease が切れた段階は `sweepExpiredLeases` が積み直す（定期の呼び出しは後段）。
+- **失敗**: 一時的な失敗は 3 回まで（間隔を空けて積み直す）、超えるか入力の誤りなら失敗。後続は取り消し、上流は残す。lease が切れた段階は `sweepExpiredLeases` が積み直す（下の掃除の route から）。
 - **前提変更**: 前の段階（段階 0 は録音ページ）の本文と指示文の基準が、実行したときの基準と違えば、その段階から後を `stale` にし、戻れば `done` に戻す。
-- **実行**（`src/steps/`）: `runAttempt` が claim → 入力を読む → 生存確認（lease の 1/3 おき）→ 実行器 → 確定 → 次を積む。`inline` は同じプロセスで最後まで進める（要求は待たない）。**Cloud Tasks・内向きの worker の route と OIDC・本物の AI・画面は後段**。
+- **実行**（`src/steps/`）: `runAttempt` が claim → 入力を読む → 生存確認（lease の 1/3 おき）→ 実行器 → 確定 → 次を積む。`inline` は同じプロセスで最後まで進める（要求は待たない）。実行器は `src/server/steps-deps.ts` の 1 か所で選ぶ（今は偽物）。**本物の AI・画面は後段**。
+- **`cloud-tasks`**（本番。配備は [editor-deploy.md](../../docs/ops/editor-deploy.md) §10）: `src/steps/cloud-tasks.ts` が Cloud Tasks の REST に task を積む（名前は `taskName`。同じ名前の 2 度目は `ALREADY_EXISTS` で積み済み。再試行の間隔は `scheduleTime`、1 つの task は最大 30 分。アクセストークンは Cloud Run のメタデータサーバーから）。task は同じサービスの worker の route を呼ぶ:
+  - `POST /api/internal/steps/run`（本文 `{ runId, stepIndex }`・1 KiB まで）: `runAttempt` を呼び、`completed`・`retry`・`failed`・`stale`・`skipped` のどれも 200 `{ status }`。例外は 500（Cloud Tasks が再試行する）。
+  - `POST /api/internal/steps/sweep`（Cloud Scheduler が 5 分おき。本文は読まない）: lease の切れた段階を queued に戻し（`sweepExpiredLeases`）、進行中の run の queued の段階（`listQueuedAttempts`）を全て同じ task の名前で積み直す。200 `{ requeued }`（新しく積んだ数）。
+  - **OIDC で守る**: サービスは誰でも呼べるので、route が Google の ID トークンを検証する（`src/server/google-oidc.ts`。依存なし。RS256 だけ・Google の JWKS・`iss`・`aud` = `EDITOR_STEPS_WORKER_URL`・期限（ずれ 60 秒）・`email` = `EDITOR_STEPS_INVOKER_SA` かつ確認済み）。方式が `cloud-tasks` でなければ 404、トークンが無い・通らなければ本文を読まずに 401、`Origin` が付いていれば 403。応答とログは短い code だけ。
 
 ## 録音と文字起こし（#36 段 1）
 

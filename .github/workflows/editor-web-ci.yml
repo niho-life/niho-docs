@@ -97,8 +97,10 @@ jobs:
           cache-dependency-path: |
             apps/editor-web/package-lock.json
             packages/editor-store/package-lock.json
-      - name: Point the app at the service database
-        run: echo "DATABASE_URL=postgres://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}" >> "$GITHUB_ENV"
+      - name: Point the app (and its PostgreSQL tests) at the service database
+        run: |
+          echo "DATABASE_URL=postgres://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}" >> "$GITHUB_ENV"
+          echo "TEST_DATABASE_URL=postgres://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}" >> "$GITHUB_ENV"
       - run: npm -C apps/editor-web ci --no-audit --no-fund
       - run: npm -C packages/editor-store ci --no-audit --no-fund
       - name: Apply migrations to the empty database
@@ -120,11 +122,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -x scripts/editor-deploy/lib.sh scripts/editor-deploy/gcp-bootstrap.sh scripts/editor-deploy/deploy.sh
+        run: shellcheck -x scripts/editor-deploy/lib.sh scripts/editor-deploy/gcp-bootstrap.sh scripts/editor-deploy/deploy.sh scripts/editor-deploy/steps-infra.sh scripts/editor-deploy/steps-infra.test.sh
       - name: The example env file sets every variable the scripts require
         run: |
           set -euo pipefail
           cp scripts/editor-deploy/deploy.env.example "$RUNNER_TEMP/deploy.env"
           DEPLOY_ENV="$RUNNER_TEMP/deploy.env" bash -c 'source scripts/editor-deploy/lib.sh && load_deploy_env && test "$DB_NAME" = niho_editor'
+      - name: The steps infrastructure script builds the expected gcloud calls (fake gcloud, nothing reaches GCP)
+        run: scripts/editor-deploy/steps-infra.test.sh
       - name: Build the migrate image
         run: DOCKER_BUILDKIT=1 docker build -f scripts/editor-deploy/Dockerfile.migrate -t editor-migrate-ci .

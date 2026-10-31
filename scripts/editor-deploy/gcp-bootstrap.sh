@@ -119,6 +119,7 @@ resources() {
     gcp storage buckets add-iam-policy-binding "gs://$ASSETS_BUCKET" \
       --member "serviceAccount:$RUNNER_SA_EMAIL" --role "$role" > /dev/null
   done
+  "$SCRIPT_DIR/steps-infra.sh"
   log "resources: done. Next: scripts/editor-deploy/deploy.sh"
 }
 
