@@ -39,3 +39,28 @@ export {
 } from "./shares.ts";
 export { DUPLICATE_TITLE_SUFFIX, duplicatePage, duplicateTitle, type DuplicatedPage } from "./duplicate.ts";
 export * from "./step-runs.ts";
+export {
+  InvalidRecordingError,
+  RECORDING_ENGINE_MAX_CHARS,
+  RECORDING_SEGMENTS_MAX,
+  RECORDING_SEGMENT_TEXT_MAX_CHARS,
+  RECORDING_SOURCES,
+  RECORDING_SOURCE_NAME_MAX_CHARS,
+  RECORDING_SPEAKER_NAME_MAX_CHARS,
+  RECORDING_TEXT_MAX_BYTES,
+  createRecordingPage,
+  getRecording,
+  isStorableText,
+  recordingDataProblem,
+  recordingTextBytes,
+  updateRecording,
+  type Connectable,
+  type CreateRecordingInput,
+  type Recording,
+  type RecordingData,
+  type RecordingMutation,
+  type RecordingPage,
+  type RecordingSegment,
+  type RecordingSource,
+  type UpdateRecordingResult,
+} from "./recordings.ts";

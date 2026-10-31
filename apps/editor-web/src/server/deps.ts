@@ -1,8 +1,19 @@
 import "server-only";
-import { duplicatePage, enableShare, getShare, rotateShare, searchPages, stopShare } from "@niho/editor-store";
+import {
+  createRecordingPage,
+  duplicatePage,
+  enableShare,
+  getRecording,
+  getShare,
+  rotateShare,
+  searchPages,
+  stopShare,
+  updateRecording,
+} from "@niho/editor-store";
 import { getAuthProvider } from "../auth";
 import { getPool, getStore } from "./db";
 import type { PagesApiDeps } from "./pages-api";
+import type { RecordingsApiDeps } from "./recordings-api";
 import type { SearchApiDeps } from "./search-api";
 import type { ShareApiDeps } from "./share-api";
 
@@ -36,6 +47,20 @@ export const shareDeps: ShareApiDeps = {
       duplicatePage: (owner, pageId) => duplicatePage(pool, owner, pageId),
       // 書き出しは本人の・ゴミ箱でないページの最新の保存版（EditorStore.getPage と同じ絞り込み）
       getPage: (owner, pageId) => store.getPage(owner, pageId),
+    };
+  },
+};
+
+/** 録音と文字起こし（#36）の実行時の依存（DB の接続は要求のたびに遅延して決める。Pool は getStore と共有）。 */
+export const recordingDeps: RecordingsApiDeps = {
+  auth: () => getAuthProvider(),
+  store: () => {
+    const pool = getPool();
+    if (!pool) return null;
+    return {
+      createRecordingPage: (owner, input) => createRecordingPage(pool, owner, input),
+      getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
+      updateRecording: (owner, pageId, baseRevision, mutate) => updateRecording(pool, owner, pageId, baseRevision, mutate),
     };
   },
 };
