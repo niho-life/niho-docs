@@ -10,8 +10,12 @@
  *
  * まだ作っていない新しいページ（pageId が null）は、最初の保存で POST して作り、以後はその id へ、
  * 作ったときの revision の上に PATCH する（作る前の revision は `UNCREATED_REVISION`）。
+ *
+ * 言語（情報パネルで変える）も題名・本文と同じ保存に載せる（同じ revision・同じ競合の判定）。比べる内容にも言語を含める
+ * （言語だけを変えた保存が 409 になったとき、題名・本文が同じだからと「届いていた」にしない）。
  */
 
+import type { PageLang } from "@niho/editor-store";
 import { validateBlocks } from "@/ast/blocks";
 import type { SaveContext, SaveFailure } from "./autosave";
 import {
@@ -27,7 +31,8 @@ import {
 /** まだ作っていない新しいページの revision（サーバーの revision は 1 から）。端末の下書きの `baseRevision` にも使う。 */
 export const UNCREATED_REVISION = 0;
 
-export type PageContent = { title: string; blocks: unknown[] };
+/** 題名・本文・言語。言語の分からないもの（古い端末の下書き・言語の無い応答）は lang を持たず、言語を比べない。 */
+export type PageContent = { title: string; blocks: unknown[]; lang?: PageLang };
 
 /** JSON の値として等しいか（object のキーの順・undefined の項目によらない）。 */
 export function jsonEqual(a: unknown, b: unknown): boolean {
@@ -53,8 +58,9 @@ function canonicalBlocks(blocks: unknown[]): unknown[] {
   return canonical;
 }
 
-/** 題名と本文が同じか。 */
+/** 題名と本文（と、両方が持っていれば言語）が同じか。 */
 export function sameContent(a: PageContent, b: PageContent): boolean {
+  if (a.lang !== undefined && b.lang !== undefined && a.lang !== b.lang) return false;
   return a.title === b.title && jsonEqual(canonicalBlocks(a.blocks), canonicalBlocks(b.blocks));
 }
 
@@ -74,6 +80,11 @@ export function classifySaveFailure(error: unknown): SaveFailure {
   return "error";
 }
 
+/** 競合の応答のページの題名・本文・言語（言語が無ければ持たない）。 */
+function contentOf(page: ConflictPage): PageContent {
+  return { title: page.title, blocks: page.blocks, ...(page.lang !== undefined ? { lang: page.lang } : {}) };
+}
+
 /** 届いたかどうか分からない失敗（応答が無い・読めない・5xx。サーバーは書いたかもしれない）。 */
 function outcomeUnknown(error: unknown): boolean {
   return !(error instanceof PageRequestError) || error.status >= 500;
@@ -87,6 +98,8 @@ export type PageSaver = {
   readonly pageId: string | null;
   /** 次の保存で `baseRevision` として送る revision（今の本文がもとにしている revision。作る前は `UNCREATED_REVISION`）。 */
   readonly revision: number;
+  /** サーバーが `revision` のときに持っている（と分かっている）題名・本文・言語。言語の保存に失敗したら、この言語に戻す。 */
+  readonly content: PageContent;
   save: (patch: PageBody, context: SaveContext) => Promise<void>;
   /** 「この内容で上書き」: 次の保存を、競合の応答のページの revision の上に `overwrite: true` で送る。 */
   overwriteOnto: (page: ConflictPage) => void;
@@ -114,7 +127,10 @@ export function createPageSaver(options: {
   let overwrite = false;
   let uncertain: PageContent[] = [];
 
-  const apply = (patch: PageBody): PageContent => ({ title: patch.title ?? server.title, blocks: patch.blocks ?? server.blocks });
+  const apply = (patch: PageBody): PageContent => {
+    const lang = patch.lang ?? server.lang;
+    return { title: patch.title ?? server.title, blocks: patch.blocks ?? server.blocks, ...(lang !== undefined ? { lang } : {}) };
+  };
   const settle = (next: number, content: PageContent) => {
     revision = next;
     server = content;
@@ -135,6 +151,9 @@ export function createPageSaver(options: {
     get revision() {
       return revision;
     },
+    get content() {
+      return server;
+    },
     async save(patch, context) {
       let intended = apply(patch);
       if (pageId === null) {
@@ -154,7 +173,7 @@ export function createPageSaver(options: {
           return;
         } catch (error) {
           if (error instanceof PageConflictError) {
-            const latest: PageContent = { title: error.page.title, blocks: error.page.blocks };
+            const latest = contentOf(error.page);
             if (sameContent(latest, intended)) {
               settle(error.page.revision, latest);
               return;
@@ -174,7 +193,7 @@ export function createPageSaver(options: {
     },
     overwriteOnto(page) {
       revision = page.revision;
-      server = { title: page.title, blocks: page.blocks };
+      server = contentOf(page);
       overwrite = true;
       uncertain = [];
     },

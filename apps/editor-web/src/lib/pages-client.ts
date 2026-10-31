@@ -1,12 +1,19 @@
 /** ブラウザから `/api/pages` を呼ぶ（同じ origin。cookie・token は扱わない）。 */
 
-import type { PageChunk } from "@niho/editor-store";
+import type { PageChunk, PageLang } from "@niho/editor-store";
 import { PAGE_CHUNK } from "./page-limits";
 
 export type PageBody = {
   title?: string;
   blocks?: unknown[];
+  /** ページの言語（情報パネルで変えたときだけ送る）。 */
+  lang?: PageLang;
 };
+
+/** サーバーが受ける言語か。 */
+export function isPageLang(value: unknown): value is PageLang {
+  return value === "ja" || value === "en";
+}
 
 export type SaveRequestOptions = {
   /** 画面が持っているページの revision（楽観ロック）。 */
@@ -31,6 +38,8 @@ export type ConflictPage = {
   blocks: unknown[];
   revision: number;
   updatedAt: string;
+  /** 今のページの言語（応答に無い・読めないときは持たない。そのときは言語を比べない）。 */
+  lang?: PageLang;
 };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -57,9 +66,9 @@ function isRevision(value: unknown): value is number {
 function conflictPageOf(data: unknown): ConflictPage | null {
   const page = (data as { page?: Record<string, unknown> } | null)?.page;
   if (typeof page !== "object" || page === null) return null;
-  const { title, blocks, revision, updatedAt } = page;
+  const { title, blocks, revision, updatedAt, lang } = page;
   if (typeof title !== "string" || !Array.isArray(blocks) || !isRevision(revision) || typeof updatedAt !== "string") return null;
-  return { title, blocks, revision, updatedAt };
+  return { title, blocks, revision, updatedAt, ...(isPageLang(lang) ? { lang } : {}) };
 }
 
 function timeoutSignal(ms: number): AbortSignal | undefined {

@@ -5,7 +5,19 @@ import { createRoot, type Root } from "react-dom/client";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EditorShell, ShellAddRow, ShellBubbleMenu, ShellHeader, ShellMobileToolbar, ShellSidebar, ShellTools, StatusDot, shellAccountItems, shellMoreItems } from "./index";
+import {
+  EditorShell,
+  ShellAddRow,
+  ShellBubbleMenu,
+  ShellHeader,
+  ShellMobileToolbar,
+  ShellPageSettings,
+  ShellSidebar,
+  ShellTools,
+  StatusDot,
+  shellAccountItems,
+  shellMoreItems,
+} from "./index";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -265,6 +277,63 @@ describe("本文へ移動（skip link。#43）", () => {
     act(() => (stops[0] as HTMLAnchorElement).click());
     expect(document.activeElement).toBe(main);
     expect(window.location.hash).toBe(before);
+  });
+});
+
+describe("ShellPageSettings（任意の操作: 書き出し・削除・言語の一言）", () => {
+  const base = { lang: "ja" as const, author: { name: "Mika Sato", title: "ライター", initial: "M" }, info: [{ label: "作成", value: "2026-10-28" }] };
+  const buttonOf = (host: HTMLElement, text: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === text);
+  const exportButtons = (host: HTMLElement) =>
+    [...host.querySelectorAll("section")].find((section) => section.querySelector("h3")?.textContent === "書き出し")!.querySelectorAll("button");
+
+  it("Markdown を押すと onExportMarkdown。Google ドキュメントは onExportGoogle を渡したときだけ出て、押すとそれを呼ぶ", () => {
+    const onExportMarkdown = vi.fn();
+    const onExportGoogle = vi.fn();
+    const onlyMarkdown = mount(<ShellPageSettings {...base} onExportMarkdown={onExportMarkdown} />);
+    expect([...exportButtons(onlyMarkdown)].map((button) => button.textContent)).toEqual(["Markdown"]);
+    act(() => buttonOf(onlyMarkdown, "Markdown")!.click());
+    expect(onExportMarkdown).toHaveBeenCalledTimes(1);
+
+    const both = mount(<ShellPageSettings {...base} onExportMarkdown={onExportMarkdown} onExportGoogle={onExportGoogle} />);
+    expect([...exportButtons(both)].map((button) => button.textContent)).toEqual(["Markdown", "Google ドキュメント"]);
+    act(() => buttonOf(both, "Google ドキュメント")!.click());
+    expect(onExportGoogle).toHaveBeenCalledTimes(1);
+    expect(onExportMarkdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("onDelete を渡したときだけ「ページを削除」（危険な操作の見た目）を最後に出し、押すとそれを呼ぶ", () => {
+    const without = mount(<ShellPageSettings {...base} />);
+    expect(buttonOf(without, "ページを削除")).toBeUndefined();
+
+    const onDelete = vi.fn();
+    const host = mount(<ShellPageSettings {...base} onDelete={onDelete} />);
+    const remove = buttonOf(host, "ページを削除")!;
+    expect(remove.className).toBe("es-linkrow es-danger");
+    expect(remove.type).toBe("button");
+    expect([...host.querySelectorAll("button")].at(-1)).toBe(remove);
+    act(() => remove.click());
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("肩書が空なら肩書の行を出さない（名前だけ）", () => {
+    const titled = mount(<ShellPageSettings {...base} />);
+    expect(titled.querySelector(".es-me small")?.textContent).toBe("ライター");
+    const untitled = mount(<ShellPageSettings {...base} author={{ name: "Mika Sato", title: "", initial: "M" }} />);
+    expect(untitled.querySelector(".es-me small")).toBeNull();
+    expect(untitled.querySelector(".es-me div")?.textContent).toBe("Mika Sato");
+  });
+
+  it("言語のボタンは onLang を呼び、langNote は言語の下に role=alert で出る（無ければ出さない）", () => {
+    const onLang = vi.fn();
+    const quiet = mount(<ShellPageSettings {...base} onLang={onLang} />);
+    expect(quiet.querySelector('[role="alert"]')).toBeNull();
+    act(() => buttonOf(quiet, "English")!.click());
+    expect(onLang).toHaveBeenCalledWith("en");
+
+    const noted = mount(<ShellPageSettings {...base} onLang={onLang} langNote="言語を保存できませんでした" />);
+    const note = noted.querySelector('[role="alert"]')!;
+    expect(note.textContent).toBe("言語を保存できませんでした");
+    expect(note.closest("section")?.querySelector("h3")?.textContent).toBe("言語");
   });
 });
 

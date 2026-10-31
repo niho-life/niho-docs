@@ -520,6 +520,7 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-input{width:100%;border:1px solid var(--ed-line-2);border-radius:10px;padding:8px 11px;background:var(--ed-white);font-size:14px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-input:focus{border-color:var(--ed-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-danger{font-size:13px;color:var(--ed-red);font-weight:600;padding:6px 0}
+:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-linkrow.es-danger:hover{color:var(--ed-red)}
 @media (prefers-reduced-motion:reduce){:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-toggle::after{transition:none}}
 
 /* ===== スマホ（900px 未満）：公開のシートは下から、表はカード、設定は 1 列 ===== */

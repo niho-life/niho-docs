@@ -95,7 +95,13 @@ function stepsFor(page: GalleryPage): { root: GalleryPage; steps: ShellStep[] } 
   };
 }
 
-export type ScreenForced = { sidebar?: boolean; rail?: boolean; pick?: ShellDest; conn?: boolean; page?: string };
+/**
+ * web: editor-web が今つないでいる形の情報パネル（#34 第 3 段。公開は「自分だけ」だけ・肩書なし・書き出しは Markdown だけ・
+ * ページを削除。手順と AI の節は出さない）。note: 言語を保存できなかったときの一言を出す。
+ */
+export type ScreenForced = { sidebar?: boolean; rail?: boolean; pick?: ShellDest; conn?: boolean; page?: string; web?: boolean; note?: boolean };
+
+const noop = () => undefined;
 
 export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
   const [name = "", arg = ""] = id.split(":");
@@ -203,7 +209,8 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
       onToggleList={() => setSidebarOpen(true)}
       tools={tools}
       status={status}
-      publish={publish ? { label: publish.label, tone: publish.tone, menu: publish.menu, onClick: () => setSheet("publish") } : null}
+      // web: editor-web と同じく公開ボタンを出さない（公開の配線が無い間）
+      publish={publish && !forced.web ? { label: publish.label, tone: publish.tone, menu: publish.menu, onClick: () => setSheet("publish") } : null}
       railOpen={railOpen}
       onToggleRail={() => setRailOpen((v) => !v)}
       more={{ open: moreMenu, items: shellMoreItems(false), onToggle: () => setMoreMenu((v) => !v), onClose: () => setMoreMenu(false), onSelect: () => setMoreMenu(false) }}
@@ -211,7 +218,22 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
   );
 
   const pageSummary = !pub ? "自分だけ" : DEST[pub.dest].label;
-  const settings = (
+  const settings = forced.web ? (
+    <ShellPageSettings
+      lang={lang}
+      onLang={setLang}
+      langNote={forced.note ? "言語を保存できませんでした" : undefined}
+      author={{ name: ME.name, title: "", initial: ME.initial }}
+      info={[
+        { label: "作成", value: "2026-10-28" },
+        { label: "更新", value: "2026-10-30" },
+        ...(page.kind === "rec" ? [{ label: "録音", value: "14:38" }] : []),
+        { label: "文字数", value: lang === "ja" ? "412" : "1,180 words" },
+      ]}
+      onExportMarkdown={noop}
+      onDelete={noop}
+    />
+  ) : (
     <ShellPageSettings
       destination={
         dest && pub
@@ -229,9 +251,17 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
         ...(page.kind === "rec" ? [{ label: "録音", value: "14:38 · 2026-10-29" }] : []),
         { label: "文字数", value: lang === "ja" ? "412" : "1,180 words" },
       ]}
+      onExportMarkdown={noop}
+      onExportGoogle={noop}
     />
   );
-  const rail = hasRail ? (
+  const rail = !hasRail ? undefined : forced.web ? (
+    <ShellRail label="このページの設定">
+      <ShellRailSection title="ページ設定" summary="自分だけ" open={cards.page} onToggle={() => setCards((c) => ({ ...c, page: !c.page }))}>
+        {settings}
+      </ShellRailSection>
+    </ShellRail>
+  ) : (
     <ShellRail>
       {steps && (
         <ShellRailSection title={steps.root.recipe ?? "手順"} icon="spark" summary={steps.steps.find((s) => s.id === page.id)?.label ?? ""} open={cards.steps} onToggle={() => setCards((c) => ({ ...c, steps: !c.steps }))}>
@@ -259,7 +289,7 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
         />
       </ShellRailSection>
     </ShellRail>
-  ) : undefined;
+  );
 
   let canvas;
   if (isStart) {

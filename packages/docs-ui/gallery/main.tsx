@@ -67,6 +67,8 @@ function App() {
     pick: DESTS.find((dest) => dest === pick),
     conn: params.has("conn") ? params.get("conn") === "1" : undefined,
     page: params.get("page") ?? undefined,
+    web: params.get("web") === "1",
+    note: params.get("note") === "1",
   };
   // 画面を替えたら状態を作り直す（モックの render と同じ）
   return (

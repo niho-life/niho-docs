@@ -9,6 +9,7 @@ import {
   getRecordingRoute,
   importVttRoute,
   patchRecordingRoute,
+  readRecordingSeconds,
   type RecordingsApiDeps,
   type RecordingsStore,
 } from "./recordings-api";
@@ -422,5 +423,31 @@ describe("recording data from the API", () => {
     expect(body).not.toMatch(/internal|hidden/);
     const data: RecordingData = JSON.parse(body).recording;
     expect(Object.keys(data.segments[0]!)).toEqual(["start", "end", "text", "speaker"]);
+  });
+});
+
+describe("readRecordingSeconds (the 録音 row of the info panel when a page opens)", () => {
+  it("reads only the length of the owner's recording, and null when there is none, no length, no DB or a failure", async () => {
+    const { store, rows } = memoryStore();
+    const { page } = await imported(store);
+    // 合成の VTT の最後の段落の終わり（6 秒）
+    expect(await readRecordingSeconds(store, "user-a", page.id)).toBe(6);
+    // 別の人のページ・録音の無いページ
+    expect(await readRecordingSeconds(store, "user-b", page.id)).toBeNull();
+    expect(await readRecordingSeconds(store, "user-a", randomUUID())).toBeNull();
+    const row = rows.find((item) => item.id === page.id)!;
+    for (const durationSec of [null, 0, Number.NaN]) {
+      row.recording = { ...row.recording!, durationSec };
+      expect(await readRecordingSeconds(store, "user-a", page.id)).toBeNull();
+    }
+    expect(await readRecordingSeconds(null, "user-a", page.id)).toBeNull();
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const failing = { getRecording: vi.fn(async () => Promise.reject(new Error("synthetic page_recordings failure 司会役"))) };
+      expect(await readRecordingSeconds(failing, "user-a", page.id)).toBeNull();
+      expect(JSON.stringify(log.mock.calls)).not.toMatch(/page_recordings|司会役/);
+    } finally {
+      log.mockRestore();
+    }
   });
 });
