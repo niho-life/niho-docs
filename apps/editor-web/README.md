@@ -28,6 +28,8 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | `EDITOR_AI_MODE` | 任意。未設定・`off` は AI を使わない（提案・採用は 503 `ai_unavailable`）。`fake` は偽物のモデル（開発・CI だけ。`NODE_ENV=production` では 503） |
 | `EDITOR_AI_MONTHLY_LIMIT_USD` | 任意。owner ごとの月の上限（見込みの USD）。未設定は上限なし。0 以上の数でない値は 0（AI を止める） |
 | `EDITOR_STEPS_MODE` | 手順の実行の方式。`inline`（開発・CI だけ）。未設定・`off`・未知の値と、本番（`NODE_ENV=production`）の `inline` では手順の開始は 503 |
+| `EDITOR_STORAGE` | 任意。資産（音声）の保存先。`fake`（メモリの偽物。開発・CI だけで、`NODE_ENV=production` では起動しない）・`gcs`・`off`。未設定は本番 `off`（音声の API は 503 `storage_unavailable`）、それ以外は `fake`。未知の値は起動しない |
+| `EDITOR_ASSETS_BUCKET` | `EDITOR_STORAGE=gcs` のとき必須。資産の bucket 名（無い・規則に合わなければ起動しない。値は表示しない） |
 
 確認のコマンド: `typecheck`・`lint`・`test`（vitest）・`build`・`test:startup`（build の後。本番の起動の守り）・`test:e2e`（`DATABASE_URL` と migration が要る。`next dev` を起動して API と画面を確かめ、作った行は消す）。
 
@@ -100,6 +102,32 @@ const found = usePageSearch(find.open ? find.value : ""); // found.results を�
 - **上限**: VTT は UTF-8 で 4 MiB（取り込みの要求の本文は 5 MiB まで。超えたら 413）、段落は 20,000 個・1 段落 5,000 文字・本文の合計 8 MiB（docs-core の文字起こしの同期上限と同じ）、1 回の `edits` は 200 件（`PATCH` の本文は 4 MiB まで）。
 - **表**: migration `0007_page_recordings.sql`（録音ページに 1 行。ページを消す（hard delete）と消える。ゴミ箱の間は残る）。コードは `packages/editor-store/src/recordings.ts`、段落と話者の操作（純粋な関数）は `src/recording/`。
 - **まだ**: 音声の取り込み・エンジン（段 2）、マイク録音・再生・タイムスタンプの画面（段 3）、検索への組み込み。
+
+## 録音の音声（#36 段 2a）
+
+録音の音声ファイルを、ブラウザから保存先（本番は GCS）へ直接アップロードする（開始 → ブラウザが PUT → 完了）。文字起こしのエンジン（段 2b）・マイク録音と再生の画面（段 3）・bucket の設定そのもの（infra）は含まない。
+
+- **API**（作法は段 1 と同じ: 未認証 401、DB が無い 503、更新系は同じ origin でなければ 403、別の人・存在しない・不正な id・削除済み・音声の無いページは同じ 404）:
+  `GET /api/recordings/audio/limits`（200 `{ maxBytes, maxDurationSec, retentionDays, extensions, contentTypes }`）・
+  `POST /api/recordings/audio/start`（本文 `{ name, contentType, sizeBytes, sha256, lang?, durationSec? }`、任意の `Idempotency-Key`（UUID）。201 `{ page, recording, speakers, upload: { url, method: "PUT", headers, expiresAt, maxBytes } }`。録音ページ（`kind=rec`・本文は空）・音声の資産・録音（状態 uploading・段落は空）を 1 つの transaction で作る）・
+  `POST /api/pages/{id}/recording/audio/complete`（200 `{ recording, speakers }`）。`GET /api/pages/{id}/recording` の `recording.audio` は `{ status: "uploading" | "uploaded", bytes, contentType, expiresAt }`、音声の無い録音（VTT）は null。
+- **流れ**: start → ブラウザが `upload.url` へ `upload.headers` を付けて直接 PUT（credentials なし。サーバーは音声を受け取らない）→ complete（保存先の object の大きさが申告と同じなら uploaded）。画面から呼ぶ関数は `src/lib/audio-upload-client.ts`（画面への組み込みは段 3）。
+- **エラー**: 400 `{"error":"bad_request","reason":…}`（`body`・`idempotency_key`・`name`・`content_type`・`extension`・`size`・`too_large`・`sha256`・`lang`・`duration`・`too_long`）、413（開始の本文が 16 KiB 超）、503 `storage_unavailable`（保存先を使わない設定）、502 `storage_failed`（保存先の失敗。中身は出さない）、409 `idempotency_conflict`（同じキーで内容が違う・そのキーのページがゴミ箱にある）、409 `{"error":"incomplete","reason":"missing"|"size_mismatch"}`。
+- **冪等**: 同じ `Idempotency-Key`・同じ内容（名前・種類・大きさ・sha256・言語・長さを正規化した SHA-256 で比べる）は 200 で同じページ。アップロード中なら ticket を作り直し、済んでいれば `upload: null`。complete は何度呼んでもよい（済んだものは保存先に問い合わせない）。
+- **上限**（`src/recording/audio-limits.ts` の 1 か所。**仮置き・オーナーの決定待ち**）: 1 ファイル 2 GiB・6 時間（長さは申告があるときだけ確かめる）・保持 30 日。形式は m4a・mp3・wav・aac・ogg・flac で、ファイル名の拡張子と content type が対応すること（`.vtt` は VTT の取り込みを使う）。超えたら保存（ページ・資産・保存先のセッション）の前に断る。
+- **申告値**: `sha256`・`contentType`・`sizeBytes`・`durationSec` はクライアントの申告。サーバーは音声を読まず、sha256 を検証しない（assets.sha256 にも申告のまま入れる）。大きさだけは complete で保存先と照らす。ブラウザで sha256 を計算する部分は段 3（2 GiB の計算は画面の設計が要る）。
+- **表**: migration `0008_recording_audio.sql`（page_recordings に `audio_asset`・`audio_status`（none／uploading／uploaded）・`audio_expires_at`・`audio_upload_key`・`audio_request_hash`）。資産は assets（`kind=audio`、`bucket_path` = `audio/{asset id}`）。コードは `packages/editor-store/src/recording-audio.ts`。ページの複製では音声を写さない（音声から作った録音は、録音の行ごと写さない）。
+- **保存先**（`src/storage/`。画像（#33）も同じ口で足せる形）: `fake` はメモリの偽物で、ticket の url は同じ origin の `/api/dev/fake-storage/{token}`（`EDITOR_STORAGE` が fake で `NODE_ENV` が production でないときだけ動き、それ以外は 404）。`gcs` は fetch と Cloud Run のメタデータサーバーの token だけ（依存を足さない）で、サーバーが resumable upload のセッションを `ifGenerationMatch=0`（上書きしない）で始め、そのセッション URI を返す（署名付き URL は使わない。実行 ID に署名の権限が無い前提）。ticket の url・token・bucket 名・object の場所はログにもエラーにも出さない。**gcs は実際の GCS では未検証**（fetch を差し替えたテストだけ）。
+- **本番の守り**: `NODE_ENV=production` で `EDITOR_STORAGE=fake`、`gcs` で `EDITOR_ASSETS_BUCKET` が無い・不正、未知の値は起動しない（`src/startup-check.ts`。値は表示しない）。要求ごとの解決（`src/storage/runtime.ts`）でも同じ規則で、誤りは 503。入口 `scripts/server-entry.mjs` と Dockerfile は認証だけを見る（AI の設定と同じく変えていない）ので、保存先の誤りは server の起動処理の中で止まる。
+- **アプリは音声を消さない**: 30 日での削除は bucket のライフサイクル規則。ゴミ箱の purge は資産の行だけを消し、object は残す（ライフサイクル規則が消す）。
+
+### bucket に要求する設定（infra の側で）
+
+- **ライフサイクル規則**: 条件 `age: 30`（日）かつ `matchesPrefix: ["audio/"]`、動作 `Delete`。アプリはこれを前提に期限（`audio_expires_at`）を出すだけ。
+- **CORS**: `origin` は editor の origin（`EDITOR_ORIGIN` と同じ）だけ、`method` は `PUT`、`responseHeader` は `Content-Type`、`maxAgeSeconds` は 3600 など。resumable のセッション URI は開始の要求の `Origin` に応じる仕様だが、あわせて設定しておく。
+- **権限**: 実行 ID（`niho-editor-runner`）に作成と閲覧（`storage.objects.create`・`storage.objects.get`）だけ。削除・上書き・署名は要らない。
+- 配備で `EDITOR_STORAGE=gcs` を渡すまで、本番の音声の API は 503 `storage_unavailable`。
+- 画面の CSP の `connect-src` に `https://storage.googleapis.com` を足すのは、画面に組み込む段 3（今の CSP は `'self'` だけなので、ブラウザから GCS への PUT は通らない）。
 
 ## まだやらないこと
 

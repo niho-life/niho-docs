@@ -52,6 +52,7 @@ function memoryStore(rows: Row[] = []) {
         sourceSha256: input.sourceSha256 ?? null,
         segments: input.segments,
         speakerNames: input.speakerNames ?? {},
+        audio: null,
         createdAt: now,
         updatedAt: now,
       };
@@ -133,7 +134,7 @@ describe("POST /api/recordings/import-vtt", () => {
     expect(Object.keys(body).sort()).toEqual(["page", "recording", "speakers"]);
     expect(body.page).toMatchObject({ kind: "rec", title: "合成の会議", lang: "en" });
     expect(Object.keys(body.recording).sort()).toEqual(
-      ["createdAt", "durationSec", "engine", "language", "revision", "segments", "source", "sourceName", "sourceSha256", "speakerNames", "updatedAt"].sort(),
+      ["audio", "createdAt", "durationSec", "engine", "language", "revision", "segments", "source", "sourceName", "sourceSha256", "speakerNames", "updatedAt"].sort(),
     );
     expect(body.recording).toMatchObject({ revision: 1, source: "vtt", language: "en", engine: "vtt-import", durationSec: 6, sourceName: "合成の会議.vtt" });
     expect(body.recording.sourceSha256).toMatch(/^[0-9a-f]{64}$/);
