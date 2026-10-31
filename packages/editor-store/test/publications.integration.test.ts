@@ -139,17 +139,17 @@ async function newPool(schema: string, options = ""): Promise<PgPool> {
   return new Pool({ connectionString: databaseUrl, max: 4, options: `-c search_path=${schema}${options}` });
 }
 
-describe("0008 on a database whose old publications table has rows", { skip: databaseUrl === undefined }, () => {
-  const schema = `editor_store_pub0008_${randomUUID().replaceAll("-", "")}`;
+describe("0009 on a database whose old publications table has rows", { skip: databaseUrl === undefined }, () => {
+  const schema = `editor_store_pub0009_${randomUUID().replaceAll("-", "")}`;
   let pool: PgPool;
   let dir: string;
 
   before(async () => {
     pool = await newPool(schema);
     await pool.query(`CREATE SCHEMA "${schema}"`);
-    dir = await mkdtemp(join(tmpdir(), "editor-store-0008-"));
+    dir = await mkdtemp(join(tmpdir(), "editor-store-0009-"));
     for (const name of await readdir(defaultMigrationsDir)) {
-      if (MIGRATION_FILE_PATTERN.test(name) && name < "0008") await copyFile(new URL(name, defaultMigrationsDir), join(dir, name));
+      if (MIGRATION_FILE_PATTERN.test(name) && name < "0009") await copyFile(new URL(name, defaultMigrationsDir), join(dir, name));
     }
   });
 
@@ -168,15 +168,15 @@ describe("0008 on a database whose old publications table has rows", { skip: dat
       await client.query("INSERT INTO page_versions (page_id, version, blocks, reason) VALUES ($1, 1, '[]', 'publish')", [pageId]);
       await client.query("INSERT INTO publications (page_id, dest, slug, range, published_version) VALUES ($1, 'synthetic', 'old', 'live', 1)", [pageId]);
 
-      await assert.rejects(() => applyMigrations(client), /editor-store 0008: publications has rows/);
-      const recorded = await client.query<{ name: string }>(`SELECT name FROM ${MIGRATIONS_TABLE} WHERE name LIKE '0008%'`);
-      assert.equal(recorded.rows.length, 0, "0008 is not recorded as applied");
+      await assert.rejects(() => applyMigrations(client), /editor-store 0009: publications has rows/);
+      const recorded = await client.query<{ name: string }>(`SELECT name FROM ${MIGRATIONS_TABLE} WHERE name LIKE '0009%'`);
+      assert.equal(recorded.rows.length, 0, "0009 is not recorded as applied");
       assert.equal((await client.query("SELECT 1 FROM publications WHERE published_version = 1")).rows.length, 1, "the old row is kept");
-      assert.equal((await client.query("SELECT to_regclass('publication_versions') AS t")).rows[0]?.t, null, "nothing of 0008 is left behind");
+      assert.equal((await client.query("SELECT to_regclass('publication_versions') AS t")).rows[0]?.t, null, "nothing of 0009 is left behind");
 
       await client.query("DELETE FROM publications");
       const applied = await applyMigrations(client);
-      assert.deepEqual(applied.applied, ["0008_publications.sql"]);
+      assert.deepEqual(applied.applied, ["0009_publications.sql"]);
       const columns = await client.query<{ column_name: string }>(
         "SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'publications' ORDER BY ordinal_position",
         [schema],
@@ -189,7 +189,7 @@ describe("0008 on a database whose old publications table has rows", { skip: dat
   });
 });
 
-describe("PostgreSQL publications (0008)", { skip: databaseUrl === undefined }, () => {
+describe("PostgreSQL publications (0009)", { skip: databaseUrl === undefined }, () => {
   const schema = `editor_store_pub_${randomUUID().replaceAll("-", "")}`;
   const pools: PgPool[] = [];
   let pool: PgPool;

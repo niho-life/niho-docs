@@ -2,7 +2,7 @@ import { InvalidPageCursorError, isPageId } from "./store.ts";
 import type { Block, Database, OwnerId, PageLang, PublishDest, PublishRange, Queryable } from "./types.ts";
 
 /**
- * 公開（#39 公開のシート・#40 公開 API・#41 発信先の設定）の SQL。表は migrations/0008_publications.sql。
+ * 公開（#39 公開のシート・#40 公開 API・#41 発信先の設定）の SQL。表は migrations/0009_publications.sql。
  *
  * 意味の正本は packages/editor-publish のポート（PublishTx・ConnectionTx）と、そのメモリの実装（test-support/memory-store.ts）。
  * apps/editor-web の src/publish/pg-store.ts がここの関数をポートにつなぎ、行と editor-publish のレコードを写す

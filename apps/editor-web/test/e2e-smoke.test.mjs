@@ -430,7 +430,7 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.ok(!(await (await fetch(`${base}/api/trash`)).json()).pages.some((item) => item.id === page.id));
     assert.equal((await fetch(`${base}/api/trash/${page.id}/restore`, { method: "POST", headers: { origin: base } })).status, 404, "not in the trash any more");
 
-    // 公開中のページは削除しない（0008 の形: NIHO への公開版 1 と、それを指す公開）
+    // 公開中のページは削除しない（0009 の形: NIHO への公開版 1 と、それを指す公開）
     await pool.query(
       "INSERT INTO publication_versions (page_id, version, handle, snapshot) VALUES ($1, 1, 'niho', jsonb_build_object('id', $2::text, 'version', 1, 'dest', 'niho'))",
       [page.id, page.id],

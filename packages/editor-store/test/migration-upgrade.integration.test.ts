@@ -61,9 +61,9 @@ describe("migration 0002 on a database that already has pages and versions", { s
       });
 
       // 0002 のあとに足された migration（0003 の検索など）も、ここでいっしょに適用される。このテストが見るのは 0002 の上がり方。
-      // 0008 は 0001 の publications を作り直す（行があれば止まる）ので、ここでは 0007 までを流す（0008 は publications.integration.test.ts）
+      // 0009 は 0001 の publications を作り直す（行があれば止まる）ので、ここでは 0008 までを流す（0009 は publications.integration.test.ts）
       for (const name of await readdir(defaultMigrationsDir)) {
-        if (MIGRATION_FILE_PATTERN.test(name) && name < "0008") await copyFile(new URL(name, defaultMigrationsDir), join(onlyFirst, name));
+        if (MIGRATION_FILE_PATTERN.test(name) && name < "0009") await copyFile(new URL(name, defaultMigrationsDir), join(onlyFirst, name));
       }
       const second = await applyMigrations(client, pathToFileURL(`${onlyFirst}/`));
       assert.equal(second.applied[0], "0002_versions_and_trash.sql");

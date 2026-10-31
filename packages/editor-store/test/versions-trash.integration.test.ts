@@ -16,7 +16,7 @@ const MINUTE = 60_000;
 const paragraph = (text: string): Block => ({ type: "paragraph", content: [{ type: "text", text }] });
 const acceptAll = (blocks: unknown) => blocks as Block[];
 
-/** 公開の行を store を通さずに入れる（0008 の形: NIHO への公開版 1 と、それを指す公開）。 */
+/** 公開の行を store を通さずに入れる（0009 の形: NIHO への公開版 1 と、それを指す公開）。 */
 async function insertPublication(db: Pick<PgPool, "query">, pageId: string, slug: string, options: { stopped?: boolean } = {}): Promise<void> {
   await db.query(
     "INSERT INTO publication_versions (page_id, version, handle, snapshot) VALUES ($1, 1, 'niho', jsonb_build_object('id', $2::text, 'version', 1, 'dest', 'niho'))",
@@ -289,7 +289,7 @@ describe("PostgreSQL editor store: revisions, versions and trash", { skip: datab
            FROM generate_series(1, $2::int) AS n`,
         [page.id, VERSION_KEEP_LIMIT],
       );
-      // 公開は publication_versions に自分の公開版を持つので、公開していても page_versions の版は守らない（0008）
+      // 公開は publication_versions に自分の公開版を持つので、公開していても page_versions の版は守らない（0009）
       await insertPublication(pool, page.id, `cap-${page.id.slice(0, 8)}`, { stopped: true });
       const added = await store.createVersion(OWNER, page.id, "ai");
       assert.equal(added?.version, VERSION_KEEP_LIMIT + 1);
