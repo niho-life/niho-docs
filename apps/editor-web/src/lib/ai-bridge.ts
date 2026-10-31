@@ -11,7 +11,8 @@ import type { PageBody } from "./pages-client";
  * - 頼む前に、未保存の入力を保存し終えてから、その時点の page id と revision を渡す（保存の状態が悪い・まだ作っていない新しいページは頼めない）。
  * - 採用の結果・競合の応答のページを画面に載せる: 本文を差し替え（履歴に積まない・自動保存を起こさない）、保存の部品の revision を進める。
  *   変換中は確定を待つ。頼んでいる間に入力があった（まだ届いていない変更がある）ときは載せない（その保存が 409 になり、
- *   競合の帯で選べる。自分の文章は失わない）。
+ *   競合の帯で選べる。自分の文章は失わない）。応答が遅れて届く間に、自分の入力が保存し終わって revision が進んでいたとき
+ *   （応答のページが今の保存済みより古い）も載せない（保存し終えた文章を古いページで消さない）。
  */
 
 /** 頼めない理由。`new` まだ作っていない新しいページ・`unavailable` 本文を読めない・下書きを読み終えていない。 */
@@ -65,6 +66,8 @@ export async function replaceForAi(deps: AiBridgeDeps, page: AiPage, options: { 
   const saver = deps.saver();
   const autosave = deps.autosave();
   if (!editor || editor.isDestroyed || !saver || !autosave || autosave.hasPending()) return false;
+  // 応答のページが、今の保存済みの revision より古い（遅れて届いた 409 のページなど）。載せると保存し終えた入力が消え、revision も戻る
+  if (page.revision < saver.revision) return false;
   if (!replaceBlocks(editor, page.blocks)) return false;
   saver.rebase(page.revision, { title: page.title, blocks: page.blocks });
   if (page.title !== deps.currentTitle()) deps.showTitle(page.title);
