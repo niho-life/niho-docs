@@ -31,6 +31,8 @@ export const SCREENS: ScreenDef[] = [
   { id: "dest", label: "発信先", url: "/destinations" },
   { id: "sheet:addDest", label: "発信先を追加（シート）", url: "/destinations + シート" },
   { id: "site", label: "自分のサイト", url: "/destinations/site" },
+  { id: "dest-web", label: "発信先（editor-web。#41）", url: "/destinations" },
+  { id: "site-web", label: "自分のサイト（editor-web。#41）", url: "/destinations/…" },
   { id: "account", label: "役割とつながり", url: "/account" },
   { id: "settings", label: "設定（モック v6 の全項目）", url: "/settings" },
   { id: "settings-web", label: "設定（editor-web。#108）", url: "/settings" },

@@ -39,3 +39,30 @@ export type SlugMessageKey = keyof typeof SLUG_MESSAGES;
 export function slugMessage(error: string | null | undefined): string | null {
   return error && error in SLUG_MESSAGES ? SLUG_MESSAGES[error as SlugMessageKey] : null;
 }
+
+/**
+ * 発信先の設定（#41）で画面に出す一言。サーバー（connections-api の応答の message）と画面の両方が使う。
+ * 鍵・URL・本文の値は入れない。
+ */
+export const DESTINATION_MESSAGES = {
+  invalid_handle: "この handle は使えません（半角の英小文字・数字と、間のハイフンだけ。3〜32 文字）",
+  handle_taken: "この handle は使われています。別の handle にしてください",
+  handle_locked: "handle は作ったあと変えられません",
+  invalid_mode: "この受け取り方は選べません",
+  invalid_site_url: "サイトの URL は https で始まるアドレスにしてください",
+  invalid_url_shape: "URL の形を確かめてください（ホストと、記事の前に付く path）",
+  disconnected: "この接続は解除されています",
+  export_failed: "書き出せませんでした（写真が読めない・公開版が書き出しの形に収まらない）。公開版と下書きはそのままです",
+  export_too_large: "写真が多すぎて 1 つの zip にできませんでした。ページを分けて書き出してください",
+  storage_unavailable: "写真の置き場所がまだ設定されていないので、書き出せません",
+  failed: "うまくいきませんでした。もう一度お試しください",
+  signedOut: PUBLISH_MESSAGES.signedOut,
+  forbidden: PUBLISH_MESSAGES.forbidden,
+  notFound: "この発信先が見つかりません",
+  unavailable: "いまは発信先の設定を変えられません",
+  network: PUBLISH_MESSAGES.network,
+  keyOnce: "新しい鍵はこの 1 回だけ出ます。コピーして、サイトの側に入れてください",
+  keyRotated: "鍵を再発行しました。古い鍵では読めなくなりました",
+  disconnectWarning: "接続を解除すると、鍵はすべて使えなくなり、このサイトに公開中のページは「公開をやめた」になります（ページは残ります）",
+  pushLater: "WordPress・Ghost への送信は、まだ動きません（受け取り方として保存するだけです）",
+} as const;

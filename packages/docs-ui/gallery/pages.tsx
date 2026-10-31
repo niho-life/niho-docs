@@ -2,8 +2,10 @@ import { useState, type ReactNode } from "react";
 import {
   AccountPage,
   DestinationsPage,
+  EditorDestinationsPage,
   EditorSettingsPage,
   EditorShell,
+  EditorSitePage,
   LoginScreen,
   PublishPreview,
   PublishSheet,
@@ -11,6 +13,8 @@ import {
   ShellHeader,
   SitePage,
   type AccountLink,
+  type EditorAddSiteDraft,
+  type EditorDestinationMode,
   type EditorSettingsAiLang,
   type EditorSettingsRecipe,
   type EditorSettingsTermDraft,
@@ -221,6 +225,91 @@ export function WebSettingsDemo({ forced }: { forced: PagesForced & { terms?: bo
         transcription={{ engine: "deepgram", timeoutSec: 1200, maxBytes: 2 * 1024 ** 3, maxDurationSec: 6 * 3600, retentionDays: 30, extensions: ["m4a", "mp3", "wav", "aac", "ogg", "flac"] }}
         storage="CLOUD"
         limits={{ glossary: 200, recipes: 20, steps: 12 }}
+      />
+    </SettingsFrame>
+  );
+}
+
+/** editor-web の発信先（#41）。開いている追加の下書きは `?add=1`、鍵は `?key=1` で出す。 */
+export function WebDestDemo({ forced }: { forced: PagesForced & { add?: boolean; issuedKey?: boolean } }) {
+  const [draft, setDraft] = useState<EditorAddSiteDraft | null>(forced.add ? { mode: "api", handle: "mika-note", siteUrl: "https://note.mika-sato.example", path: "posts" } : null);
+  const [issued, setIssued] = useState(Boolean(forced.issuedKey));
+  return (
+    <SettingsFrame current="dest" title="発信先" sidebar={forced.sidebar} pendingInvites={1}>
+      <EditorDestinationsPage
+        status={issued ? "新しい鍵はこの 1 回だけ出ます" : ""}
+        busy={false}
+        faces={[
+          { id: "exp", label: DEST.exp.label, host: DEST.exp.host, path: DEST.exp.path, who: DEST.exp.who, role: DEST.exp.role, available: true, reason: null, published: 1 },
+          { id: "niho", label: DEST.niho.label, host: null, path: null, who: DEST.niho.who, role: DEST.niho.role, available: false, reason: "role", published: 0 },
+        ]}
+        sites={[
+          { id: "site-1", handle: "mika-sato", host: ME.site, path: "posts", mode: "api", published: 1 },
+          { id: "site-2", handle: "mika-note", host: `note.${ME.site}`, path: "", mode: "wordpress", published: 0 },
+        ]}
+        onOpenSite={() => navigate("site-web")}
+        draft={draft}
+        onAdd={() => setDraft({ mode: "api", handle: "", siteUrl: "https://", path: "" })}
+        onDraft={setDraft}
+        onCancelAdd={() => setDraft(null)}
+        onCreate={() => {
+          setDraft(null);
+          setIssued(true);
+        }}
+        issuedKey={issued ? { masked: "ek_••••••••3f9a", plaintext: "ek_this-is-a-synthetic-key-shown-once-only-0" } : null}
+        onCopyKey={() => undefined}
+        onCloseKey={() => setIssued(false)}
+      />
+    </SettingsFrame>
+  );
+}
+
+/** editor-web の自分のサイト（#41）。`?url=1`（URL の編集）・`?confirm=key|disconnect`・`?key=1`（新しい鍵）。 */
+export function WebSiteDemo({ forced }: { forced: PagesForced & { url?: boolean; confirm?: string; issuedKey?: boolean } }) {
+  const [mode, setMode] = useState<EditorDestinationMode>("api");
+  const [urlDraft, setUrlDraft] = useState<{ host: string; path: string } | null>(forced.url ? { host: ME.site, path: "posts" } : null);
+  const [confirmingKey, setConfirmingKey] = useState(forced.confirm === "key");
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState(forced.confirm === "disconnect");
+  const [issued, setIssued] = useState(Boolean(forced.issuedKey));
+  return (
+    <SettingsFrame current="dest" title={ME.site} sidebar={forced.sidebar} pendingInvites={1}>
+      <EditorSitePage
+        status=""
+        busy={false}
+        handle="mika-sato"
+        host={ME.site}
+        path="posts"
+        mode={mode}
+        apiUrl="https://api.editor.niho.life/v1/mika-sato/published.json"
+        articleUrl={`https://${ME.site}/posts/{slug}`}
+        keys={[
+          { id: "k2", masked: "ek_••••••••3f9a", createdAt: "2026-10-30T00:00:00.000Z", active: true },
+          { id: "k1", masked: "ek_••••••••1111", createdAt: "2026-10-01T00:00:00.000Z", active: false },
+        ]}
+        published={PAGES.filter((page) => isPublished(page) && page.pub?.dest === "site").map((page) => ({ pageId: page.id, title: page.title, url: urlOf(page, "site"), status: "published" as const }))}
+        urlDraft={urlDraft}
+        onBack={() => navigate("dest-web")}
+        onCopyApi={() => undefined}
+        onEditUrl={() => setUrlDraft({ host: ME.site, path: "posts" })}
+        onUrlDraft={setUrlDraft}
+        onCancelUrl={() => setUrlDraft(null)}
+        onSaveUrl={() => setUrlDraft(null)}
+        onMode={setMode}
+        onExport={() => undefined}
+        confirmingKey={confirmingKey}
+        onAskKey={() => setConfirmingKey(true)}
+        onCancelKey={() => setConfirmingKey(false)}
+        onRotateKey={() => {
+          setConfirmingKey(false);
+          setIssued(true);
+        }}
+        issuedKey={issued ? { masked: "ek_••••••••7b2c", plaintext: "ek_this-is-a-synthetic-key-shown-once-only-1" } : null}
+        onCopyKey={() => undefined}
+        onCloseKey={() => setIssued(false)}
+        confirmingDisconnect={confirmingDisconnect}
+        onAskDisconnect={() => setConfirmingDisconnect(true)}
+        onCancelDisconnect={() => setConfirmingDisconnect(false)}
+        onDisconnect={() => setConfirmingDisconnect(false)}
       />
     </SettingsFrame>
   );
