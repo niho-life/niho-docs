@@ -228,4 +228,39 @@ describe("normalizePastedHtml", () => {
     expect(html).toContain("font-weight: bold");
     expect(html).toContain(">t<");
   });
+
+  describe("images", () => {
+    const ID = "6f0c2a4e-1b3d-4c5e-8f70-9a1b2c3d4e5f";
+
+    it("keeps an image the editor itself wrote (copy or cut in the editor) with only its asset id, alt, credit and consent", () => {
+      const html = normalizePastedHtml(
+        `<p>a</p><img data-doc-asset="" data-asset-id="${ID}" alt="朝の海" data-credit="Example Photographer" data-consent="true" src="https://evil.example/x.png" srcset="https://evil.example/y.png 2x" onerror="alert(1)" style="position:fixed">`,
+      );
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const image = doc.querySelector("img")!;
+      expect([...image.attributes].map((attribute) => attribute.name).sort()).toEqual(["alt", "data-asset-id", "data-consent", "data-credit"]);
+      expect(image.getAttribute("data-asset-id")).toBe(ID);
+      expect(html).not.toContain("evil");
+      expect(html).not.toContain("onerror");
+    });
+
+    it("still drops outside images: no data-asset-id, one that is not a UUID, and images inside picture", () => {
+      const html = normalizePastedHtml(
+        `<img src="https://evil.example/a.png"><img data-asset-id="not-a-uuid" src="https://evil.example/b.png"><img data-asset-id="" src="https://evil.example/c.png"><picture><img data-asset-id="${ID}"></picture>`,
+      );
+      expect(html).not.toContain("<img");
+      expect(html).not.toContain("evil");
+    });
+
+    it("an image copied in the editor comes back as the same image when pasted (the body keeps only the asset id and fields)", () => {
+      const source = makeEditor({ type: "doc", content: [{ type: "image", attrs: { assetId: ID, alt: "朝の海", credit: "Example Photographer", consent: true } }] });
+      const copied = source.getHTML();
+      expect(copied).toContain(ID);
+      const target = makeEditor();
+      const blocks = paste(target, copied);
+      expect(JSON.stringify(blocks)).toContain(ID);
+      expect(JSON.stringify(blocks)).toContain("朝の海");
+      expect(JSON.stringify(blocks)).not.toContain("evil");
+    });
+  });
 });

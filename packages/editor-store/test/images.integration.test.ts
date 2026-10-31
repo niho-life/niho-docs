@@ -9,6 +9,7 @@ import type { Pool as PgPool } from "pg";
 import {
   completeImageUpload,
   countPageImages,
+  findImageUploadByKey,
   imageAsset,
   imageObjectPath,
   sharedImageAsset,
@@ -259,6 +260,18 @@ describe("page images on PostgreSQL", { skip: databaseUrl === undefined }, () =>
     // 同じキーで内容が違う・ページが違う
     assert.deepEqual(await startImageUpload(pool, OWNER, startInput(page, { uploadKey: key, requestHash: HASH_B })), { status: "conflict" });
     assert.deepEqual(await startImageUpload(pool, OWNER, startInput(other, { uploadKey: key })), { status: "conflict" });
+    assert.equal(await count(pool, OWNER), before);
+
+    // 書かずに調べるだけ（上限の判定の前に、冪等な再送を見分ける）: 同じキー・内容は existing、違えば conflict、無ければ null
+    assert.deepEqual(await findImageUploadByKey(pool, OWNER, { uploadKey: key, pageId: page, requestHash: HASH_A }), {
+      status: "existing",
+      assetId: input.assetId,
+      objectPath: imageObjectPath(input.assetId),
+      uploadStatus: "ready",
+    });
+    assert.deepEqual(await findImageUploadByKey(pool, OWNER, { uploadKey: key, pageId: page, requestHash: HASH_B }), { status: "conflict" });
+    assert.deepEqual(await findImageUploadByKey(pool, OWNER, { uploadKey: key, pageId: other, requestHash: HASH_A }), { status: "conflict" });
+    assert.equal(await findImageUploadByKey(pool, OWNER, { uploadKey: randomUUID(), pageId: page, requestHash: HASH_A }), null);
     assert.equal(await count(pool, OWNER), before);
 
     // 別の人は同じキーを使える（owner ごとに 1 つ）

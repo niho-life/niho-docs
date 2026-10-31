@@ -8,6 +8,7 @@ import {
   createRecordingPage,
   duplicatePage,
   enableShare,
+  findImageUploadByKey,
   getRecording,
   getShare,
   imageAsset,
@@ -161,6 +162,7 @@ export const imageDeps: ImageApiDeps = {
       imageAsset: (owner, assetId) => imageAsset(pool, owner, assetId),
       updateImageMeta: (owner, assetId, patch) => updateImageMeta(pool, owner, assetId, patch),
       countPageImages: (owner, pageId) => countPageImages(pool, owner, pageId),
+      findImageUploadByKey: (owner, input) => findImageUploadByKey(pool, owner, input),
       sharedImageAsset: (token, assetId) => sharedImageAsset(pool, token, assetId),
     };
   },

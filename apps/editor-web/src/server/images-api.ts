@@ -44,6 +44,8 @@ export type ImageStore = {
   imageAsset: (owner: OwnerId, assetId: string) => Promise<ImageAsset | null>;
   updateImageMeta: (owner: OwnerId, assetId: string, patch: ImageMetaPatch) => Promise<ImageAsset | null>;
   countPageImages: (owner: OwnerId, pageId: string) => Promise<number | null>;
+  /** 同じキーの資産が既にあるか（枚数の上限の判定の前に、冪等な再送を見分ける。何も書かない）。 */
+  findImageUploadByKey: (owner: OwnerId, input: { uploadKey: string; pageId: string; requestHash: string }) => Promise<StartImageUploadResult>;
   /** 共有リンクの読み取り（認証なし。token で絞る）。 */
   sharedImageAsset: (token: string, assetId: string) => Promise<SharedImageAsset | null>;
 };
@@ -202,7 +204,12 @@ export function startImageRoute(request: Request, pageId: string, deps: ImageApi
     // 1 ページの枚数の上限（保存先のセッションを作る前に見る）。ページが無ければ、ここで同じ 404
     const images = await store.countPageImages(session.userId, pageId);
     if (images === null) return notFoundResponse();
-    if (images >= IMAGE_PAGE_MAX_COUNT) return badRequest("too_many");
+    if (images >= IMAGE_PAGE_MAX_COUNT) {
+      // 上限に達していても、同じキー・同じ内容の再送は先に作った資産を返す（最後の 1 枚の応答が届かなかったとき、資産の id と
+      // ticket を取り戻せるように）。新しい資産は作らない（キーが無い・初めてのキーは断る）
+      const existing = uploadKey === null ? null : await store.findImageUploadByKey(session.userId, { uploadKey, pageId, requestHash: imageRequestHash(pageId, start) });
+      if (existing === null) return badRequest("too_many");
+    }
 
     const assetId = (deps.newAssetId ?? randomUUID)();
     const origin = expectedOrigin(request, deps.env);

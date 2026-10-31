@@ -34,6 +34,7 @@ function memoryStore(options: { pages?: Record<string, string>; trashed?: readon
   // ページ → owner（既定: PAGE と OTHER_PAGE は user-a のもの）
   const pages: Record<string, string> = options.pages ?? { [PAGE]: "user-a", [OTHER_PAGE]: "user-a" };
   const trashed = new Set(options.trashed ?? []);
+  let imageCount = options.images;
   const rows: Row[] = [];
   const starts: Array<{ owner: string; input: StartImageUploadInput }> = [];
   const metas: Array<{ owner: string; assetId: string; patch: ImageMetaPatch }> = [];
@@ -66,6 +67,12 @@ function memoryStore(options: { pages?: Record<string, string>; trashed?: readon
       rows.push({ asset, owner, uploadKey: input.uploadKey, requestHash: input.requestHash });
       return { status: "created", assetId: asset.assetId, objectPath: asset.objectPath, uploadStatus: "uploading" };
     },
+    findImageUploadByKey: async (owner, input): Promise<StartImageUploadResult> => {
+      const existing = rows.find((row) => row.owner === owner && row.uploadKey === input.uploadKey);
+      if (!existing) return null;
+      if (!own(owner, existing.asset.pageId) || existing.asset.pageId !== input.pageId || existing.requestHash !== input.requestHash) return { status: "conflict" };
+      return { status: "existing", assetId: existing.asset.assetId, objectPath: existing.asset.objectPath, uploadStatus: existing.asset.status };
+    },
     completeImageUpload: async (owner, assetId, stored) => {
       const row = find(owner, assetId);
       if (!row) return null;
@@ -89,7 +96,7 @@ function memoryStore(options: { pages?: Record<string, string>; trashed?: readon
     },
     countPageImages: async (owner, pageId) => {
       if (!own(owner, pageId)) return null;
-      return options.images ?? rows.filter((row) => row.asset.pageId === pageId).length;
+      return imageCount ?? rows.filter((row) => row.asset.pageId === pageId).length;
     },
     sharedImageAsset: async (token, assetId): Promise<SharedImageAsset | null> => {
       if (token !== TOKEN) return null;
@@ -100,7 +107,7 @@ function memoryStore(options: { pages?: Record<string, string>; trashed?: readon
       return { objectPath, contentType, bytes, alt, credit };
     },
   };
-  return { store, rows, starts, metas };
+  return { store, rows, starts, metas, setImages: (count: number | undefined) => void (imageCount = count) };
 }
 
 /** 画像の API が呼ぶのは getSession だけ。 */
@@ -278,6 +285,29 @@ describe("POST /api/pages/{id}/images/start", () => {
     // 上限の 1 つ下までは入る
     const room = memoryStore({ images: IMAGE_PAGE_MAX_COUNT - 1 });
     expect((await start(START, deps("user-a", room.store, storage))).status).toBe(201);
+  });
+
+  it("at the limit, a retry with the same Idempotency-Key still gets the asset it made; a new asset is still refused", async () => {
+    const { store, setImages } = memoryStore({ images: IMAGE_PAGE_MAX_COUNT - 1 });
+    const storage = createFakeStorage();
+    const key = { "idempotency-key": "11111111-1111-4111-8111-111111111111" };
+    // 最後の 1 枚（応答が届かなかったとする）
+    const first = await start(START, deps("user-a", store, storage), key);
+    expect(first.status).toBe(201);
+    const { assetId } = (await first.json()) as { assetId: string };
+    setImages(IMAGE_PAGE_MAX_COUNT);
+    // 同じキー・同じ内容の再送は、上限に達していても、先の資産と、アップロード中なので ticket を返す
+    const again = await start(START, deps("user-a", store, storage), key);
+    expect(again.status).toBe(200);
+    const body = (await again.json()) as { assetId: string; upload: { url: string } | null };
+    expect(body.assetId).toBe(assetId);
+    expect(body.upload?.url).toBeTruthy();
+    // キーが無い・初めてのキー・同じキーで内容が違う（資産を作らない）
+    expect((await start(START, deps("user-a", store, storage))).status).toBe(400);
+    expect((await start(START, deps("user-a", store, storage), { "idempotency-key": "22222222-2222-4222-8222-222222222222" })).status).toBe(400);
+    const other = await start({ ...START, sizeBytes: 6 }, deps("user-a", store, storage), key);
+    expect(other.status).toBe(409);
+    expect(await other.text()).toContain("idempotency_conflict");
   });
 
   it("answers 413 to a body over the limit, declared or streamed", async () => {
