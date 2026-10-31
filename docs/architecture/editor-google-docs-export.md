@@ -153,7 +153,23 @@ niho-app の API を使えない事情（API を畳む・editor を独立させ�
 - refresh token はサーバーだけが持ち、AES-256-GCM で包んで Cloud SQL に置く（行ごとの IV、AAD に `user_id` と鍵の版）。鍵は Secret Manager（`gcp-bootstrap.sh` が生成）。access token は保存しない。
 - 本文は限定 AST から **HTML** を作り、Drive の multipart upload（`uploadType=multipart`、metadata の `mimeType` に `application/vnd.google-apps.document`）で変換させる。
   Docs API（`documents.batchUpdate`）は scope が増えるので使わない。Markdown の取り込みは受け付ける MIME が明記されていないので契約にできない。
-- 二重に作らない仕掛けは `appProperties.nihoExportId` を付けて作り、再試行では `files.list` で引き当ててから作る（変換を伴う upload には Drive の事前生成 ID が使えない）。
+- refresh token を包む鍵を回すときは、**その版で包まれた行が 1 つも無いことを DB で確かめるまで、前の版を読めるようにしておく**
+  （`key_version` を数える）。「皆が 1 度書き出した頃」は安全な引退条件ではない（1 度も書き出さない人の行が読めなくなる）。
+  先に全部の行を包み直す migration を流してから外す形でもよい。
+- **二重に作らない仕掛けは、editor 自身では作りきれない。** 変換を伴う upload には Drive の事前生成 ID が使えないので、
+  `appProperties.nihoExportId` を付けて作り、再試行では `files.list` で引き当ててから作ることになるが、
+  **これは引き当て（reconciliation）の目印で、atomic な冪等の仕組みではない**:
+  30 秒で切った upload が Google 側でまだ処理されていることがあり、再試行の `files.list` が「無い」と見てもう 1 つ作ると、
+  同じ `nihoExportId` の文書が 2 つできる。採るなら、少なくとも次を決めてから作る。
+  - 受付の表（editor 側）に `running` / `unknown` を持ち、**`unknown` のあいだは新しい upload を始めない**。
+  - `unknown` の受付は、`files.list` で引き当てられたらその文書を採用する。引き当てられず、かつ**最初の試行から
+    Google の処理が残り得る時間（要求の時間切れ＋余裕）を過ぎていない**あいだは、作らずに「まだ分からない」を返す。
+  - その時間を過ぎてから作る場合も、**遅れて届いた元の upload で 2 つできる残りの危険**は消えないので、引き当てで
+    古いほうを残して重複を知らせる後始末を持つ。
+  - テストは「元の upload が遅れて成功する」筋を含める（`files.list` が空を返したことを失敗の証拠にしない）。
+
+  この PR の方式では、二重に作らない仕掛けは **API 側（`exportId`）**にあり、editor は分からないときに
+  `export_result_unknown` を返して**確かめてから**同じ id で再試行します（§2）。上の面倒は、予備案を採るときに引き受けるものです。
 - サービスアカウント＋共有ドライブは採らない（鍵 1 つで全員分の文書に手が届く。文書の持ち主も保存容量も NIHO 側になる）。
 - **同意の URL を editor が開く形になるので、`validate_authorization_url` と同じ検証を必ず持たせる**
   （`https` ／ host が `accounts.google.com` と完全一致 ／ port 443 ／ path が `/o/oauth2/` で始まる ／ 資格情報なし。旧 Mac アプリの
