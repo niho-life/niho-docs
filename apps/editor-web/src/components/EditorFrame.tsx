@@ -8,7 +8,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { PageSummary } from "@niho/editor-store";
 import { EditorShell, ShellHeader, ShellSidebar, shellAccountItems, type NewPageKind } from "niho-docs-ui/shell";
 import { listPagesRequest } from "@/lib/pages-client";
-import { arrangeSidebarItems } from "@/lib/sidebar-items";
+import { arrangeSidebarItems, type SidebarPage, type SidebarPublication } from "@/lib/sidebar-items";
+import { usePagePublish } from "./PagePublish";
 
 /** shell.css と同じ境目（これ以下は一覧・ページのどちらかを全画面で出す）。 */
 const NARROW_QUERY = "(max-width: 900px)";
@@ -91,6 +92,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
+  // 開いたページのシートが読んだ公開の状態（一覧の 2 行目。段 2 までは一覧の行に公開の状態が無いので、ここで重ねる）
+  const [publications, setPublications] = useState<Record<string, SidebarPublication | null>>({});
+  const publishSaved = useRef<(id: string) => void>(() => undefined);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
@@ -142,11 +146,14 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
           pages: current.pages.map((page) => (page.id === id ? { ...page, title } : page)),
           opened: current.opened?.id === id ? { ...current.opened, title } : current.opened,
         })),
-      pageSaved: (id) =>
+      pageSaved: (id) => {
         setList((current) => {
           const page = current.pages.find((item) => item.id === id) ?? (current.opened?.id === id ? current.opened : undefined);
           return page ? { ...current, pages: toTop(current.pages, { ...page, updatedAt: new Date().toISOString() }) } : current;
-        }),
+        });
+        // 公開中なら「更新あり」を確かめ直す
+        publishSaved.current(id);
+      },
       pageCreated: (id, title) => {
         const at = new Date().toISOString();
         const page: PageSummary = { id, kind: "note", title, lang: "ja", parent: null, stepStatus: null, createdAt: at, updatedAt: at };
@@ -157,7 +164,11 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   );
   const frame = useMemo<EditorFrameApi>(() => ({ narrow, ...api }), [narrow, api]);
 
-  const items = useMemo(() => arrangeSidebarItems(list.pages, { now, query: search.value }), [list.pages, now, search.value]);
+  const rows = useMemo<SidebarPage[]>(
+    () => list.pages.map((page) => (page.id in publications ? { ...page, publication: publications[page.id] } : page)),
+    [list.pages, publications],
+  );
+  const items = useMemo(() => arrangeSidebarItems(rows, { now, query: search.value }), [rows, now, search.value]);
 
   const select = (id: string) => {
     if (id === currentId) setListFor(null);
@@ -190,6 +201,14 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
     : pathname === "/p/new" && searchParams.get("from") === "recording"
       ? "録音から"
       : (settings?.title ?? "");
+
+  // 公開の状態・ボタン・シートは、開いている（一覧か開いたページで分かっている）自分のページにだけ出す
+  const openPage = currentId ? (list.opened?.id === currentId ? list.opened : list.pages.find((page) => page.id === currentId)) : undefined;
+  const onPublication = useCallback((id: string, publication: SidebarPublication | null) => setPublications((current) => ({ ...current, [id]: publication })), []);
+  const publishing = usePagePublish({ pageId: openPage?.id ?? null, isArticle: openPage?.kind === "article", onPublication, onNavigate: (path) => router.push(path) });
+  useEffect(() => {
+    publishSaved.current = publishing.pageSaved;
+  }, [publishing.pageSaved]);
 
   // 一覧をしまう: デスクトップでは列を閉じ、狭い画面ではページへ戻る（`/` では一覧がその画面なので出さない）
   const collapse = narrow ? (pathname === "/" ? undefined : () => setListFor(null)) : () => setCollapsed(true);
@@ -232,8 +251,11 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
               plain={settings !== undefined}
               showListButton={!sidebarOpen}
               onToggleList={() => (narrow ? setListFor(pathname) : setCollapsed(false))}
+              status={publishing.status}
+              publish={publishing.publish}
             />
           }
+          overlay={publishing.overlay ?? undefined}
         >
           {children}
         </EditorShell>

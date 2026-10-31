@@ -97,3 +97,37 @@ describe("arrangeSidebarItems", () => {
     expect(searchPages(pages, "KAMAKURA").map((item) => item.id)).toEqual(["rec"]);
   });
 });
+
+describe("arrangeSidebarItems: 2 行目の公開先（#39）", () => {
+  const live = { dest: "exp", handle: "exp", range: "live", stopped: false } as const;
+
+  it("公開中は発信先の名前と印。限定公開も同じ。本人のサイトは「自分のサイト」", () => {
+    const rows = arrangeSidebarItems(
+      [
+        { ...page("a"), publication: live },
+        { ...page("b"), publication: { dest: "niho", handle: "niho", range: "unlisted", stopped: false } },
+        { ...page("c"), publication: { dest: "site", handle: "field-notes", range: "live", stopped: false } },
+      ],
+      { now: NOW },
+    );
+    expect(rows.map((row) => row.sub)).toEqual([
+      { text: "NIHO Experience", dest: "exp" },
+      { text: "NIHO", dest: "niho" },
+      { text: "自分のサイト", dest: "site" },
+    ]);
+  });
+
+  it("公開をやめたページは「公開をやめた」（印なし）。公開の無いページは今までどおり", () => {
+    const rows = arrangeSidebarItems(
+      [{ ...page("a"), publication: { ...live, stopped: true } }, { ...page("b", { kind: "rec" }), publication: null }, page("c")],
+      { now: NOW },
+    );
+    expect(rows.map((row) => row.sub)).toEqual([{ text: "公開をやめた" }, { text: "録音" }, undefined]);
+  });
+
+  it("公開中は録音・作成中より先に出す（モック v6 の順）。検索の結果でも同じ", () => {
+    const rec = { ...page("rec", { kind: "rec", title: "鎌倉の録音" }), publication: live };
+    expect(arrangeSidebarItems([rec], { now: NOW })[0]!.sub).toEqual({ text: "NIHO Experience", dest: "exp" });
+    expect(arrangeSidebarItems([rec], { now: NOW, query: "鎌倉" })[0]!.sub).toEqual({ text: "NIHO Experience", dest: "exp" });
+  });
+});
