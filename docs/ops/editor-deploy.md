@@ -169,12 +169,13 @@ AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messa
                                   niho-editor の内部の route（同じサービス）: claim → 実行 → 確定 → 次の段階を積む
 
 Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/steps/sweep（同じ OIDC）──▶ niho-editor
-    lease の切れた段階と、queued のまま残った段階を、同じ名前の規則で積み直す（積み済みなら重複で無視される）
+    lease の切れた段階は、claim で進んだ世代のまま積み直す（落ちた task の名前は claim の前の世代なのでぶつからない）
+    queued のまま残った段階は、世代を 1 つ進めた新しい名前で積み直す（消えた task の名前がふさがっていても拾える）
 ```
 
 | 資源 | 名前（既定） | 内容 |
 | --- | --- | --- |
-| Cloud Tasks キュー | `niho-editor-steps` | 最大 5 回・10〜300 秒の間隔で再試行・同時 5 本。1 つの task は最大 30 分（`dispatchDeadline`） |
+| Cloud Tasks キュー | `niho-editor-steps` | 最大 5 回・10〜300 秒の間隔で再試行・同時 5 本。1 つの task は最大 30 分（`dispatchDeadline`）。段階の再試行の間隔は 10・20・40 秒（`defaultRetryDelaySeconds`）で、掃除の 5 分より短い |
 | サービスアカウント | `niho-editor-tasks`（deploy.env の `TASKS_SA`） | task と掃除の OIDC トークンの身元だけ。**どの資源の権限も持たない** |
 | Cloud Scheduler | `niho-editor-steps-sweep` | `*/5 * * * *`（Asia/Tokyo）・試行の期限 300 秒・再試行なし |
 | 権限 | 実行 ID（`niho-editor-runner`） | キューへの `roles/cloudtasks.enqueuer` と、`niho-editor-tasks` への `roles/iam.serviceAccountUser`（task に OIDC を付けるため） |
@@ -212,7 +213,7 @@ Cloud Scheduler niho-editor-steps-sweep ── 5 分おき POST /api/internal/st
 
 ### 失敗の見方
 
-- **Cloud Tasks のキュー**（コンソールの Cloud Tasks → `niho-editor-steps`）: 積まれている数と試行の回数。worker の route が 200 以外を返した task は 5 回まで試され、その後消える。段階は queued のまま残り、掃除が拾う（ただし Cloud Tasks は同じ名前を最大 24 時間使わせないので、拾われるのはその後）。
+- **Cloud Tasks のキュー**（コンソールの Cloud Tasks → `niho-editor-steps`）: 積まれている数と試行の回数。worker の route が 200 以外を返した task は 5 回まで試され、その後消える。段階は queued のまま残り、**次の掃除（5 分以内）がそのまま拾い直す**。**Cloud Tasks は消した task の名前を最大 24 時間使わせない**ので、掃除は積む前に段階の世代を 1 つ進め、前の task とは別の名前（`<run>-<段階>-<世代>`）で積む（`requeueAttempt`）。同じ名前で積み直すと、消えた task と積まれたままの task を `ALREADY_EXISTS` で区別できず、その段階が 24 時間止まってしまうため。まだ積まれている task と重なったときは同じ段階の task が 2 つになるが、先に届いた方だけが claim でき、後の方は何もせず終わる（二重には実行されない）。
 - **Cloud Run のログ**（短い code だけ。トークン・本文・クレームの値は出さない）:
   - `editor-web: worker request refused`: 検証に通らなかった（`code` は `missing_token`・`bad_audience`・`bad_email`・`expired`・`bad_signature`・`jwks_unavailable` など）。Scheduler・Cloud Tasks からの要求でこれが出るなら、`EDITOR_STEPS_WORKER_URL` と `--oidc-token-audience`、`TASKS_SA` の食い違いを疑う。
   - `editor-web: request failed`（500）: `code` は `tasks_http_<status>`（Cloud Tasks の拒否。403 なら実行 ID の権限）・`tasks_token_*`（メタデータサーバー）・DB の code。Cloud Tasks が同じ task を再試行する。

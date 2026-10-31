@@ -9,6 +9,7 @@ import {
   listRun,
   readStepInput,
   refreshStale,
+  requeueAttempt,
   sweepExpiredLeases,
   type AttemptRef,
   type ClaimResult,
@@ -56,15 +57,21 @@ export function pgStepRunStore(db: StepRunsDb): StepRunStore {
   };
 }
 
-/** 定期の掃除（worker の sweep の route）が使う操作。期限切れの lease を queued に戻し、queued の一覧を読む。 */
+/**
+ * 定期の掃除（worker の sweep の route）が使う操作。期限切れの lease を queued に戻し、queued の一覧を読み、
+ * 積み直す前に世代を進める。
+ */
 export type StepSweepStore = {
   sweepExpiredLeases(options?: { limit?: number }): Promise<AttemptRef[]>;
   listQueuedAttempts(options?: { limit?: number; after?: Pick<AttemptRef, "runId" | "stepIndex"> }): Promise<AttemptRef[]>;
+  /** 積み直す前に世代を 1 つ進める（新しい世代。queued でなくなっていれば null）。 */
+  requeueAttempt(ref: AttemptRef): Promise<number | null>;
 };
 
 export function pgStepSweepStore(db: StepRunsDb): StepSweepStore {
   return {
     sweepExpiredLeases: (options) => sweepExpiredLeases(db, options),
     listQueuedAttempts: (options) => listQueuedAttempts(db, options),
+    requeueAttempt: (ref) => requeueAttempt(db, ref),
   };
 }

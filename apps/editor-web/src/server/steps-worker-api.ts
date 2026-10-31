@@ -110,9 +110,15 @@ async function listAllQueued(steps: StepSweepStore): Promise<AttemptRef[]> {
 
 /**
  * POST /api/internal/steps/sweep — Cloud Scheduler が 5 分おきに呼ぶ掃除。本文は読まない。
- * (a) lease の切れた実行中の段階を queued に戻し（sweepExpiredLeases）、(b) 進行中の run の queued の段階を古い順に続きから読み（1 回の掃除で SWEEP_LIMIT × SWEEP_MAX_PAGES まで）、同じ task の名前で積み直す。
- * 名前で重複が除かれるので、まだ積まれていれば ALREADY_EXISTS（数えない）、積み込みに失敗して消えていれば新しく積まれる。
- * 応答は新しく積んだ数。積み込みに失敗したものがあれば、残りを積んだうえで 500（次の回でまた拾う）。
+ * (a) lease の切れた実行中の段階を queued に戻し（sweepExpiredLeases）、その世代で積み直す。claim のときに世代が進んでいるので、
+ *     落ちた task の名前（claim の前の世代）とは別の名前になる。
+ * (b) 進行中の run の queued の段階を古い順に続きから読み（1 回の掃除で SWEEP_LIMIT × SWEEP_MAX_PAGES まで）、
+ *     **積む前に世代を 1 つ進めて**（requeueAttempt）積み直す。一度も claim されていない段階は世代が動いていないので、
+ *     そのまま積むと最初に積んだ task と同じ名前になる。**Cloud Tasks は消した task の名前を最大 24 時間使わせない**ため、
+ *     再試行を使い切って task が消えた段階は ALREADY_EXISTS（＝積み済み）と読まれ、その間だまって止まってしまう。
+ *     世代を進められなかったもの（その間に claim された・取り消された）は積まない。
+ * 応答は新しく積んだ数。積み込みに失敗したものがあれば、残りを積んだうえで 500（次の回でまた拾う。世代は進んだままなので、
+ * 次も新しい名前で積める）。
  */
 export function sweepStepTasks(request: Request, deps: StepsWorkerDeps): Promise<Response> {
   return guarded(SWEEP_ROUTE, async () => {
@@ -123,20 +129,28 @@ export function sweepStepTasks(request: Request, deps: StepsWorkerDeps): Promise
     const queue = deps.queue(checked.config);
     const expired = await steps.sweepExpiredLeases({ limit: SWEEP_LIMIT });
     const queued = await listAllQueued(steps);
-    // (a) で戻したものは (b) にも出る。名前（世代を含む）で 1 つにする
-    const targets = new Map<string, AttemptRef>();
-    for (const ref of [...expired, ...queued]) targets.set(taskName(ref.runId, ref.stepIndex, ref.generation), ref);
     let requeued = 0;
     let failed = 0;
     let failure: string | undefined;
-    for (const [name, ref] of targets) {
+    const enqueue = async (ref: AttemptRef): Promise<void> => {
       try {
-        const result = await queue.enqueue({ name, runId: ref.runId, stepIndex: ref.stepIndex });
+        const result = await queue.enqueue({ name: taskName(ref.runId, ref.stepIndex, ref.generation), runId: ref.runId, stepIndex: ref.stepIndex });
         if (!result.deduplicated) requeued += 1;
       } catch (error) {
         failed += 1;
         failure ??= typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : "unknown";
       }
+    };
+    // (a) 名前（世代を含む）で 1 つにする
+    const fromLeases = new Map<string, AttemptRef>();
+    for (const ref of expired) fromLeases.set(taskName(ref.runId, ref.stepIndex, ref.generation), ref);
+    for (const ref of fromLeases.values()) await enqueue(ref);
+    // (b) (a) で戻したものは listQueuedAttempts にも出る（同じ世代）。そちらで積んだものは飛ばす
+    for (const ref of queued) {
+      if (fromLeases.has(taskName(ref.runId, ref.stepIndex, ref.generation))) continue;
+      const generation = await steps.requeueAttempt(ref);
+      if (generation === null) continue;
+      await enqueue({ ...ref, generation });
     }
     if (failed > 0) {
       console.error("editor-web: sweep could not requeue every step", { route: SWEEP_ROUTE, requeued, failed, code: failure });
