@@ -108,8 +108,8 @@ function transactionOf(client: Queryable, isOpen: () => boolean): ConnectionTx {
     deleteRedirect: (from) => deleteRedirect(db(), { handle: from.handle, slug: from.slug }),
 
     connectionLive: (actorId, handle) => connectionLive(db(), actorId, handle),
-    getConnection: async (connectionId) => {
-      const row = await getConnection(db(), connectionId);
+    getConnection: async (connectionId, options) => {
+      const row = await getConnection(db(), connectionId, options);
       return row ? toConnectionRecord(row) : null;
     },
     getConnectionByHandle: async (handle) => {

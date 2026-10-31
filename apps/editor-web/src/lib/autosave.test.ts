@@ -404,6 +404,100 @@ describe("createAutosave", () => {
     expect(conflict.saves).toHaveLength(1);
   });
 
+  describe("settle", () => {
+    it("sends what is pending at once and resolves saved once it is on the server", async () => {
+      const { autosave, saves } = setup();
+      autosave.change({ title: "a" });
+      let state: SaveState | null = null;
+      void autosave.settle().then((value) => (state = value));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(saves).toEqual([{ title: "a" }]);
+      expect(state).toBe("saved");
+      expect(autosave.hasPending()).toBe(false);
+      // 何も無ければ送らずにすぐ
+      await expect(autosave.settle()).resolves.toBe("saved");
+      expect(saves).toHaveLength(1);
+    });
+
+    it("waits for the save in flight and then sends what was typed during it, before resolving", async () => {
+      let release: () => void = () => undefined;
+      const saves: Patch[] = [];
+      const autosave = createAutosave<Patch>({
+        save: async (patch) => {
+          saves.push(patch);
+          await new Promise<void>((resolve) => (release = resolve));
+        },
+        isComposing: () => false,
+        onState: () => undefined,
+      });
+      autosave.change({ title: "a" });
+      await vi.advanceTimersByTimeAsync(1000);
+      autosave.change({ title: "ab" });
+      let state: SaveState | null = null;
+      void autosave.settle().then((value) => (state = value));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(saves).toEqual([{ title: "a" }]);
+      release();
+      // 1 秒の時計を待たずに続きを送る
+      await vi.advanceTimersByTimeAsync(0);
+      expect(saves).toEqual([{ title: "a" }, { title: "ab" }]);
+      expect(state).toBeNull();
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state).toBe("saved");
+    });
+
+    it("waits for the composition to end before sending", async () => {
+      let composing = true;
+      const { autosave, saves } = setup({ composing: () => composing });
+      autosave.change({ title: "変換中" });
+      let state: SaveState | null = null;
+      void autosave.settle().then((value) => (state = value));
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(saves).toEqual([]);
+      expect(state).toBeNull();
+      composing = false;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(saves).toEqual([{ title: "変換中" }]);
+      expect(state).toBe("saved");
+    });
+
+    it("resolves with the failure when its own attempt fails, keeping the change pending", async () => {
+      const { autosave, setFail } = setup();
+      setFail(new Offline("Failed to fetch"));
+      autosave.change({ title: "a" });
+      await expect(autosave.settle()).resolves.toBe("offline");
+      expect(autosave.hasPending()).toBe(true);
+      setFail(new SignedOut("401"));
+      await expect(autosave.settle()).resolves.toBe("signedOut");
+      // 戻れば保存して saved
+      setFail(false);
+      await expect(autosave.settle()).resolves.toBe("saved");
+    });
+
+    it("resolves stopped at once when autosave is stopped (conflict), sending nothing", async () => {
+      const { autosave, saves, setFail } = setup();
+      setFail(new Conflict("409"));
+      autosave.change({ title: "a" });
+      await expect(autosave.settle()).resolves.toBe("stopped");
+      autosave.change({ title: "ab" });
+      await expect(autosave.settle()).resolves.toBe("stopped");
+      expect(saves).toHaveLength(1);
+    });
+
+    it("lets a waiting settle go when the editor is closed", async () => {
+      const autosave = createAutosave<Patch>({ save: () => new Promise<void>(() => undefined), isComposing: () => false, onState: () => undefined });
+      autosave.change({ title: "a" });
+      let done = false;
+      void autosave.settle().then(() => (done = true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(done).toBe(false);
+      autosave.dispose();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(done).toBe(true);
+    });
+  });
+
   it("stops after dispose", async () => {
     const { autosave, saves, onlineListeners } = setup();
     autosave.change({ title: "a" });

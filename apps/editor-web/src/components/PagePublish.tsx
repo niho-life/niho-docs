@@ -165,6 +165,8 @@ export function usePagePublish(input: {
     events.current = input;
   });
   const seq = useRef(0);
+  // ページを替えるたびに進める。保存を待っているあいだにページを替えたら、前のページの読み込みを始めない
+  const pageEpoch = useRef(0);
   const selectionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingFix = useRef<PublishFixField | null>(null);
@@ -209,6 +211,7 @@ export function usePagePublish(input: {
     void load(pageId, null);
     return () => {
       seq.current += 1;
+      pageEpoch.current += 1;
       clearTimers();
     };
   }, [pageId, load]);
@@ -217,10 +220,13 @@ export function usePagePublish(input: {
     if (pageId === null) return;
     clearTimers();
     patch(pageId, { view: { kind: "publish" }, error: null, loading: true });
+    const epoch = pageEpoch.current;
     // 書いた直後でも、保存し終えてから読む（「更新あり」と条件を最後の入力で決める）
     void events.current
       .saveFirst()
       .then((saved) => {
+        // 保存を待つあいだに別のページへ移った: 前のページの読み込みを始めない（始めると seq が進み、移った先の応答が捨てられる）
+        if (epoch !== pageEpoch.current) return null;
         if (!saved) patch(pageId, { error: PUBLISH_MESSAGES.unsaved });
         return load(pageId, null);
       })
@@ -283,7 +289,10 @@ export function usePagePublish(input: {
     const same = sheet?.publication?.handle === handle ? sheet.publication : null;
     // 本人のサイトは限定公開を持たない（範囲の欄も出ない）
     const range: PublishRange = dest === "site" ? "live" : (same?.range ?? selection?.range ?? "live");
-    change({ handle, range, extras: same?.extras ?? selection?.extras ?? NO_EXTRAS, slug: null });
+    // あわせて載せる先（アプリ・ニュース・体験ページ）は発信先ごと。別の発信先へは持ち越さない（持ち越すと、その発信先に無い
+    // 項目が入ったままになり、チェックも外せず公開できない）。同じ発信先を選び直したときだけ、選んでいたものを残す
+    const extras = same?.extras ?? (selection?.handle === handle ? selection.extras : NO_EXTRAS);
+    change({ handle, range, extras, slug: null });
   };
 
   const close = () => {

@@ -5,7 +5,7 @@ Issue #39（公開のシート）と #41（発信先の設定）の「実処理�
 ## 置き場所と境界
 
 - `packages/editor-publish`（`@niho/editor-publish`）：純粋な TypeScript。DB・HTTP・時計・乱数・資産の置き場は **ポート（interface）** として受け取る。`@niho/editor-publish-contract` にだけ依存する。
-- Postgres の実装：表は `editor-store` の migration 0008、SQL は `packages/editor-store/src/publications.ts`、ポートへの adapter は `apps/editor-web/src/publish/pg-store.ts`（`pgPublishStore` は `PublishService` と `ConnectionService` の両方の store）。受入の流れと巻き戻しを、メモリの実装（`test-support/`）と実 PostgreSQL（`pg-store.pg.test.ts`）の両方で確かめる。
+- Postgres の実装：表は `editor-store` の migration 0009、SQL は `packages/editor-store/src/publications.ts`、ポートへの adapter は `apps/editor-web/src/publish/pg-store.ts`（`pgPublishStore` は `PublishService` と `ConnectionService` の両方の store）。受入の流れと巻き戻しを、メモリの実装（`test-support/`）と実 PostgreSQL（`pg-store.pg.test.ts`）の両方で確かめる。
 - 行ロック：同じページへの公開はページの行で、解除と公開のすれ違いは接続の行で直列にする（`pg-store.ts` の各メソッドのコメント）。
 - 鍵の生成・ハッシュ・照合の**コード**は公開してよい。守るのはコードの秘匿ではなく、256 bit の乱数と、ハッシュしか保存しないこと、失効を次の request から効かせること（publication-gates.md の方針）。
 

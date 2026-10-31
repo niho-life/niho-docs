@@ -11,7 +11,7 @@ LOCK TABLE publications IN ACCESS EXCLUSIVE MODE;
 DO $migration$
 BEGIN
   IF EXISTS (SELECT 1 FROM publications) THEN
-    RAISE EXCEPTION 'editor-store 0008: publications has rows; refusing to recreate the table';
+    RAISE EXCEPTION 'editor-store 0009: publications has rows; refusing to recreate the table';
   END IF;
 END
 $migration$;

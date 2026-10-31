@@ -249,3 +249,50 @@ describe("production start without the entry (defence in depth)", () => {
     assert.match(result.output, /refusing to start/);
   });
 });
+
+describe("production start with the asset storage settings (#36)", () => {
+  function storageEnv(port, storage, bucket) {
+    const env = childEnv(port, "niho");
+    delete env.EDITOR_STORAGE;
+    delete env.EDITOR_ASSETS_BUCKET;
+    if (storage !== undefined) env.EDITOR_STORAGE = storage;
+    if (bucket !== undefined) env.EDITOR_ASSETS_BUCKET = bucket;
+    return env;
+  }
+
+  // 保存先の検査は src/startup-check.ts（instrumentation）で行う。入口（server-entry.mjs）は認証だけを見るので、port を開く前に止まるとは限らない
+  for (const [label, storage, bucket, message] of [
+    ["EDITOR_STORAGE=fake", "fake", undefined, /refusing to start: EDITOR_STORAGE=fake is not allowed when NODE_ENV=production/],
+    ["EDITOR_STORAGE=gcs without a bucket", "gcs", undefined, /refusing to start: EDITOR_ASSETS_BUCKET is required/],
+    ["EDITOR_STORAGE=gcs with an invalid bucket", "gcs", "Not_A_Bucket", /refusing to start: EDITOR_ASSETS_BUCKET is not a valid bucket name/],
+    ["an unknown EDITOR_STORAGE", "memory", undefined, /refusing to start: EDITOR_STORAGE must be one of/],
+  ]) {
+    it(`refuses to start with ${label}, without printing the value`, async () => {
+      const port = await freePort();
+      const result = await runUntilExit(["scripts/server-entry.mjs", standaloneServer], storageEnv(port, storage, bucket), port);
+      assert.notEqual(result.code, 0, result.output);
+      assert.equal(result.signal, null, "it must exit by itself, not by the test timeout");
+      assert.match(result.output, message);
+      assert.doesNotMatch(result.output, /Not_A_Bucket/);
+    });
+  }
+
+  for (const [label, storage] of [["EDITOR_STORAGE unset", undefined], ["EDITOR_STORAGE=off", "off"]]) {
+    it(`starts with ${label}, and the dev fake storage route is 404`, async () => {
+      const port = await freePort();
+      const child = spawn(process.execPath, ["scripts/server-entry.mjs", standaloneServer], { cwd: appDir, env: storageEnv(port, storage), stdio: "ignore" });
+      try {
+        const response = await waitForHttp(port);
+        assert.equal(response.status, 401);
+        const fake = await fetch(`http://127.0.0.1:${port}/api/dev/fake-storage/${"A".repeat(43)}`, { method: "PUT", body: "x" });
+        assert.equal(fake.status, 404);
+        assert.equal(await fake.text(), '{"error":"not_found"}');
+        const limits = await fetch(`http://127.0.0.1:${port}/api/recordings/audio/limits`);
+        assert.equal(limits.status, 401);
+        assert.equal(limits.headers.get("x-robots-tag"), "noindex, nofollow");
+      } finally {
+        child.kill("SIGTERM");
+      }
+    });
+  }
+});

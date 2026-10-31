@@ -124,12 +124,17 @@ export function pgPublicApiSource(db: Database, options: PgPublicApiOptions): Pu
     },
 
     async listPublished({ handle, includeUnlisted, after, limit }) {
-      const chunk = await listLivePublished(db, handle, {
-        includeUnlisted,
-        limit,
-        after: after ? { updatedAt: microseconds(after.updatedAt), pageId: after.id } : null,
-      });
-      return chunk.items.map((item): PublishedListRow => ({
+      const items: Awaited<ReturnType<typeof listLivePublished>>["items"] = [];
+      let cursor = after ? { updatedAt: microseconds(after.updatedAt), pageId: after.id } : null;
+      // store は 1 回に返す件数に上限があり、続きは `next` で返す。呼び出し側は「limit 件より多く返れば続きがある」で次のページを決める
+      // （最大の件数を頼むと limit + 1 件になる）ので、上限で切れたときは続きを読んで、先読みの行まで返す
+      while (items.length < limit) {
+        const chunk = await listLivePublished(db, handle, { includeUnlisted, limit: limit - items.length, after: cursor });
+        items.push(...chunk.items);
+        if (chunk.next === null) break;
+        cursor = chunk.next;
+      }
+      return items.map((item): PublishedListRow => ({
         range: item.publication.range,
         snapshot: item.listing as PublishedListRow["snapshot"],
       }));

@@ -527,6 +527,42 @@ describe.skipIf(databaseUrl === undefined)("the publish ports on PostgreSQL", ()
       expect(await services().publisher.publish(input(loser, NIHO, SETTINGS.niho, { slug }))).toEqual({ ok: false, reason: "slug_taken", suggestion: `${slug}-2` });
     });
 
+    it("two key rotations of one connection at once are serialized: the second revokes the first's new key, one key stays active", async () => {
+      const handle = `rotate-race-${randomUUID().slice(0, 8)}`;
+      const created = await services().connections.createConnection({ actorId: ACTOR, handle, mode: "api", siteUrl: "https://rotate-race.example.net" });
+      if (!created.ok) throw new Error(created.reason);
+      const connectionId = created.connection.id;
+      // 鍵の一覧を読んだあとで、もう一方の transaction も読み終わるまで待たせる（行を押さえていなければ、同じ一覧を読んで両方が通る）
+      const wait = barrier(2);
+      const waiting: ConnectionStore = {
+        transaction: (work) =>
+          store.transaction((tx) =>
+            work({
+              ...tx,
+              listKeys: async (id: string) => {
+                const keys = await tx.listKeys(id);
+                await wait();
+                return keys;
+              },
+            }),
+          ),
+      };
+      const results = await Promise.all([
+        services(waiting).connections.rotateKey({ actorId: ACTOR, connectionId }),
+        services(waiting).connections.rotateKey({ actorId: ACTOR, connectionId }),
+      ]);
+      const rotated = results.flatMap((result) => (result.ok ? [result] : []));
+      expect(rotated).toHaveLength(2);
+      // 先の 1 回が元の鍵を、あとの 1 回が先の 1 回の新しい鍵を失効させる
+      expect(rotated.map((result) => result.revoked)).toEqual([1, 1]);
+      const view = await services().connections.getConnectionView({ actorId: ACTOR, connectionId });
+      expect(view.ok && view.connection.keys.filter((key) => key.active)).toHaveLength(1);
+      const { connections } = services();
+      const authenticated = await Promise.all(rotated.map((result) => connections.authenticateKey(result.key.plaintext)));
+      expect(authenticated.filter((found) => found !== null)).toEqual([{ connectionId, handle }]);
+      expect(await connections.authenticateKey(created.key.plaintext)).toBeNull();
+    });
+
     it("two publishes of the same page at once are serialized: both succeed with consecutive versions", async () => {
       const { pageId, slug } = await readyPage();
       const results = await Promise.all([

@@ -1,6 +1,8 @@
 import "server-only";
 import { connectionSource } from "@niho/editor-publish";
 import {
+  audioInfo,
+  completeAudioUpload,
   createRecordingPage,
   duplicatePage,
   enableShare,
@@ -8,6 +10,7 @@ import {
   getShare,
   rotateShare,
   searchPages,
+  startAudioRecording,
   stopShare,
   updateRecording,
 } from "@niho/editor-store";
@@ -15,6 +18,8 @@ import { getAuthProvider } from "../auth";
 import { publishConfig } from "../publish/config";
 import { pgDraftFingerprints, pgPublishStore } from "../publish/pg-store";
 import { assetUrlsOf, faceDeclarations, roleReaderOf, sessionAuthors, wirePublishPorts } from "../publish/ports";
+import { getStorage } from "../storage/runtime";
+import type { AudioApiDeps } from "./audio-api";
 import { getPool, getStore } from "./db";
 import { faceCredentialsFromEnv } from "../public-api/source";
 import type { PublicApiRouteDeps } from "../public-api/http";
@@ -119,4 +124,20 @@ export const publishDeps: PublishApiDeps = {
     const pool = getPool();
     return pool ? wirePublishPorts(pgPublishStore(pool), session, { drafts: pgDraftFingerprints(pool) }) : null;
   },
+};
+
+/** 録音の音声のアップロード（#36 段 2a）の実行時の依存（DB・保存先は要求のたびに遅延して決める。Pool は getStore と共有）。 */
+export const audioDeps: AudioApiDeps = {
+  auth: () => getAuthProvider(),
+  store: () => {
+    const pool = getPool();
+    if (!pool) return null;
+    return {
+      startAudioRecording: (owner, input) => startAudioRecording(pool, owner, input),
+      completeAudioUpload: (owner, pageId, stored) => completeAudioUpload(pool, owner, pageId, stored),
+      audioInfo: (owner, pageId) => audioInfo(pool, owner, pageId),
+      getRecording: (owner, pageId) => getRecording(pool, owner, pageId),
+    };
+  },
+  storage: () => getStorage(process.env),
 };
