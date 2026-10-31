@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import type { Pool as PgPool } from "pg";
-import { getAiUsage, monthKeyJst, recordAiUsage, type AiUsageDelta } from "../src/ai-usage.ts";
+import { getAiUsage, getAiUsageBySource, monthKeyJst, recordAiUsage, type AiUsageDelta } from "../src/ai-usage.ts";
 import { applyMigrations, readMigrations } from "../src/migrate.ts";
 import type { Queryable } from "../src/types.ts";
 
@@ -87,22 +87,24 @@ describe("PostgreSQL AI usage", { skip: databaseUrl === undefined }, () => {
         ["output_tokens", "bigint"],
         ["cost_micro_usd", "bigint"],
         ["updated_at", "timestamp with time zone"],
+        // 0025: 経路ごとに 1 行（server＝サーバーの API、device＝この Mac の CLI）
+        ["source", "text"],
       ],
     );
     assert.equal((await pool.query("SELECT 1 FROM ai_usage")).rows.length, 0);
   });
 
   it("answers zeros before any use and adds up per owner and month", async () => {
-    assert.deepEqual(await getAiUsage(pool, OWNER, "2026-10"), { owner: OWNER, month: "2026-10", requests: 0, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 });
-    assert.deepEqual(await recordAiUsage(pool, OWNER, "2026-10", one), { owner: OWNER, month: "2026-10", ...one });
+    assert.deepEqual(await getAiUsage(pool, OWNER, "2026-10"), { owner: OWNER, month: "2026-10", source: "server", requests: 0, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 });
+    assert.deepEqual(await recordAiUsage(pool, OWNER, "2026-10", one), { owner: OWNER, month: "2026-10", source: "server", ...one });
     const twice = await recordAiUsage(pool, OWNER, "2026-10", { requests: 2, inputTokens: 1, outputTokens: 2, costMicroUsd: 0 });
-    assert.deepEqual(twice, { owner: OWNER, month: "2026-10", requests: 3, inputTokens: 121, outputTokens: 32, costMicroUsd: 1_500 });
+    assert.deepEqual(twice, { owner: OWNER, month: "2026-10", source: "server", requests: 3, inputTokens: 121, outputTokens: 32, costMicroUsd: 1_500 });
     assert.deepEqual(await getAiUsage(pool, OWNER, "2026-10"), twice);
 
     // 別の月・別の owner は別の行
     await recordAiUsage(pool, OWNER, "2026-11", one);
     await recordAiUsage(pool, OTHER, "2026-10", { requests: 1, inputTokens: 5, outputTokens: 5, costMicroUsd: 7 });
-    assert.deepEqual(await getAiUsage(pool, OWNER, "2026-11"), { owner: OWNER, month: "2026-11", ...one });
+    assert.deepEqual(await getAiUsage(pool, OWNER, "2026-11"), { owner: OWNER, month: "2026-11", source: "server", ...one });
     assert.equal((await getAiUsage(pool, OTHER, "2026-10")).costMicroUsd, 7);
     assert.equal((await getAiUsage(pool, OWNER, "2026-10")).costMicroUsd, 1_500);
     assert.equal((await getAiUsage(pool, OTHER, "2026-11")).requests, 0);
@@ -114,12 +116,28 @@ describe("PostgreSQL AI usage", { skip: databaseUrl === undefined }, () => {
     assert.deepEqual(await getAiUsage(pool, owner, "2026-12"), {
       owner,
       month: "2026-12",
+      source: "server",
       requests: 20,
       inputTokens: 190,
       outputTokens: 40,
       costMicroUsd: 20_000,
     });
     assert.equal((await pool.query("SELECT 1 FROM ai_usage WHERE owner = $1", [owner])).rows.length, 1);
+  });
+
+  it("keeps the two routes apart: the CLI is recorded but never mixed into the server total", async () => {
+    const owner = "synthetic-owner-routes";
+    await recordAiUsage(pool, owner, "2026-12", { requests: 1, inputTokens: 10, outputTokens: 2, costMicroUsd: 500 });
+    await recordAiUsage(pool, owner, "2026-12", { requests: 1, inputTokens: 90, outputTokens: 8, costMicroUsd: 0 }, "device");
+    const server = await getAiUsage(pool, owner, "2026-12");
+    const device = await getAiUsage(pool, owner, "2026-12", "device");
+    assert.deepEqual([server.costMicroUsd, server.inputTokens], [500, 10]);
+    // CLI は利用者のサブスクなので金額は 0 のまま（月の上限で止めるのは server だけ）
+    assert.deepEqual([device.costMicroUsd, device.inputTokens], [0, 90]);
+    const both = await getAiUsageBySource(pool, owner, "2026-12");
+    assert.deepEqual([both.server.costMicroUsd, both.device.inputTokens], [500, 90]);
+    assert.equal((await pool.query("SELECT 1 FROM ai_usage WHERE owner = $1", [owner])).rows.length, 2);
+    await assert.rejects(() => recordAiUsage(pool, owner, "2026-12", { requests: 1, inputTokens: 1, outputTokens: 1, costMicroUsd: 1 }, "cloud" as "device"), TypeError);
   });
 
   it("keeps large token counts and amounts beyond the integer range as exact numbers", async () => {

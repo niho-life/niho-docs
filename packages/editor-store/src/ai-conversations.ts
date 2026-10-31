@@ -36,7 +36,7 @@ export type AiConversationSummary = {
   lastText: string | null;
 };
 
-/** 1 回の依頼で直した・作ったページ（旧アプリの TurnPageChange。migration 0023）。 */
+/** 1 回の依頼で直した・作ったページ（旧アプリの TurnPageChange。migration 0025）。 */
 export type AiMessageChange = {
   pageId: string;
   title: string;
@@ -70,6 +70,10 @@ export type AiMessage = {
   result: AiMessageResult | null;
   /** 止まった理由の短い code。 */
   resultCode: string | null;
+  /** 誰が文を作ったか（`server`＝サーバーの API、`device`＝この Mac の CLI）。人の発言は null。 */
+  route: AiRoute | null;
+  /** エンジンの短い id（`anthropic:claude-sonnet-5-5`・`cli:claude-code`）。 */
+  engine: string | null;
   /** その依頼で直した・作ったページ。 */
   changes: AiMessageChange[];
   createdAt: string;
@@ -77,6 +81,22 @@ export type AiMessage = {
 
 export const AI_MESSAGE_RESULTS = ["done", "failed", "stopped"] as const;
 export type AiMessageResult = (typeof AI_MESSAGE_RESULTS)[number];
+
+/** 文を作った経路（使用量の `AiUsageSource` と同じ名前）。 */
+export const AI_ROUTES = ["server", "device"] as const;
+export type AiRoute = (typeof AI_ROUTES)[number];
+
+/** エンジンの短い id（鍵・端末の情報を入れない）。 */
+const ENGINE_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,95}$/;
+
+/** 誰が文を作ったか（会話に残す）。 */
+export type AiAuthor = { route: AiRoute; engine: string };
+
+function assertAuthor(author: AiAuthor | undefined): void {
+  if (author === undefined) return;
+  if (!(AI_ROUTES as readonly string[]).includes(author.route)) throw new TypeError("editor-store: route must be server or device");
+  if (typeof author.engine !== "string" || !ENGINE_PATTERN.test(author.engine)) throw new TypeError("editor-store: engine must be a short id");
+}
 
 export type AiConversation = { conversation: AiConversationSummary; messages: AiMessage[] };
 
@@ -87,6 +107,8 @@ export type AiTurnInput = {
   conversationId?: string | null;
   request: { text: string; preset?: string | null };
   result: { text: string; proposal: unknown };
+  /** 誰が提案を作ったか（渡さなければ記録しない）。 */
+  author?: AiAuthor;
 };
 
 export type AiTurn = { conversation: AiConversationSummary; request: AiMessage; result: AiMessage };
@@ -132,6 +154,8 @@ type MessageRow = {
   items: unknown;
   result: AiMessageResult | null;
   result_code: string | null;
+  route: AiRoute | null;
+  engine: string | null;
   created_at: Date;
 };
 
@@ -185,6 +209,8 @@ function toMessage(row: MessageRow, changes: readonly ChangeRow[] = []): AiMessa
     items: row.items ?? null,
     result: row.result,
     resultCode: row.result_code,
+    route: row.route,
+    engine: row.engine,
     changes: changes.filter((change) => change.message_id === row.id).map(toChange),
     createdAt: row.created_at.toISOString(),
   };
@@ -195,7 +221,7 @@ const SUMMARY_SELECT = `SELECT c.id, c.page_id, c.created_at, c.updated_at,
          (SELECT m.text FROM ai_messages m WHERE m.conversation_id = c.id ORDER BY m.seq DESC LIMIT 1) AS last_text
     FROM ai_conversations c`;
 
-const MESSAGE_COLUMNS = "id, seq, role, text, preset, proposal, adopted, version, adopted_at, items, result, result_code, created_at";
+const MESSAGE_COLUMNS = "id, seq, role, text, preset, proposal, adopted, version, adopted_at, items, result, result_code, route, engine, created_at";
 const MESSAGE_SELECT = `SELECT ${MESSAGE_COLUMNS} FROM ai_messages`;
 
 /** 発言に紐づく「直した・作ったページ」（題名は今の題名。消えたページの行は無い）。 */
@@ -284,6 +310,7 @@ export async function appendTurn(db: Database, owner: OwnerId, input: AiTurnInpu
   const preset = input.request.preset ?? null;
   if (preset !== null && (typeof preset !== "string" || !PRESET_PATTERN.test(preset))) throw new TypeError("editor-store: preset must be a short id");
   if (!isMessageJson(input.result.proposal)) throw new TypeError("editor-store: proposal must be a small JSON object");
+  assertAuthor(input.author);
 
   return inTransaction(db, async (client) => {
     // ページを押さえてから書く（書き終えるまで削除させない）
@@ -312,9 +339,9 @@ export async function appendTurn(db: Database, owner: OwnerId, input: AiTurnInpu
       [conversationId, seq, input.request.text, preset],
     );
     const result = await client.query<MessageRow>(
-      `INSERT INTO ai_messages (conversation_id, seq, role, text, proposal) VALUES ($1, $2, 'assistant', $3, $4::jsonb)
+      `INSERT INTO ai_messages (conversation_id, seq, role, text, proposal, route, engine) VALUES ($1, $2, 'assistant', $3, $4::jsonb, $5, $6)
        RETURNING ${MESSAGE_COLUMNS}`,
-      [conversationId, seq + 1, input.result.text, JSON.stringify(input.result.proposal)],
+      [conversationId, seq + 1, input.result.text, JSON.stringify(input.result.proposal), input.author?.route ?? null, input.author?.engine ?? null],
     );
     const summary = await client.query<ConversationRow>(
       `UPDATE ai_conversations SET updated_at = clock_timestamp() WHERE id = $1
@@ -354,6 +381,31 @@ export async function listChatWorkspace(db: Queryable, owner: OwnerId, pageId: s
   return pages.some((page) => page.open) ? pages : null;
 }
 
+/** 自動で参考に入れるページ（同じフォルダの直下。開いているページとサブページは入らない）。 */
+export type ReferencePage = { id: string; title: string; kind: string; blocks: unknown };
+
+/**
+ * 自動参考ページ（旧アプリの「同じ場所の独立文書を参考に入れる」。設計 §6）。
+ * **開いているページと同じ親（フォルダ）の直下にある、ほかのページ**だけを返す。サブページ（孫）は入れない
+ * （手順の成果物なので、参考に混ぜると AI の入力が二重になる）。親が無い（一番上の）ページは空。
+ *
+ * **枚数の上限はここでは持たない。** 1 フォルダに置けるページの数はフォルダの側が守る（T1 の実装）ので、
+ * ここはその直下を素直に全部返す。
+ */
+export async function listReferencePages(db: Queryable, owner: OwnerId, pageId: string): Promise<ReferencePage[] | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId)) return null;
+  const result = await db.query<{ id: string; title: string; kind: string; blocks: unknown }>(
+    `SELECT s.id, s.title, s.kind, s.blocks
+       FROM pages p
+       JOIN pages s ON s.owner = p.owner AND s.parent = p.parent AND s.deleted_at IS NULL AND s.id <> p.id
+      WHERE p.owner = $1 AND p.id = $2 AND p.deleted_at IS NULL AND p.parent IS NOT NULL
+      ORDER BY s.created_at, s.id`,
+    [owner, pageId],
+  );
+  return result.rows.map((row) => ({ id: row.id, title: row.title, kind: row.kind, blocks: row.blocks }));
+}
+
 /** 1 回の依頼で直した・作ったページ（記録するときの入力）。 */
 export type ChatChangeInput = {
   pageId: string;
@@ -379,6 +431,8 @@ export type ChatTurnInput = {
   result: AiMessageResult;
   resultCode?: string | null;
   changes?: readonly ChatChangeInput[];
+  /** 誰が文を作ったか（サーバーの API か、この Mac の CLI か）。 */
+  author?: AiAuthor;
 };
 
 /**
@@ -395,6 +449,7 @@ export async function appendChatTurn(db: Database, owner: OwnerId, input: ChatTu
   const code = input.resultCode ?? null;
   if (code !== null && !/^[a-z0-9_]{1,64}$/.test(code)) throw new TypeError("editor-store: result code must be a short code");
   if (!Array.isArray(input.items) || !isMessageJson({ items: input.items })) throw new TypeError("editor-store: items must be a small JSON array");
+  assertAuthor(input.author);
   const changes = input.changes ?? [];
   for (const change of changes) {
     if (!isPageId(change.pageId)) throw new TypeError("editor-store: change page must be a page id");
@@ -428,9 +483,18 @@ export async function appendChatTurn(db: Database, owner: OwnerId, input: ChatTu
       [conversationId, seq, input.input],
     );
     const answer = await client.query<MessageRow>(
-      `INSERT INTO ai_messages (conversation_id, seq, role, text, items, result, result_code)
-       VALUES ($1, $2, 'assistant', $3, $4::jsonb, $5, $6) RETURNING ${MESSAGE_COLUMNS}`,
-      [conversationId, seq + 1, reply.length > 0 ? reply : "（返答はありません）", JSON.stringify(input.items), input.result, code],
+      `INSERT INTO ai_messages (conversation_id, seq, role, text, items, result, result_code, route, engine)
+       VALUES ($1, $2, 'assistant', $3, $4::jsonb, $5, $6, $7, $8) RETURNING ${MESSAGE_COLUMNS}`,
+      [
+        conversationId,
+        seq + 1,
+        reply.length > 0 ? reply : "（返答はありません）",
+        JSON.stringify(input.items),
+        input.result,
+        code,
+        input.author?.route ?? null,
+        input.author?.engine ?? null,
+      ],
     );
     const messageId = answer.rows[0]!.id;
     for (const change of changes) {

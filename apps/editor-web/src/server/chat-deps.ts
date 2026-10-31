@@ -6,6 +6,7 @@ import {
   getConversation,
   getEditorSettings,
   listChatWorkspace,
+  listReferencePages,
   markChangesUndone,
   recordAiUsage,
 } from "@niho/editor-store";
@@ -37,6 +38,7 @@ export const chatDeps: ChatApiDeps = {
     if (!pool) return null;
     return {
       workspace: (owner, pageId) => listChatWorkspace(pool, owner, pageId),
+      references: (owner, pageId) => listReferencePages(pool, owner, pageId),
       history: (owner, pageId, conversationId) => getConversation(pool, owner, pageId, conversationId),
       append: (owner, input) => appendChatTurn(pool, owner, input),
       changes: (owner, pageId, messageId) => getChatChanges(pool, owner, pageId, messageId),
@@ -47,8 +49,8 @@ export const chatDeps: ChatApiDeps = {
     const pool = getPool();
     return pool
       ? {
-          get: (owner, month) => getAiUsage(pool, owner, month),
-          record: (owner, month, delta) => recordAiUsage(pool, owner, month, delta),
+          get: (owner, month, source) => getAiUsage(pool, owner, month, source),
+          record: (owner, month, delta, source) => recordAiUsage(pool, owner, month, delta, source),
         }
       : null;
   },

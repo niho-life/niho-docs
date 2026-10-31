@@ -1,5 +1,16 @@
 import "server-only";
-import { appendTurn, getAiUsage, getAssistantMessage, getConversation, getEditorSettings, listConversations, recordAdoption, recordAiUsage } from "@niho/editor-store";
+import {
+  appendTurn,
+  getAiUsage,
+  getAiUsageBySource,
+  getAssistantMessage,
+  getConversation,
+  getEditorSettings,
+  listConversations,
+  listReferencePages,
+  recordAdoption,
+  recordAiUsage,
+} from "@niho/editor-store";
 import { monthlyLimitUsd, resolveAiBackend } from "../ai/config";
 import { getAuthProvider } from "../auth";
 import type { AiApiDeps } from "./ai-api";
@@ -16,10 +27,15 @@ export const aiDeps: AiApiDeps = {
     const pool = getPool();
     return pool
       ? {
-          get: (owner, month) => getAiUsage(pool, owner, month),
-          record: (owner, month, delta) => recordAiUsage(pool, owner, month, delta),
+          get: (owner, month, source) => getAiUsage(pool, owner, month, source),
+          record: (owner, month, delta, source) => recordAiUsage(pool, owner, month, delta, source),
+          bySource: (owner, month) => getAiUsageBySource(pool, owner, month),
         }
       : null;
+  },
+  references: () => {
+    const pool = getPool();
+    return pool ? (owner, pageId) => listReferencePages(pool, owner, pageId) : null;
   },
   conversations: () => {
     const pool = getPool();

@@ -10,14 +10,17 @@ import {
   type AiTurn,
   type AiTurnInput,
   type AiUsageDelta,
+  type AiUsageSource,
   type AiUsageTotals,
   type EditorSettings,
   type EditorStore,
   type OwnerId,
+  type ReferencePage,
 } from "@niho/editor-store";
 import { AnthropicError } from "../ai/anthropic";
 import type { AiBackend } from "../ai/config";
 import { applyAdoptions, buildProposal, buildRequest, type Adoptions, type AiRun, type AiScope, type Proposal } from "../ai/engine";
+import { referencesFrom } from "../ai/references";
 import type { AiInsertKind, AiUsageReport } from "../ai/model";
 import { intentLabel, parseIntent, type AiIntent } from "../ai/presets";
 import type { AuthProvider } from "../auth/types";
@@ -38,8 +41,11 @@ export type AiPagesStore = Pick<EditorStore, "getPage" | "savePage" | "createVer
 
 /** 使用量の読み書き（packages/editor-store の getAiUsage・recordAiUsage に Pool を渡したもの）。 */
 export type AiUsageStore = {
-  get: (owner: OwnerId, month: string) => Promise<AiUsageTotals>;
-  record: (owner: OwnerId, month: string, delta: AiUsageDelta) => Promise<AiUsageTotals>;
+  /** 経路ごとの合計（既定はサーバーの API＝月の上限が効く方）。 */
+  get: (owner: OwnerId, month: string, source?: AiUsageSource) => Promise<AiUsageTotals>;
+  record: (owner: OwnerId, month: string, delta: AiUsageDelta, source?: AiUsageSource) => Promise<AiUsageTotals>;
+  /** 経路ごとに分けた合計（設定の画面に出す）。 */
+  bySource?: (owner: OwnerId, month: string) => Promise<Record<AiUsageSource, AiUsageTotals>>;
 };
 
 /** 会話の読み書き（packages/editor-store の ai-conversations.ts に Pool を渡したもの）。 */
@@ -59,6 +65,8 @@ export type AiApiDeps = {
   usage: () => AiUsageStore | null;
   /** 会話（AI チャット）。DB が使えないときは null（503）。 */
   conversations: () => AiConversationStore | null;
+  /** 自動参考ページ（同じフォルダの直下のほかのページ）。渡さない・読めないときは参考なし。 */
+  references?: () => ((owner: OwnerId, pageId: string) => Promise<ReferencePage[] | null>) | null;
   /** 設定（固有名詞と提案の言語。#108）。渡さない・読めないときは既定値（語彙なし・本文の言語のまま）。 */
   settings?: () => ((owner: OwnerId) => Promise<EditorSettings>) | null;
   /** 使えるモデル。無効のときは null（503 `ai_unavailable`）。 */
@@ -246,10 +254,14 @@ export function createAiProposal(request: Request, id: string, deps: AiApiDeps):
     const conversationId = input.value.conversationId;
     if (conversationId !== null && !(await chats.get(owner, id, conversationId))) return notFoundResponse();
     const settings = (await deps.settings?.()?.(owner)) ?? DEFAULT_EDITOR_SETTINGS;
+    // 自動参考ページ（同じフォルダの直下のほかのページ。読めなければ参考なしで進む）
+    const references = referencesFrom((await deps.references?.()?.(owner, id)) ?? []);
     const plan = buildRequest(page, input.value.intent, input.value.scope, {
       glossary: settings.glossary,
       // 「書いた言語のまま」は本文の言語（buildRequest の既定）
       lang: settings.aiLang === "same" ? undefined : settings.aiLang,
+      about: settings.about,
+      references,
     });
     if (!plan.ok) return plan.error === "too_large" ? aiErrorResponse("too_large") : errorResponse("bad_request");
 
@@ -275,7 +287,7 @@ export function createAiProposal(request: Request, id: string, deps: AiApiDeps):
       }
     }
     // 失敗しても、それまでに使った分は記録する
-    const totals = delta.requests > 0 ? await usage.record(owner, month, delta) : before;
+    const totals = delta.requests > 0 ? await usage.record(owner, month, delta, backend.route) : before;
     if (failed) return aiErrorResponse("ai_failed");
     const built = buildProposal(page.blocks, runs, input.value.intent, page.revision);
     if (!built.ok) {
@@ -289,6 +301,7 @@ export function createAiProposal(request: Request, id: string, deps: AiApiDeps):
       conversationId,
       request: { text: intentLabel(input.value.intent), ...("preset" in input.value.intent ? { preset: input.value.intent.preset } : {}) },
       result: { text: resultText(built.proposal), proposal: built.proposal },
+      author: { route: backend.route, engine: backend.engine },
     });
     if (!turn) console.error("editor-web: ai turn not recorded", { route });
     return jsonResponse(200, {
@@ -383,14 +396,25 @@ export function getAiConversation(request: Request, id: string, conversationId: 
   });
 }
 
-/** GET /api/ai/usage — 今月（Asia/Tokyo）の使用量。AI が無効でも答える（設定に出す用）。 */
+/**
+ * GET /api/ai/usage — 今月（Asia/Tokyo）の使用量。AI が無効でも答える（設定に出す用）。
+ * `usage` はサーバーの API の経路（**月の上限が効くのはこれだけ**）、`device` はこの Mac の CLI の経路
+ * （利用者のサブスクなので金額は 0 で、上限では止めない）。
+ */
 export function getAiUsageSummary(request: Request, deps: AiApiDeps): Promise<Response> {
   return guarded("GET /api/ai/usage", async () => {
     const session = await deps.auth().getSession(request);
     if (!session) return errorResponse("unauthorized");
     const usage = deps.usage();
     if (!usage) return errorResponse("unavailable");
-    const totals = await usage.get(session.userId, currentMonth(deps));
-    return jsonResponse(200, { usage: summarize(totals, deps.limitUsd()) });
+    const month = currentMonth(deps);
+    const limitUsd = deps.limitUsd();
+    const both = await usage.bySource?.(session.userId, month);
+    const server = both?.server ?? (await usage.get(session.userId, month));
+    const device = both?.device ?? null;
+    return jsonResponse(200, {
+      usage: summarize(server, limitUsd),
+      device: device ? { month: device.month, requests: device.requests, inputTokens: device.inputTokens, outputTokens: device.outputTokens } : null,
+    });
   });
 }

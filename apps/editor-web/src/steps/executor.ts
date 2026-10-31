@@ -9,6 +9,8 @@ export type StepExecutorInput = {
    * 本物の実行器（ai-executor.ts）が月の上限と使用量の記録に使う。偽物の実行器は見ない。
    */
   owner?: OwnerId;
+  /** 手順を始めた録音ページの id（自動参考ページを、そのページと同じフォルダから選ぶのに使う）。 */
+  parentPageId?: string;
   /** 録音ページの本文。 */
   parentBlocks: Block[];
   /** 前の段階のサブページの本文（段階 0 は null）。 */

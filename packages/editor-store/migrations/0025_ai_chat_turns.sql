@@ -1,6 +1,7 @@
 BEGIN;
 
--- AI チャットが直接ページを書き換える形（旧 NIHO docs の「修正の会話」と同じ動き。Issue #38）。
+-- AI チャットが直接ページを書き換える形（旧 NIHO docs の「修正の会話」と同じ動き。Issue #38）と、
+-- 旧アプリで AI の入力になっていたもの（「あなたについて」）、実行経路（サーバーの API / この Mac の CLI）。
 -- 0022 の会話に、1 回の依頼（turn）の作業の要約と結果、そのとき直した・作ったページを足す。
 --
 -- - 提案（proposal）は採用されるまでページを変えないが、チャットは依頼の中でページを書き換える。
@@ -42,5 +43,26 @@ CREATE TABLE ai_message_changes (
 
 -- ページから、そのページを変えた依頼を引く
 CREATE INDEX ai_message_changes_page_idx ON ai_message_changes (page_id, created_at DESC);
+
+-- 誰が文を作ったか（設計 §6）。route は サーバーの API（server）か、この Mac の CLI（device。利用者のサブスク）。
+-- engine は短い id（`anthropic:claude-sonnet-5-5`・`cli:claude-code`）だけで、鍵・端末の情報は持たない。
+ALTER TABLE ai_messages
+  ADD COLUMN route text CHECK (route IS NULL OR route IN ('server', 'device')),
+  ADD COLUMN engine text CHECK (engine IS NULL OR engine ~ '^[a-z0-9][a-z0-9._:-]{0,95}$');
+
+ALTER TABLE ai_messages
+  -- 人の発言は経路を持たない（作ったのは人）
+  ADD CONSTRAINT ai_messages_user_has_no_route CHECK (role <> 'user' OR (route IS NULL AND engine IS NULL));
+
+-- 使用量を経路ごとに持つ（0005 の行はすべてサーバーの API なので server になる）。
+-- **月の上限（USD）で止めるのは server だけ。** CLI は利用者のサブスクで従量が出ないので、記録はするが止めない。
+ALTER TABLE ai_usage DROP CONSTRAINT ai_usage_pkey;
+ALTER TABLE ai_usage ADD COLUMN source text NOT NULL DEFAULT 'server' CHECK (source IN ('server', 'device'));
+ALTER TABLE ai_usage ADD PRIMARY KEY (owner, month, source);
+
+-- 「あなたについて」（旧アプリの about.json）。プロンプトに入れる本人の説明と書き方の希望で、
+-- **公開のときの著者情報とは別物**（公開は publications 側が持つ）。
+ALTER TABLE editor_settings
+  ADD COLUMN about text NOT NULL DEFAULT '' CHECK (length(about) <= 2000);
 
 COMMIT;

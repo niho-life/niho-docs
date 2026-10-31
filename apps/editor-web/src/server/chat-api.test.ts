@@ -4,7 +4,7 @@ import type { AiMessage, AiMessageChange, Block, ChatTurnInput, ChatWorkspacePag
 import type { Turn } from "../ai/anthropic";
 import type { AiComposeBackend } from "../ai/config";
 import type { AuthProvider } from "../auth/types";
-import { runAiChat, undoAiChat, type ChatApiDeps, type ChatConversationStore, type ChatPagesStore, type ChatUsageStore } from "./chat-api";
+import { recordDeviceChatTurn, runAiChat, undoAiChat, type ChatApiDeps, type ChatConversationStore, type ChatPagesStore, type ChatUsageStore } from "./chat-api";
 
 const ORIGIN = "http://editor.test";
 const NOW = new Date("2026-11-01T03:00:00Z");
@@ -119,6 +119,13 @@ function memoryConversations(store: MemoryStore) {
   };
   const conversations: ChatConversationStore & { turns: typeof turns } = {
     turns,
+    async references(owner, pageId) {
+      const open = store.rows.get(pageId);
+      if (!open || open.owner !== owner || open.deleted || open.parent === null) return null;
+      return [...store.rows.values()]
+        .filter((row) => row.owner === owner && !row.deleted && row.parent === open.parent && row.id !== open.id)
+        .map((row) => ({ id: row.id, title: row.title, kind: row.kind, blocks: row.blocks }));
+    },
     async workspace(owner, pageId) {
       const open = store.rows.get(pageId);
       if (!open || open.owner !== owner || open.deleted) return null;
@@ -153,6 +160,8 @@ function memoryConversations(store: MemoryStore) {
           items: input.items,
           result: input.result,
           resultCode: input.resultCode ?? null,
+          route: input.author?.route ?? null,
+          engine: input.author?.engine ?? null,
           changes: changesOf(id),
           createdAt: NOW.toISOString(),
         },
@@ -174,16 +183,19 @@ function memoryConversations(store: MemoryStore) {
 function memoryUsage(seed = 0) {
   let costMicroUsd = seed;
   const records: number[] = [];
-  const store: ChatUsageStore & { records: number[]; total: () => number } = {
+  const sources: string[] = [];
+  const store: ChatUsageStore & { records: number[]; sources: string[]; total: () => number } = {
     records,
+    sources,
     total: () => costMicroUsd,
     async get(owner, month) {
-      return { owner, month, requests: records.length, inputTokens: 0, outputTokens: 0, costMicroUsd };
+      return { owner, month, source: "server", requests: records.length, inputTokens: 0, outputTokens: 0, costMicroUsd };
     },
-    async record(owner, month, delta) {
+    async record(owner, month, delta, source = "server") {
+      sources.push(source);
       records.push(delta.costMicroUsd);
-      costMicroUsd += delta.costMicroUsd;
-      return { owner, month, requests: records.length, inputTokens: 0, outputTokens: 0, costMicroUsd };
+      if (source === "server") costMicroUsd += delta.costMicroUsd;
+      return { owner, month, source, requests: records.length, inputTokens: 0, outputTokens: 0, costMicroUsd };
     },
   };
   return store;
@@ -202,6 +214,8 @@ function stubBackend(answers: Turn[]): AiComposeBackend & { calls: number } {
   const backend = {
     model: "claude-sonnet-5-5",
     provider: "claude" as const,
+    route: "server" as const,
+    engine: "anthropic:claude-sonnet-5-5",
     client: {
       complete: async () => {
         throw new Error("the chat uses converse");
@@ -247,6 +261,7 @@ function request(method: string, path: string, body?: unknown): Request {
 const chat = (id: string, body: unknown, d: ChatApiDeps) => runAiChat(request("POST", `/api/pages/${id}/ai/chat`, body), id, d);
 const undo = (id: string, messageId: string, d: ChatApiDeps) =>
   undoAiChat(request("POST", `/api/pages/${id}/ai/chat/${messageId}/undo`, {}), id, messageId, d);
+const deviceTurn = (id: string, body: unknown, d: ChatApiDeps) => recordDeviceChatTurn(request("POST", `/api/pages/${id}/ai/chat/turns`, body), id, d);
 
 const writeTurn = (pageId: string, markdown: string, reply = "直しました。") => [
   turn({ toolCalls: [{ id: "t1", name: "write_page", input: { page_id: pageId, markdown } }], stopReason: "tool_use" }),
@@ -536,5 +551,116 @@ describe("the chat never leaks what it is working on", () => {
     } finally {
       logged.mockRestore();
     }
+  });
+});
+
+describe("the chat reads the other pages of the folder", () => {
+  it("lets the model read them but not write them", async () => {
+    const store = memoryStore();
+    const folder = store.add("user-a", { title: "合成のフォルダ" });
+    const page = store.add("user-a", { title: "開いているページ", blocks: [p("本文")], parent: folder.id });
+    const other = store.add("user-a", { title: "同じフォルダのページ", blocks: [p("参考の本文")], parent: folder.id });
+    const ai = stubBackend([
+      turn({ toolCalls: [{ id: "t1", name: "list_pages", input: {} }], stopReason: "tool_use" }),
+      turn({ toolCalls: [{ id: "t2", name: "read_page", input: { page_id: other.id } }], stopReason: "tool_use" }),
+      turn({ toolCalls: [{ id: "t3", name: "write_page", input: { page_id: other.id, markdown: "書き換え" } }], stopReason: "tool_use" }),
+      turn({ text: "読むだけにしました。" }),
+    ]);
+    const chats = memoryConversations(store);
+    await chat(page.id, { text: "同じフォルダを見て" }, deps("user-a", store, { ai, conversations: chats }));
+    // 読めるが書けない（書き換えは断られ、版も残らない）
+    expect(store.rows.get(other.id)!.blocks).toEqual([p("参考の本文")]);
+    expect(store.versions).toEqual([]);
+    expect(chats.turns[0]!.items).toEqual([
+      { kind: "tool", tool: "list_pages", page: null, ok: true },
+      { kind: "tool", tool: "read_page", page: "同じフォルダのページ", ok: true },
+      { kind: "tool", tool: "write_page", page: "同じフォルダのページ", ok: false },
+    ]);
+  });
+});
+
+describe("POST /api/pages/{id}/ai/chat/turns (この Mac の CLI の結果)", () => {
+  const body = (pageId: string, markdown = "CLI が書いた本文") => ({
+    input: "直して",
+    reply: "直しました。",
+    engine: "cli:claude-code",
+    writes: [{ pageId, markdown }],
+  });
+
+  it("writes through the same path: a version is left, the turn is recorded as device, and the model is never called", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
+    const chats = memoryConversations(store);
+    const ai = stubBackend([]);
+    const usage = memoryUsage();
+    const response = await deviceTurn(page.id, body(page.id), deps("user-a", store, { ai, conversations: chats, usage }));
+    expect(response.status).toBe(200);
+
+    expect(ai.calls).toBe(0);
+    expect(store.rows.get(page.id)!.blocks).toEqual([p("CLI が書いた本文")]);
+    expect(store.versions).toEqual([{ pageId: page.id, version: 1, blocks: [p("もとの本文")] }]);
+    expect(chats.turns[0]).toMatchObject({ input: "直して", reply: "直しました。", result: "done", author: { route: "device", engine: "cli:claude-code" } });
+    // サブスクなので金額は数えず、device の行に回数だけ残る
+    expect(usage.sources).toEqual(["device"]);
+    expect(usage.records).toEqual([0]);
+    expect(usage.total()).toBe(0);
+  });
+
+  it("is not stopped by the month's limit (the CLI does not cost per use)", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
+    const usage = memoryUsage(10_000_000);
+    const response = await deviceTurn(page.id, body(page.id), deps("user-a", store, { usage, limitUsd: 10 }));
+    expect(response.status).toBe(200);
+    expect(store.rows.get(page.id)!.blocks).toEqual([p("CLI が書いた本文")]);
+  });
+
+  it("can be undone like any other turn", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
+    const chats = memoryConversations(store);
+    const d = deps("user-a", store, { conversations: chats });
+    const answer = (await (await deviceTurn(page.id, body(page.id), d)).json()) as { conversation: { messageId: string } };
+    await undo(page.id, answer.conversation.messageId, d);
+    expect(store.rows.get(page.id)!.blocks).toEqual([p("もとの本文")]);
+  });
+
+  it("refuses a page outside the workspace, and says the turn stopped", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
+    const other = store.add("user-b", { blocks: [p("他人の本文")] });
+    const chats = memoryConversations(store);
+    const response = await deviceTurn(page.id, body(other.id), deps("user-a", store, { conversations: chats }));
+    expect(response.status).toBe(200);
+    expect(store.rows.get(other.id)!.blocks).toEqual([p("他人の本文")]);
+    expect(chats.turns[0]).toMatchObject({ result: "stopped", resultCode: "write_refused" });
+    expect(chats.turns[0]!.changes).toEqual([]);
+  });
+
+  it("answers 401, 404 and 400 before writing anything", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
+    expect((await deviceTurn(page.id, body(page.id), deps(null, store))).status).toBe(401);
+    expect((await deviceTurn(page.id, body(page.id), deps("user-b", store))).status).toBe(404);
+    expect((await deviceTurn(randomUUID(), body(page.id), deps("user-a", store))).status).toBe(404);
+    for (const bad of [
+      { ...body(page.id), engine: "CLI Claude Code" },
+      { ...body(page.id), input: "" },
+      { ...body(page.id), writes: [{ pageId: page.id }] },
+      { ...body(page.id), writes: "nope" },
+      { ...body(page.id), extra: 1 },
+    ]) {
+      expect((await deviceTurn(page.id, bad, deps("user-a", store))).status, JSON.stringify(bad)).toBe(400);
+    }
+    expect(store.versions).toEqual([]);
+  });
+
+  it("refuses a conversation that is not this page's", async () => {
+    const store = memoryStore();
+    const page = store.add("user-a", { title: "合成のページ", blocks: [p("もとの本文")] });
+    const chats = memoryConversations(store);
+    const response = await deviceTurn(page.id, { ...body(page.id), conversationId: "someone-elses" }, deps("user-a", store, { conversations: chats }));
+    expect(response.status).toBe(404);
+    expect(store.versions).toEqual([]);
   });
 });

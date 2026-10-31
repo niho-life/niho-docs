@@ -1,16 +1,19 @@
 import { estimateTokenCostUsd } from "@niho/docs-core";
 import {
   DEFAULT_EDITOR_SETTINGS,
+  MESSAGE_TEXT_MAX_CHARS,
   monthKeyJst,
   type AiMessage,
   type AiMessageChange,
   type AiUsageDelta,
   type AiUsageTotals,
+  type AiUsageSource,
   type Block,
   type ChatChangeInput,
   type ChatTurnInput,
   type ChatWorkspacePage,
   type CreatePageInput,
+  type ReferencePage,
   type EditorSettings,
   type OwnerId,
   type Page,
@@ -23,6 +26,7 @@ import { blocksToMarkdown, markdownToBlocks } from "niho-docs-ui/page/markdown";
 import type { AiComposeBackend } from "../ai/config";
 import {
   MAX_CHAT_INPUT_CHARS,
+  MAX_CHAT_TOOL_CALLS,
   buildChatMessages,
   buildChatSystem,
   isChatToolName,
@@ -62,6 +66,8 @@ export type ChatPagesStore = {
 
 export type ChatConversationStore = {
   workspace: (owner: OwnerId, pageId: string) => Promise<ChatWorkspacePage[] | null>;
+  /** 同じフォルダのほかのページ（読むだけで触らせる。書けるのは作業場のページだけ）。 */
+  references?: (owner: OwnerId, pageId: string) => Promise<ReferencePage[] | null>;
   history: (owner: OwnerId, pageId: string, conversationId: string) => Promise<{ messages: AiMessage[] } | null>;
   append: (owner: OwnerId, input: ChatTurnInput) => Promise<{ conversation: { id: string }; result: AiMessage } | null>;
   changes: (owner: OwnerId, pageId: string, messageId: string) => Promise<AiMessageChange[] | null>;
@@ -69,8 +75,9 @@ export type ChatConversationStore = {
 };
 
 export type ChatUsageStore = {
-  get: (owner: OwnerId, month: string) => Promise<AiUsageTotals>;
-  record: (owner: OwnerId, month: string, delta: AiUsageDelta) => Promise<AiUsageTotals>;
+  /** 経路ごとの合計（既定はサーバーの API＝月の上限が効く方）。 */
+  get: (owner: OwnerId, month: string, source?: AiUsageSource) => Promise<AiUsageTotals>;
+  record: (owner: OwnerId, month: string, delta: AiUsageDelta, source?: AiUsageSource) => Promise<AiUsageTotals>;
 };
 
 export type ChatApiDeps = {
@@ -130,10 +137,12 @@ const PAGE_HAS_PARTS = "このページの本文には、文字だけにでき�
  * 道具を実行する側。触れるのは作業場のページだけで、書いたページは `changes` に積む
  * （版は依頼の中で最初に書いたときのものを残す＝依頼の前の本文に戻せる）。
  */
+type WorkspaceEntry = ChatWorkspacePage & { writable: boolean };
+
 function createToolRunner(deps: {
   store: ChatPagesStore;
   owner: OwnerId;
-  workspace: ChatWorkspacePage[];
+  workspace: WorkspaceEntry[];
   changes: Map<string, ChatChangeInput & { title: string }>;
 }) {
   const { store, owner } = deps;
@@ -144,7 +153,7 @@ function createToolRunner(deps: {
     if (!isChatToolName(call.name)) return { ok: false, result: "その道具はありません。" };
 
     if (call.name === "list_pages") {
-      const pages = deps.workspace.map((page) => ({ id: page.id, title: page.title || "（題名なし）", kind: page.kind, open: page.open, writable: true }));
+      const pages = deps.workspace.map((page) => ({ id: page.id, title: page.title || "（題名なし）", kind: page.kind, open: page.open, writable: page.writable }));
       return { ok: true, result: toolJson({ pages }) };
     }
 
@@ -161,6 +170,7 @@ function createToolRunner(deps: {
     if (call.name === "write_page") {
       const target = find(input.page_id);
       if (!target) return { ok: false, result: "そのページは、この会話では書けません。list_pages の id を使ってください。" };
+      if (!target.writable) return { ok: false, result: "そのページは読むだけです（同じフォルダのほかのページ）。書けるのは開いているページとその親・サブページだけです。", page: target.title };
       if (typeof input.markdown !== "string") return { ok: false, result: "markdown に本文の全体を渡してください。", page: target.title };
       const parsed = markdownToBlocks(input.markdown);
       if (!parsed.ok) return { ok: false, result: `本文を読めませんでした: ${parsed.reason}`, page: target.title };
@@ -204,7 +214,7 @@ function createToolRunner(deps: {
     const chars = Array.from(input.markdown).length;
     deps.changes.set(created.id, { pageId: created.id, title: created.title, change: "created", version: null, revision: created.revision, chars, delta: chars });
     // 作ったページも、その依頼の中では読み書きできる
-    deps.workspace.push({ id: created.id, title: created.title, kind: created.kind, parent: created.parent, open: false });
+    deps.workspace.push({ id: created.id, title: created.title, kind: created.kind, parent: created.parent, open: false, writable: true });
     return { ok: true, result: toolJson({ id: created.id, title: created.title, chars }), page: created.title };
   };
 }
@@ -254,28 +264,39 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
     if (!input.ok) return errorResponse("bad_request");
 
     const owner = session.userId;
-    const workspace = await chats.workspace(owner, id);
-    if (!workspace) return notFoundResponse();
-    const open = workspace.find((page) => page.open)!;
+    const writable = await chats.workspace(owner, id);
+    if (!writable) return notFoundResponse();
+    const open = writable.find((page) => page.open)!;
+    // 同じフォルダのほかのページは読むだけで触れる（旧アプリの「フォルダ内の他ページを見る」）
+    const readable = (await chats.references?.(owner, id)) ?? [];
+    const known = new Set(writable.map((page) => page.id));
+    const workspace: WorkspaceEntry[] = [
+      ...writable.map((page) => ({ ...page, writable: true })),
+      ...readable
+        .filter((page) => !known.has(page.id))
+        .map((page) => ({ id: page.id, title: page.title, kind: page.kind, parent: open.parent, open: false, writable: false })),
+    ];
     const conversationId = input.value.conversationId;
     const past = conversationId === null ? null : await chats.history(owner, id, conversationId);
     if (conversationId !== null && !past) return notFoundResponse();
 
     const month = monthKeyJst(deps.now ? deps.now() : new Date());
     const limitUsd = deps.limitUsd();
-    if (overLimit(await usage.get(owner, month), limitUsd)) return jsonResponse(429, { error: "quota_exceeded" });
+    // 月の上限はサーバーの API の経路にだけ効く
+    if (backend.route === "server" && overLimit(await usage.get(owner, month), limitUsd)) return jsonResponse(429, { error: "quota_exceeded" });
 
     const settings = (await deps.settings?.()?.(owner)) ?? DEFAULT_EDITOR_SETTINGS;
     const changes = new Map<string, ChatChangeInput & { title: string }>();
     const run = await runChatTurn({
       client: backend.client,
-      system: buildChatSystem({ glossary: settings.glossary, ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }) }),
+      system: buildChatSystem({ glossary: settings.glossary, about: settings.about, ...(settings.aiLang === "same" ? {} : { lang: settings.aiLang }) }),
       messages: buildChatMessages(historyOf(past?.messages ?? []), input.value.text, { id: open.id, title: open.title, kind: open.kind }),
       run: createToolRunner({ store, owner, workspace, changes }),
       // 往復のたびに上限を見る（会話が長くても 1 人 1 か月の上限は同じ意味で働く）
-      beforeCall: async () => !overLimit(await usage.get(owner, month), limitUsd),
+      // 上限を見るのはサーバーの API の経路だけ（CLI は利用者のサブスクで従量が出ないので止めない）
+      beforeCall: async () => backend.route !== "server" || !overLimit(await usage.get(owner, month), limitUsd),
       onUsage: async (report) => {
-        await usage.record(owner, month, usageDelta(backend, report));
+        await usage.record(owner, month, usageDelta(backend, report), backend.route);
       },
       signal: request.signal,
     });
@@ -289,6 +310,7 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
       items: itemsOf(run),
       result: run.result,
       resultCode: run.code,
+      author: { route: backend.route, engine: backend.engine },
       changes: written.map((change) => ({
         pageId: change.pageId,
         change: change.change,
@@ -314,6 +336,108 @@ export function runAiChat(request: Request, id: string, deps: ChatApiDeps): Prom
         limitUsd,
         nearLimit: limitUsd !== null && totals.costMicroUsd * 5 >= Math.round(limitUsd * 1e6) * 4,
       },
+    });
+  });
+}
+
+/** この Mac の CLI が書き戻してくる依頼（`POST …/ai/chat/turns`）。 */
+type DeviceTurnInput = {
+  conversationId: string | null;
+  input: string;
+  reply: string;
+  engine: string;
+  writes: { pageId: string; markdown: string }[];
+};
+
+/** エンジンの短い id（鍵・端末の情報を入れない）。 */
+const ENGINE_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,95}$/;
+
+function parseDeviceTurnBody(body: unknown): { ok: true; value: DeviceTurnInput } | { ok: false } {
+  if (!isPlainObject(body) || !hasOnlyKeys(body, ["conversationId", "input", "reply", "engine", "writes"])) return { ok: false };
+  const text = parseChatBody({ text: body.input, ...(body.conversationId === undefined ? {} : { conversationId: body.conversationId }) });
+  if (!text.ok) return { ok: false };
+  if (typeof body.engine !== "string" || !ENGINE_PATTERN.test(body.engine)) return { ok: false };
+  if (body.reply !== undefined && typeof body.reply !== "string") return { ok: false };
+  const reply = typeof body.reply === "string" ? body.reply.trim() : "";
+  if (Array.from(reply).length > MESSAGE_TEXT_MAX_CHARS) return { ok: false };
+  if (!Array.isArray(body.writes) || body.writes.length > MAX_CHAT_TOOL_CALLS) return { ok: false };
+  const writes: DeviceTurnInput["writes"] = [];
+  for (const raw of body.writes) {
+    if (!isPlainObject(raw) || !hasOnlyKeys(raw, ["pageId", "markdown"])) return { ok: false };
+    if (typeof raw.pageId !== "string" || typeof raw.markdown !== "string") return { ok: false };
+    writes.push({ pageId: raw.pageId, markdown: raw.markdown });
+  }
+  return { ok: true, value: { conversationId: text.value.conversationId, input: text.value.text, reply, engine: body.engine, writes } };
+}
+
+/**
+ * POST /api/pages/{id}/ai/chat/turns — **この Mac の CLI（利用者のサブスク）が作った結果を書き戻す口**。
+ * サーバーはモデルを呼ばず、受け取った本文を**チャットと同じ道**に通す（作業場の確認 → 版を残す → 保存 → 会話に記録）。
+ * これで版・「元に戻す」・触れる範囲・本文の検査が経路によらず同じになる。
+ *
+ * **月の上限（USD）は効かない**（従量が出ないため）。使用量は `device` の行にだけ、回数として残る。
+ * 未認証は 401、他人のページ・無いページ・他人の会話は同じ 404。
+ */
+export function recordDeviceChatTurn(request: Request, id: string, deps: ChatApiDeps): Promise<Response> {
+  const route = "POST /api/pages/[id]/ai/chat/turns";
+  return guarded(route, async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const store = deps.store();
+    const chats = deps.conversations();
+    const usage = deps.usage();
+    if (!store || !chats || !usage) return errorResponse("unavailable");
+    const body = await readJsonBody(request);
+    if (!body.ok) return body.response;
+    const input = parseDeviceTurnBody(body.value);
+    if (!input.ok) return errorResponse("bad_request");
+
+    const owner = session.userId;
+    const writable = await chats.workspace(owner, id);
+    if (!writable) return notFoundResponse();
+    const conversationId = input.value.conversationId;
+    if (conversationId !== null && !(await chats.history(owner, id, conversationId))) return notFoundResponse();
+
+    // 書き込みはチャットと同じ道具を通す（作業場の外・画像のあるページ・大きすぎる本文はここで断られる）
+    const changes = new Map<string, ChatChangeInput & { title: string }>();
+    const workspace: WorkspaceEntry[] = writable.map((page) => ({ ...page, writable: true }));
+    const run = createToolRunner({ store, owner, workspace, changes });
+    const items: ChatItem[] = [];
+    let failed = false;
+    for (const write of input.value.writes) {
+      const outcome = await run({ name: "write_page", input: { page_id: write.pageId, markdown: write.markdown } });
+      items.push({ kind: "tool", tool: "write_page", page: outcome.page ?? null, ok: outcome.ok });
+      if (!outcome.ok) failed = true;
+    }
+
+    const written = [...changes.values()];
+    const turn = await chats.append(owner, {
+      pageId: id,
+      conversationId,
+      input: input.value.input,
+      reply: input.value.reply,
+      items,
+      result: failed ? "stopped" : "done",
+      resultCode: failed ? "write_refused" : null,
+      author: { route: "device", engine: input.value.engine },
+      changes: written.map((change) => ({
+        pageId: change.pageId,
+        change: change.change,
+        version: change.version ?? null,
+        revision: change.revision,
+        chars: change.chars,
+        delta: change.delta,
+      })),
+    });
+    if (!turn) console.error("editor-web: chat turn not recorded", { route });
+    // 回数だけ数える（この Mac の CLI は利用者のサブスクなので金額は 0。月の上限では止めない）
+    await usage.record(owner, monthKeyJst(deps.now ? deps.now() : new Date()), { requests: 1, inputTokens: 0, outputTokens: 0, costMicroUsd: 0 }, "device");
+    const page = written.some((change) => change.pageId === id) ? await store.getPage(owner, id) : null;
+    return jsonResponse(200, {
+      conversation: turn ? { id: turn.conversation.id, messageId: turn.result.id } : null,
+      message: turn ? turn.result : null,
+      page,
     });
   });
 }

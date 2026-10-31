@@ -1,5 +1,5 @@
 import "server-only";
-import { getAiUsage, getEditorSettings, recordAiUsage } from "@niho/editor-store";
+import { getAiUsage, getEditorSettings, listReferencePages, recordAiUsage } from "@niho/editor-store";
 import { monthlyLimitUsd, resolveAiCompose } from "../ai/config";
 import { getAuthProvider } from "../auth";
 import { createAiStepExecutor } from "../steps/ai-executor";
@@ -25,8 +25,8 @@ const aiStepExecutor: StepExecutor = createAiStepExecutor({
     const pool = getPool();
     return pool
       ? {
-          get: (owner, month) => getAiUsage(pool, owner, month),
-          record: (owner, month, delta) => recordAiUsage(pool, owner, month, delta),
+          get: (owner, month, source) => getAiUsage(pool, owner, month, source),
+          record: (owner, month, delta, source) => recordAiUsage(pool, owner, month, delta, source),
         }
       : null;
   },
@@ -34,6 +34,10 @@ const aiStepExecutor: StepExecutor = createAiStepExecutor({
   settings: () => {
     const pool = getPool();
     return pool ? (owner) => getEditorSettings(pool, owner) : null;
+  },
+  references: () => {
+    const pool = getPool();
+    return pool ? (owner, pageId) => listReferencePages(pool, owner, pageId) : null;
   },
 });
 

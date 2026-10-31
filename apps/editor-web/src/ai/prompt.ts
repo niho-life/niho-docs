@@ -1,4 +1,5 @@
 import { glossaryTable } from "@niho/docs-core";
+import { aboutSection, referencesSection } from "./references";
 import type { AiRequest } from "./model";
 import { PRESETS, intentMode, type PresetId } from "./presets";
 
@@ -19,6 +20,8 @@ export const PROMPT_RULES: readonly string[] = [
   "変更しない段落は edits に入れない。edits の index は kind が paragraph か heading の段落だけ（context の段落は変えない）。",
   'inserts の afterIndex は -1（先頭）か、資料の段落の index。kind は "paragraph"・"heading"・"callout" のどれか。',
   "固有名詞と誤りやすい表記の表があれば、その表記に合わせる。",
+  "「あなたについて」は書く人の説明と書き方の希望として扱い、事実の根拠にしない。",
+  "参考のページは書き方と文脈のために読むだけで、そこに書かれたことを、このページで起きたことの根拠にしない。",
 ];
 
 const INSTRUCTIONS: Readonly<Record<PresetId, string>> = {
@@ -55,15 +58,19 @@ export function buildPrompt(request: AiRequest): AiPrompt {
   ].join("\n");
   const glossary = glossaryTable(request.glossary);
   const paragraphs = request.paragraphs.map((paragraph) => JSON.stringify({ index: paragraph.index, kind: paragraph.kind, text: paragraph.text })).join("\n");
+  const about = aboutSection(request.about ?? "");
+  const references = referencesSection(request.references ?? []);
   const user = [
     "## 頼むこと",
     instruction(request),
     "",
     `本文の言語: ${request.lang}`,
     ...(glossary ? ["", "## 固有名詞と誤りやすい表記", glossary] : []),
+    ...(about ? ["", about] : []),
     "",
     "## 資料（ページの段落。1 行に 1 つ）",
     wrapUntrusted(paragraphs),
+    ...(references ? ["", references.text] : []),
   ].join("\n");
   return { system, user };
 }

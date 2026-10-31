@@ -101,8 +101,16 @@ export function blockText(block: Block): string {
 
 export type RequestPlan = { ok: true; requests: AiRequest[] } | { ok: false; error: "bad_scope" | "too_large" };
 
-/** 設定（#108）から来る、要求ごとに同じ値。`glossary` は固有名詞と誤りやすい表記、`lang` は提案の言語（無ければ本文の言語）。 */
-export type AiPreferences = { glossary?: readonly GlossaryEntry[]; lang?: AiRequest["lang"] };
+/**
+ * 設定（#108）と周りのページから来る、要求ごとに同じ値。`glossary` は固有名詞と誤りやすい表記、
+ * `lang` は提案の言語（無ければ本文の言語）、`about` は「あなたについて」、`references` は自動参考ページ。
+ */
+export type AiPreferences = {
+  glossary?: readonly GlossaryEntry[];
+  lang?: AiRequest["lang"];
+  about?: string;
+  references?: readonly { title: string; text: string }[];
+};
 
 /**
  * ページ（または選択した範囲。`toIndex` を含む）からモデルへの要求を作る。編集できる段落は空でも送り、文脈のブロックは文字のあるものだけ送る。
@@ -141,8 +149,20 @@ export function buildRequest(
   const glossary = (preferences.glossary ?? []).map((entry) => ({ ...entry, variants: [...entry.variants] }));
   let current: AiParagraph[] = [];
   let size = 0;
+  // 「あなたについて」と参考は、分けた要求のどれにも同じものを付ける（どの要求も同じ文脈で書く）
+  const about = preferences.about?.trim() ?? "";
+  const references = (preferences.references ?? []).map((reference) => ({ ...reference }));
   const flush = () => {
-    if (current.length > 0) requests.push({ intent, paragraphs: current, glossary, lang: preferences.lang ?? page.lang });
+    if (current.length > 0) {
+      requests.push({
+        intent,
+        paragraphs: current,
+        glossary,
+        lang: preferences.lang ?? page.lang,
+        ...(about ? { about } : {}),
+        ...(references.length > 0 ? { references: references.map((reference) => ({ ...reference })) } : {}),
+      });
+    }
     current = [];
     size = 0;
   };

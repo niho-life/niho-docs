@@ -1,10 +1,21 @@
 import { estimateTokenCostUsd } from "@niho/docs-core";
-import { DEFAULT_EDITOR_SETTINGS, monthKeyJst, type AiUsageDelta, type AiUsageTotals, type Block, type EditorSettings, type OwnerId } from "@niho/editor-store";
+import {
+  DEFAULT_EDITOR_SETTINGS,
+  monthKeyJst,
+  type AiUsageDelta,
+  type AiUsageSource,
+  type AiUsageTotals,
+  type Block,
+  type EditorSettings,
+  type OwnerId,
+  type ReferencePage,
+} from "@niho/editor-store";
 import { AnthropicError, maxTokensLimit, type AnthropicErrorKind } from "../ai/anthropic";
 import { buildComposePrompt, composeBlocks, composeMaxTokens, parseComposeOutput, type ComposeInput, type ComposeSource } from "../ai/compose";
 import type { AiComposeBackend } from "../ai/config";
 import { blockText } from "../ai/engine";
 import type { AiUsageReport } from "../ai/model";
+import { referencesFrom } from "../ai/references";
 import { StepError, type StepExecutor, type StepExecutorInput, type StepExecutorOutput } from "./executor";
 
 /**
@@ -21,8 +32,8 @@ import { StepError, type StepExecutor, type StepExecutorInput, type StepExecutor
 
 /** 使用量の読み書き（server/ai-api.ts の AiUsageStore と同じ形）。 */
 export type StepUsageStore = {
-  get: (owner: OwnerId, month: string) => Promise<AiUsageTotals>;
-  record: (owner: OwnerId, month: string, delta: AiUsageDelta) => Promise<AiUsageTotals>;
+  get: (owner: OwnerId, month: string, source?: AiUsageSource) => Promise<AiUsageTotals>;
+  record: (owner: OwnerId, month: string, delta: AiUsageDelta, source?: AiUsageSource) => Promise<AiUsageTotals>;
 };
 
 export type AiStepExecutorDeps = {
@@ -32,8 +43,10 @@ export type AiStepExecutorDeps = {
   usage: () => StepUsageStore | null;
   /** 月の上限（USD）。null は上限なし。 */
   limitUsd: () => number | null;
-  /** 設定（固有名詞・出力の言語。#108）。渡さない・読めないときは既定値。 */
+  /** 設定（固有名詞・出力の言語・「あなたについて」。#108）。渡さない・読めないときは既定値。 */
   settings?: () => ((owner: OwnerId) => Promise<EditorSettings>) | null;
+  /** 自動参考ページ（同じフォルダの直下のほかのページ）。渡さない・読めないときは参考なし。 */
+  references?: () => ((owner: OwnerId, pageId: string) => Promise<ReferencePage[] | null>) | null;
   now?: () => Date;
   env?: Readonly<Record<string, string | undefined>>;
 };
@@ -99,6 +112,8 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
       if (overLimit(await usage.get(owner, month), limitUsd)) throw new StepError("quota_exceeded", false);
 
       const settings = (await deps.settings?.()?.(owner)) ?? DEFAULT_EDITOR_SETTINGS;
+      // 参考は、作っているサブページと同じフォルダの直下のページ（親＝録音ページの兄弟）。読めなければ参考なし
+      const references = referencesFrom((await deps.references?.()?.(owner, input.parentPageId ?? "")) ?? []);
       const composeInput: ComposeInput = {
         recipeName: input.recipe.name,
         guide: input.recipe.guide,
@@ -110,6 +125,8 @@ export function createAiStepExecutor(deps: AiStepExecutorDeps): StepExecutor {
         // 「書いた言語のまま」は日本語（段階の資料は録音の文字起こしで、設計 §7.2 の手順はどれも日本語）
         lang: settings.aiLang === "en" ? "en" : "ja",
         glossary: settings.glossary,
+        about: settings.about,
+        references,
       };
       const prompt = buildComposePrompt(composeInput);
 

@@ -45,7 +45,7 @@ function okClient(text = answer) {
 
 /** 使用量を覚えるだけの偽の store。 */
 function memoryUsage(start: Partial<AiUsageTotals> = {}): StepUsageStore & { totals: AiUsageTotals; records: AiUsageDelta[] } {
-  const totals: AiUsageTotals = { owner: OWNER, month: MONTH, requests: 0, inputTokens: 0, outputTokens: 0, costMicroUsd: 0, ...start };
+  const totals: AiUsageTotals = { owner: OWNER, month: MONTH, source: "server", requests: 0, inputTokens: 0, outputTokens: 0, costMicroUsd: 0, ...start };
   const records: AiUsageDelta[] = [];
   return {
     totals,
@@ -67,6 +67,8 @@ function setup(options: { client?: AnthropicClient; usage?: StepUsageStore | nul
     client: options.client ?? okClient().client,
     model: "claude-sonnet-5-5",
     provider: options.provider === undefined ? "claude" : options.provider,
+    route: "server",
+    engine: "anthropic:claude-sonnet-5-5",
   };
   const deps: AiStepExecutorDeps = {
     compose: () => backend,
@@ -217,16 +219,43 @@ describe("the real step executor", () => {
   it("asks the settings for the glossary and the language", async () => {
     const client = okClient();
     const executor = createAiStepExecutor({
-      compose: () => ({ client: client.client, model: "claude-sonnet-5-5", provider: "claude" }),
+      compose: () => ({ client: client.client, model: "claude-sonnet-5-5", provider: "claude", route: "server", engine: "anthropic:claude-sonnet-5-5" }),
       usage: () => memoryUsage(),
       limitUsd: () => null,
-      settings: () => async () => ({ aiLang: "en", glossary: [{ term: "NIHO", reading: "ニホ", variants: [], note: "" }], recipes: [] }),
+      settings: () => async () => ({ aiLang: "en", glossary: [{ term: "NIHO", reading: "ニホ", variants: [], note: "" }], recipes: [], about: "" }),
       now,
       env: {},
     });
     await executor.run(input);
     expect(client.calls[0]!.user).toContain("出力の言語: en");
     expect(client.calls[0]!.user).toContain("NIHO");
+  });
+
+  it("sends 「あなたについて」 and the other pages of the folder", async () => {
+    const client = okClient();
+    const executor = createAiStepExecutor({
+      compose: () => ({ client: client.client, model: "claude-sonnet-5-5", provider: "claude", route: "server", engine: "anthropic:claude-sonnet-5-5" }),
+      usage: () => memoryUsage(),
+      limitUsd: () => null,
+      settings: () => async () => ({ aiLang: "same", glossary: [], recipes: [], about: "合成の自己紹介です。" }),
+      references: () => async () => [
+        { id: "ref-1", title: "同じフォルダのページ", kind: "note", blocks: [{ type: "paragraph", content: [{ type: "text", text: "参考の本文" }] }] },
+      ],
+      now,
+      env: {},
+    });
+    await executor.run({ ...input, parentPageId: "00000000-0000-4000-8000-0000000000aa" });
+    expect(client.calls[0]!.user).toContain("## あなたについて");
+    expect(client.calls[0]!.user).toContain("合成の自己紹介です。");
+    expect(client.calls[0]!.user).toContain("## 参考（同じフォルダのほかのページ）");
+    expect(client.calls[0]!.user).toContain("参考の本文");
+  });
+
+  it("runs without them when the settings and the folder cannot be read", async () => {
+    const client = okClient();
+    await setup({ client: client.client }).run(input);
+    expect(client.calls[0]!.user).not.toContain("## あなたについて");
+    expect(client.calls[0]!.user).not.toContain("## 参考");
   });
 
   it("is a StepError for every failure the runner has to classify", async () => {

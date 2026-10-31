@@ -87,6 +87,15 @@ export type EditorSettingsPageProps = {
   onCancelTerms: () => void;
   onSaveTerms: () => void;
 
+  /** 「あなたについて」（AI に毎回渡す、本人の説明と書き方の希望）。 */
+  about: string;
+  /** 編集している文（null のときは、まとめと「編集」だけを出す）。 */
+  aboutDraft: string | null;
+  onEditAbout: () => void;
+  onAboutDraft: (about: string) => void;
+  onCancelAbout: () => void;
+  onSaveAbout: () => void;
+
   /** 効いている手順（既定の並び → 足したものの並び）。 */
   recipes: EditorSettingsRecipe[];
   /** 編集している手順（null のときは一覧だけ）。 */
@@ -111,7 +120,7 @@ export type EditorSettingsPageProps = {
   transcription: EditorSettingsTranscription;
   storage: EditorSettingsStorage;
 
-  limits: { glossary: number; recipes: number; steps: number };
+  limits: { glossary: number; recipes: number; steps: number; aboutChars: number };
 };
 
 const STACK = { display: "grid", gap: 12 } as const;
@@ -140,6 +149,8 @@ export const EDITOR_SETTINGS_TEXT = {
   nearLimit: "今月の上限に近づいています。上限に届くと、月が替わるまで AI の提案を使えません",
   overLimit: "今月の上限に届いたので、月が替わるまで AI の提案を使えません",
   termsHelp: "AI の提案に、この表記のとおりに書くよう渡します。表記のない行は保存できません。",
+  aboutHelp:
+    "AI に毎回渡す、あなたの説明と書き方の希望です（どんな人か・何を書いているか・言い回しの好み）。公開のときに出る著者の情報とは別のもので、ここに書いたことは公開されません。",
   fixedSteps: "既定の手順は、段階の数を変えられません（できあがったページがその段階に結んでいます）。段階を足すには、複製してから編集してください。",
 } as const;
 
@@ -161,7 +172,7 @@ function usd(value: number): string {
 }
 
 export function EditorSettingsPage(props: EditorSettingsPageProps) {
-  const { busy, glossary, termsDraft, recipes, recipeDraft, usage, transcription, storage, limits } = props;
+  const { busy, glossary, termsDraft, about, aboutDraft, recipes, recipeDraft, usage, transcription, storage, limits } = props;
   const busyProps = busy ? { "aria-disabled": true as const, style: BUSY } : {};
   const quiet = (label: string, text: string, onClick: () => void) => (
     <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-label={label} {...busyProps} onClick={() => !busy && onClick()}>
@@ -196,6 +207,14 @@ export function EditorSettingsPage(props: EditorSettingsPageProps) {
               </>
             ) : null}
           </ShellKv>
+          <ShellKv label="あなたについて">
+            {aboutDraft === null ? (
+              <>
+                {about.trim() === "" ? <span style={EMPTY}>{EDITOR_SETTINGS_TEXT.empty}</span> : <span className="es-kvs-note">{summaryOf(about)}</span>}
+                {quiet("あなたについてを編集", "編集", props.onEditAbout)}
+              </>
+            ) : null}
+          </ShellKv>
           <ShellKv label="今月の使用量">
             {usage ? (
               <>
@@ -214,6 +233,9 @@ export function EditorSettingsPage(props: EditorSettingsPageProps) {
         </ShellKvs>
         {termsDraft !== null && (
           <TermsEditor terms={termsDraft} max={limits.glossary} busy={busy} onChange={props.onTermsDraft} onCancel={props.onCancelTerms} onSave={props.onSaveTerms} />
+        )}
+        {aboutDraft !== null && (
+          <AboutEditor value={aboutDraft} max={limits.aboutChars} busy={busy} onChange={props.onAboutDraft} onCancel={props.onCancelAbout} onSave={props.onSaveAbout} />
         )}
         {usage?.nearLimit && (
           <p role="alert" style={NOTE}>
@@ -364,6 +386,67 @@ function TermsEditor({
           やめる
         </button>
         <button type="button" className="es-btn es-btn--primary es-btn--sm" aria-label="固有名詞を保存" {...busyProps} onClick={() => !busy && onSave()}>
+          保存
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** まとめに出す 1 行（長い文は先頭だけ）。 */
+function summaryOf(text: string): string {
+  const line = text.trim().replace(/\s+/gu, " ");
+  const chars = Array.from(line);
+  return chars.length > 60 ? `${chars.slice(0, 60).join("")}…` : line;
+}
+
+/** 「あなたについて」の編集（AI に毎回渡す、本人の説明と書き方の希望）。 */
+function AboutEditor({
+  value,
+  max,
+  busy,
+  onChange,
+  onCancel,
+  onSave,
+}: {
+  value: string;
+  max: number;
+  busy: boolean;
+  onChange: (next: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  const headingId = useId();
+  const busyProps = busy ? { "aria-disabled": true as const, style: BUSY } : {};
+  const over = Array.from(value).length > max;
+  return (
+    <div style={STACK} role="group" aria-labelledby={headingId}>
+      <h3 id={headingId} style={SUBHEAD}>
+        あなたについて
+      </h3>
+      <p style={NOTE}>{EDITOR_SETTINGS_TEXT.aboutHelp}</p>
+      <div className="es-form">
+        <ShellField label="あなたについて" value={value} onChange={onChange} multiline />
+      </div>
+      <p style={NOTE}>
+        {Array.from(value).length.toLocaleString("en-US")} / {max.toLocaleString("en-US")} 字
+      </p>
+      {over && (
+        <p role="alert" style={NOTE}>
+          長すぎるので保存できません。{max.toLocaleString("en-US")} 字までにしてください。
+        </p>
+      )}
+      <div style={ROW}>
+        <button type="button" className="es-btn es-btn--quiet es-btn--sm" aria-label="あなたについての編集をやめる" onClick={onCancel}>
+          やめる
+        </button>
+        <button
+          type="button"
+          className="es-btn es-btn--primary es-btn--sm"
+          aria-label="あなたについてを保存"
+          {...(over ? { "aria-disabled": true as const, style: BUSY } : busyProps)}
+          onClick={() => !busy && !over && onSave()}
+        >
           保存
         </button>
       </div>
