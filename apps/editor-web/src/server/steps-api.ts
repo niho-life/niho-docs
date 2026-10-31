@@ -2,7 +2,7 @@ import { isIdempotencyKey, type AttemptState, type RunState, type StepRunView, t
 import type { AuthProvider } from "../auth/types";
 import { resolveStepsMode } from "../steps/inline";
 import { taskName, type TaskQueue } from "../steps/queue";
-import { findRecipeIn, isRecipeKey, type RecipeDef, type RecipeReader } from "../steps/recipes";
+import { DEFAULT_RECIPES, findRecipeIn, isRecipeKey, type RecipeDef, type RecipeReader } from "../steps/recipes";
 import type { StepRunStore } from "../steps/store";
 import { errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
 
@@ -79,6 +79,21 @@ function toRunView(run: StepRunView, recipes: readonly RecipeDef[]): RunView {
   };
 }
 
+/**
+ * 「この録音から」の入口に出す手順（#37）。手順は設定（#108）で変えられるので、画面は静的な一覧を持たず
+ * この答えに従う。`defaultName` は既定の手順の元の名前（既定でなければ null。画面はこれで、既定の言い方
+ * 「記事にする」を使うか、付けられた名前を使うかを決める）。
+ */
+export type RecipeChoiceView = { id: string; name: string; defaultName: string | null };
+
+function toChoices(recipes: readonly RecipeDef[]): RecipeChoiceView[] {
+  return recipes.map((recipe) => ({
+    id: recipe.id,
+    name: recipe.name,
+    defaultName: findRecipeIn(DEFAULT_RECIPES, recipe.id)?.name ?? null,
+  }));
+}
+
 type RunInput = { ok: true; recipe: RecipeDef; fromStep: number } | { ok: false };
 
 /** `{ recipe, fromStep? }` だけを受ける（他の key・知らない手順・範囲外の段階は 400）。 */
@@ -94,7 +109,10 @@ function parseRunInput(body: unknown, recipes: readonly RecipeDef[]): RunInput {
   return { ok: true, recipe, fromStep };
 }
 
-/** GET /api/pages/{id}/steps — そのページの最新の run（無ければ null）。返す前に前提変更を再計算する。 */
+/**
+ * GET /api/pages/{id}/steps — そのページの最新の run（無ければ null）と、その人の手順の一覧（帯の名前と、
+ * 録音ページの入口に出すもの）。返す前に前提変更を再計算する。
+ */
 export function getSteps(request: Request, id: string, deps: StepsApiDeps): Promise<Response> {
   return guarded("GET /api/pages/[id]/steps", async () => {
     const session = await deps.auth().getSession(request);
@@ -110,7 +128,7 @@ export function getSteps(request: Request, id: string, deps: StepsApiDeps): Prom
     if (run && recipe && (await steps.refreshStale(session.userId, id, recipe)) > 0) {
       run = (await steps.listRun(session.userId, id))?.run ?? null;
     }
-    return jsonResponse(200, { run: run ? toRunView(run, recipes) : null });
+    return jsonResponse(200, { run: run ? toRunView(run, recipes) : null, recipes: toChoices(recipes) });
   });
 }
 

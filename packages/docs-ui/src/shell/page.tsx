@@ -115,6 +115,8 @@ export type ShellPageProps = {
   meta?: ShellMetaItem[];
   /** 記事のリード。記事でなければ渡さない（空文字は欄だけ出す）。 */
   lead?: string;
+  /** ページのいちばん上の帯（手順の ShellSteps band。#37）。無ければ渡さない。 */
+  band?: ReactNode;
   /** 録音の文字起こし（ShellRecording）。 */
   media?: ReactNode;
   /** 本文の欄が空のときのプレースホルダー。 */
@@ -132,6 +134,7 @@ export function ShellPage(props: ShellPageProps) {
   const ja = props.lang === "ja";
   return (
     <div className="es-canvas-in">
+      {props.band}
       {props.cover === "set" && (
         // 画像（role=img）とボタンは兄弟にする。role=img の中にボタンを入れると、ボタンが支援技術から見えなくなる（nested-interactive。#43）
         <div className="es-cover">
