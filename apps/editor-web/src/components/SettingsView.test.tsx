@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { SETTINGS_LIMITS, type EditorSettingsPatch } from "@niho/editor-store";
+import type { EditorSettingsPatch } from "@niho/editor-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SettingsFailure, SettingsDto, UsageSummary } from "@/lib/settings-client";
 import type { SettingsFacts } from "@/settings/facts";
@@ -27,6 +27,20 @@ const FACTS: SettingsFacts = {
 
 const STEP = { id: "k7m2q9xa", name: "文字起こし修正", instruction: "整える。" };
 
+// 上限の値そのものは editor-store が決める（`settings-api.test.ts` が応答と突き合わせる）。ここは形だけを合わせる
+const LIMITS: SettingsDto["limits"] = {
+  glossary: 200,
+  termChars: 100,
+  variants: 20,
+  noteChars: 200,
+  recipes: 20,
+  recipeNameChars: 80,
+  guideChars: 20_000,
+  steps: 12,
+  stepNameChars: 80,
+  instructionChars: 8_000,
+};
+
 function dto(patch: Partial<SettingsDto> = {}): SettingsDto {
   return {
     aiLang: "same",
@@ -36,7 +50,7 @@ function dto(patch: Partial<SettingsDto> = {}): SettingsDto {
       { id: "tpl-2", name: "議事録", guide: "", steps: [{ id: "d9c3x7mf", name: "議事録", instruction: "" }], isDefault: true, modified: false },
       { id: "tpl-3", name: "インサイト整理", guide: "", steps: [{ id: "u3e7z6rh", name: "インサイト", instruction: "" }], isDefault: true, modified: false },
     ],
-    limits: SETTINGS_LIMITS,
+    limits: LIMITS,
     ...patch,
   };
 }
