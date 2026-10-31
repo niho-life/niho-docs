@@ -3,7 +3,7 @@
 import { useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { AUDIO_FILE_ACCEPT, isAudioFileName } from "@/lib/audio-formats";
 import { probeAudioDuration } from "@/lib/audio-duration";
-import { audioUploadMessage, uploadAudioPart, type AudioPartView, type UploadAudioFileInput } from "@/lib/audio-upload-client";
+import { AudioUploadError, audioUploadMessage, discardAudioPartUpload, uploadAudioPart, type AudioPartView, type UploadAudioFileInput } from "@/lib/audio-upload-client";
 import type { MicRecording } from "@/lib/mic-recorder";
 import { formatClock } from "@/lib/recording-view";
 import { audioExpiryLabel, isAudioExpired } from "@/lib/transcription-view";
@@ -123,6 +123,28 @@ export function RecordingAudios({
     if (failed) setMessage({ kind: "error", text: micErrorMessage(failed) });
   };
 
+  /**
+   * 途中でやめた（アップロードが済んでいない）音声を取り除く。残しておくと、その録音は文字起こしを始められない。
+   * 取り込みの最中に出す必要はないので、取り込み中（この画面が送っている間）は押せない。
+   */
+  const discardUnfinished = async (part: AudioPartView) => {
+    if (running.current || disabled) return;
+    running.current = true;
+    setBusy(true);
+    try {
+      await discardAudioPartUpload(pageId, part.partIndex);
+      setMessage({ kind: "info", text: `音声 ${part.partIndex + 1} の取り込みを取り消しました` });
+      onChanged();
+    } catch (error) {
+      // 既に済んでいた（409）なら、読み直せば普通の音声として出る
+      if (error instanceof AudioUploadError && error.status === 409) onChanged();
+      setMessage({ kind: "error", text: error instanceof AudioUploadError && error.status === 409 ? "この音声はもう取り込みが済んでいます" : audioUploadMessage(error instanceof AudioUploadError && error.status === 401 ? "unauthorized" : "other") });
+    } finally {
+      running.current = false;
+      setBusy(false);
+    }
+  };
+
   const progress = audio.progress;
   return (
     <section
@@ -140,6 +162,20 @@ export function RecordingAudios({
           <li key={part.partIndex} className="es-note" data-audio-part={part.partIndex}>
             音声 {part.partIndex + 1}
             {part.sourceName ? `（${part.sourceName}）` : ""} · {partDetail(part, now)}
+            {part.status !== "uploaded" && part.partIndex > 0 && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className="es-btn es-btn--quiet es-btn--sm"
+                  aria-disabled={locked || undefined}
+                  aria-label={`音声 ${part.partIndex + 1} の取り込みを取り消す`}
+                  onClick={() => void discardUnfinished(part)}
+                >
+                  取り消す
+                </button>
+              </>
+            )}
           </li>
         ))}
         {audios.length === 0 && (

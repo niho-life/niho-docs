@@ -191,6 +191,33 @@ describe("RecordingAudios（1 ページに音声を複数）", () => {
     expect(rows[2]).toContain("音声は削除されました");
   });
 
+  it("取り込みの途中の音声（2 本目以降）にだけ「取り消す」が出て、押すとその行を消して録音を読み直す", async () => {
+    const calls: Array<{ method: string; path: string }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, init?: RequestInit) => {
+        calls.push({ method: init?.method ?? "GET", path });
+        return new Response(JSON.stringify({ parts: [part()] }), { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+    const onChanged = await mount([part(), part({ partIndex: 1, status: "uploading", durationSec: 300, bytes: 1024 }), part({ partIndex: 2, durationSec: 120 })]);
+    // 途中の 2 本目だけ。1 本目と、済んだ 3 本目には出ない
+    expect([...container!.querySelectorAll("[data-audio-part] button")].map((button) => button.getAttribute("aria-label"))).toEqual(["音声 2 の取り込みを取り消す"]);
+
+    await click("取り消す");
+    expect(calls).toEqual([{ method: "DELETE", path: `/api/pages/${PAGE_ID}/recording/audio/parts/1` }]);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    expect(statusText()).toContain("音声 2 の取り込みを取り消しました");
+  });
+
+  it("取り消そうとした音声がもう済んでいたら、そう伝えて読み直す（消えない）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "not_unfinished" }), { status: 409, headers: { "content-type": "application/json" } })));
+    const onChanged = await mount([part(), part({ partIndex: 1, status: "uploading", durationSec: 300, bytes: 1024 })]);
+    await click("取り消す");
+    expect(alertText()).toContain("この音声はもう取り込みが済んでいます");
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
   it("音声が無ければそう言う", async () => {
     await mount([]);
     expect(container!.querySelector('[data-audio-part="none"]')?.textContent).toBe("この録音には音声がありません");

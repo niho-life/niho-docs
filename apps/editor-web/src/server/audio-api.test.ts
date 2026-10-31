@@ -9,6 +9,7 @@ import {
   AUDIO_START_BODY_MAX_BYTES,
   audioLimitsRoute,
   completeAudioPartRoute,
+  discardAudioPartRoute,
   completeAudioRoute,
   startAudioPartRoute,
   startAudioRoute,
@@ -121,6 +122,14 @@ function memoryStore() {
       part.status = "uploaded";
       return { status: "ok", part };
     },
+    discardAudioPart: async (owner, id, partIndex) => {
+      const row = find(owner, id);
+      const part = row?.parts.find((item) => item.partIndex === partIndex);
+      if (!row || !part) return null;
+      if (part.status === "uploaded") return "not_unfinished";
+      row.parts.splice(row.parts.indexOf(part), 1);
+      return "discarded";
+    },
     listAudioParts: async (owner, id) => {
       const row = find(owner, id);
       if (!row) return [];
@@ -174,6 +183,8 @@ const startPart = (id: string, body: unknown, d: AudioApiDeps, headers: Record<s
   startAudioPartRoute(request("POST", `/api/pages/${id}/recording/audio/parts`, body, headers), id, d);
 const completePart = (id: string, index: string, d: AudioApiDeps, headers: Record<string, string> = {}) =>
   completeAudioPartRoute(request("POST", `/api/pages/${id}/recording/audio/parts/${index}/complete`, undefined, headers), id, index, d);
+const discardPart = (id: string, index: string, d: AudioApiDeps, headers: Record<string, string> = {}) =>
+  discardAudioPartRoute(request("DELETE", `/api/pages/${id}/recording/audio/parts/${index}`, undefined, headers), id, index, d);
 const complete = (id: string, d: AudioApiDeps, headers: Record<string, string> = {}) =>
   completeAudioRoute(request("POST", `/api/pages/${id}/recording/audio/complete`, undefined, headers), id, d);
 
@@ -609,5 +620,59 @@ describe("音声を足す（POST /api/pages/{id}/recording/audio/parts）", () =
     const mismatch = await completePart(id, "1", d);
     expect(mismatch.status).toBe(409);
     expect(await mismatch.json()).toEqual({ error: "incomplete", reason: "size_mismatch" });
+  });
+});
+
+describe("取り込みをやめた音声を取り除く（DELETE /api/pages/{id}/recording/audio/parts/{index}）", () => {
+  const PART = { name: "音声 2.m4a", contentType: "audio/mp4", sizeBytes: 7, sha256: SHA, durationSec: 300 };
+
+  async function recordingWithPart(storage: FakeStorage, d: AudioApiDeps) {
+    const id = await startAndPut(storage, d, 5, { ...START, durationSec: 600 });
+    expect((await complete(id, d)).status).toBe(200);
+    const started = await startPart(id, PART, d);
+    expect(started.status).toBe(201);
+    const body = await started.json();
+    return { id, index: String(body.part.partIndex), uploadUrl: body.upload.url as string };
+  }
+
+  it("アップロードが済んでいない音声を取り除き、残った音声の列を返す", async () => {
+    const { store } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const { id, index } = await recordingWithPart(storage, d);
+
+    const response = await discardPart(id, index, d);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.parts.map((part: { partIndex: number }) => part.partIndex)).toEqual([0]);
+    // 同じ取り消しを 2 回押しても、もう無いので 404
+    expect((await discardPart(id, index, d)).status).toBe(404);
+  });
+
+  it("アップロードの済んだ音声は消さない（409 not_unfinished）", async () => {
+    const { store } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const { id, index, uploadUrl } = await recordingWithPart(storage, d);
+    expect(storage.putFakeObject(tokenOf(uploadUrl), new Uint8Array(7), null)).toBe("ok");
+    expect((await completePart(id, index, d)).status).toBe(200);
+
+    const response = await discardPart(id, index, d);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "not_unfinished" });
+  });
+
+  it("1 本目（0）・不正な番号・別の人・ログインなし・別の origin は断る", async () => {
+    const { store } = memoryStore();
+    const storage = createFakeStorage();
+    const d = deps("user-a", store, storage);
+    const { id, index } = await recordingWithPart(storage, d);
+
+    for (const bad of ["0", "-1", "01", "1.5", "abc", "1000"]) expect((await discardPart(id, bad, d)).status).toBe(404);
+    expect((await discardPart(id, index, deps("user-b", store, storage))).status).toBe(404);
+    expect((await discardPart(id, index, deps(null, store, storage))).status).toBe(401);
+    expect((await discardPart(id, index, d, { origin: "https://evil.example" })).status).toBe(403);
+    // 断られたあとも、音声は残っている
+    expect((await discardPart(id, index, d)).status).toBe(200);
   });
 });

@@ -6,6 +6,7 @@ import {
   audioInfo,
   deleteRecordingCandidate,
   completeAudioPart,
+  discardAudioPart,
   completeAudioUpload,
   completeImageUpload,
   countPageImages,
@@ -195,6 +196,7 @@ export const audioDeps: AudioApiDeps = {
       startAudioPart: (owner, pageId, input) => startAudioPart(pool, owner, pageId, input),
       completeAudioPart: (owner, pageId, partIndex, stored) => completeAudioPart(pool, owner, pageId, partIndex, stored),
       listAudioParts: (owner, pageId) => listAudioParts(pool, owner, pageId),
+      discardAudioPart: (owner, pageId, partIndex) => discardAudioPart(pool, owner, pageId, partIndex),
     };
   },
   storage: () => getStorage(process.env),

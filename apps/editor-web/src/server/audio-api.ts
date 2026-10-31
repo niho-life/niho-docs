@@ -5,6 +5,7 @@ import {
   type AudioPart,
   type CompleteAudioPartResult,
   type CompleteAudioUploadResult,
+  type DiscardAudioPartResult,
   type OwnerId,
   type Recording,
   type StartAudioPartInput,
@@ -40,6 +41,8 @@ export type AudioStore = {
   startAudioPart: (owner: OwnerId, pageId: string, input: StartAudioPartInput) => Promise<StartAudioPartResult | null>;
   completeAudioPart: (owner: OwnerId, pageId: string, partIndex: number, stored: { sizeBytes: number }) => Promise<CompleteAudioPartResult | null>;
   listAudioParts: (owner: OwnerId, pageId: string) => Promise<AudioPart[]>;
+  /** アップロードが済んでいない音声を取り除く（やめた取り込みが文字起こしを止め続けない）。null は無い番号・ページ。 */
+  discardAudioPart: (owner: OwnerId, pageId: string, partIndex: number) => Promise<DiscardAudioPartResult | null>;
 };
 
 export type AudioApiDeps = {
@@ -63,7 +66,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type AudioBadRequestReason = "body" | "idempotency_key" | AudioStartRejection;
 
-type AudioErrorCode = "storage_unavailable" | "storage_failed" | "idempotency_conflict" | "incomplete" | "too_many_audios";
+type AudioErrorCode = "storage_unavailable" | "storage_failed" | "idempotency_conflict" | "incomplete" | "too_many_audios" | "not_unfinished";
 
 const AUDIO_STATUS: Record<AudioErrorCode, number> = {
   // 1 ページに持てる音声の本数を超えた（#36 段 3b-4）
@@ -76,6 +79,8 @@ const AUDIO_STATUS: Record<AudioErrorCode, number> = {
   idempotency_conflict: 409,
   // 完了を呼んだが、保存先に object が無い（missing）か大きさが申告と違う（size_mismatch）
   incomplete: 409,
+  // 取り除こうとした音声は、もうアップロードが済んでいる（済んだ音声は消さない）
+  not_unfinished: 409,
 };
 
 /** http.ts に無い音声の code。header は他の応答と同じ（jsonResponse）。 */
@@ -329,5 +334,28 @@ export function completeAudioPartRoute(request: Request, id: string, index: stri
     if (result.status === "size_mismatch") return audioError("incomplete", "size_mismatch");
     const after = await store.listAudioParts(session.userId, id);
     return jsonResponse(200, { part: audioPartBody(result.part), parts: after.map(audioPartBody) });
+  });
+}
+
+/**
+ * DELETE /api/pages/{id}/recording/audio/parts/{index} — アップロードが済んでいない 2 本目以降の音声を取り除く。
+ * 途中でやめた取り込みの行が残ると、その録音は文字起こしを始められなくなる（全部の音声が済んでいるときだけ始められる）。
+ * 200 `{ parts }`（残った音声の列）。済んでいる音声は 409 not_unfinished（消さない）、無い番号・録音の無いページは同じ 404。
+ */
+export function discardAudioPartRoute(request: Request, id: string, index: string, deps: AudioApiDeps): Promise<Response> {
+  return guarded("DELETE /api/pages/[id]/recording/audio/parts/[index]", async () => {
+    const session = await deps.auth().getSession(request);
+    if (!session) return errorResponse("unauthorized");
+    if (!isSameOriginRequest(request, deps.env)) return errorResponse("forbidden");
+    const store = deps.store();
+    if (!store) return errorResponse("unavailable");
+
+    // 番号は 1 以上の 10 進（part 0 は取り除けない）
+    if (!/^[1-9][0-9]{0,2}$/.test(index)) return notFoundResponse();
+    const result = await store.discardAudioPart(session.userId, id, Number(index));
+    if (result === null) return notFoundResponse();
+    if (result === "not_unfinished") return audioError("not_unfinished");
+    const parts = await store.listAudioParts(session.userId, id);
+    return jsonResponse(200, { parts: parts.map(audioPartBody) });
   });
 }

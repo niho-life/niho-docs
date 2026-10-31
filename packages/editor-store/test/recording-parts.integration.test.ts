@@ -7,6 +7,7 @@ import {
   AUDIO_PARTS_MAX,
   completeAudioPart,
   completeAudioUpload,
+  discardAudioPart,
   listAudioParts,
   startAudioPart,
   startAudioRecording,
@@ -246,6 +247,41 @@ describe("audio parts on PostgreSQL（1 ページに音声を複数）", { skip:
     assert.equal((await listAudioParts(pool, OWNER, page)).length, AUDIO_PARTS_MAX);
     assert.deepEqual(await startAudioPart(pool, OWNER, page, partInput()), { status: "too_many" });
     assert.equal((await listAudioParts(pool, OWNER, page)).length, AUDIO_PARTS_MAX);
+  });
+
+  it("取り込みを途中でやめた音声は取り除け、そのあと文字起こしを始められる（やめた行が録音を止め続けない）", async () => {
+    const page = await audioRecording(pool);
+    const started = await startAudioPart(pool, OWNER, page, partInput({ uploadKey: randomUUID() }));
+    assert.ok(started && started.status === "created");
+    const index = started.part.partIndex;
+    assert.deepEqual(await enqueueTranscription(pool, OWNER, page, run()), { status: "audio_not_ready" }, "やめた取り込みの行が残っているあいだは始められない");
+
+    assert.equal(await discardAudioPart(pool, OWNER, page, index), "discarded");
+    assert.deepEqual(
+      (await listAudioParts(pool, OWNER, page)).map((part) => part.partIndex),
+      [0],
+      "音声の行も assets の行も無くなり、1 本目だけが残る",
+    );
+    const assets = await pool.query("SELECT 1 FROM assets WHERE owner = $1 AND id = $2", [OWNER, started.part.assetId]);
+    assert.equal(assets.rowCount, 0);
+    assert.equal((await enqueueTranscription(pool, OWNER, page, run()))?.status, "created");
+    // もう無い番号は null（同じ取り消しを 2 回押しても壊れない）
+    assert.equal(await discardAudioPart(pool, OWNER, page, index), null);
+  });
+
+  it("取り除けるのは途中の音声だけ: アップロードの済んだ音声・1 本目・別の人・ゴミ箱のページは断る", async () => {
+    const page = await audioRecording(pool);
+    const done = await addPart(pool, page, { durationSec: 60 });
+    assert.equal(await discardAudioPart(pool, OWNER, page, done), "not_unfinished", "済んだ音声は消さない");
+    assert.equal((await listAudioParts(pool, OWNER, page)).length, 2);
+    assert.equal(await discardAudioPart(pool, OWNER, page, 0), null, "1 本目（part 0）は対象外");
+
+    const started = await startAudioPart(pool, OWNER, page, partInput());
+    assert.ok(started && started.status === "created");
+    assert.equal(await discardAudioPart(pool, OTHER, page, started.part.partIndex), null, "別の人のページは無いのと同じ");
+    assert.equal(await discardAudioPart(pool, OWNER, "not-a-uuid", 1), null);
+    await pool.query("UPDATE pages SET deleted_at = clock_timestamp() WHERE owner = $1 AND id = $2", [OWNER, page]);
+    assert.equal(await discardAudioPart(pool, OWNER, page, started.part.partIndex), null, "ゴミ箱の中のページは無いのと同じ");
   });
 
   it("文字起こしは、どれか 1 本でも途中・期限切れなら始めない", async () => {

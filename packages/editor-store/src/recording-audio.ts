@@ -680,3 +680,51 @@ export async function completeAudioPart(
     client.release();
   }
 }
+
+// $1 owner / $2 page id / $3 part index。取り除く音声の行を押さえる（status と asset を読む）。
+const LOCK_PART_TO_DISCARD_SQL = `
+SELECT m.status, m.asset
+  FROM page_recording_audios AS m
+  JOIN pages AS p ON p.owner = m.owner AND p.id = m.page_id
+ WHERE m.owner = $1 AND m.page_id = $2 AND m.part_index = $3 AND p.deleted_at IS NULL
+   FOR UPDATE OF m`;
+
+export type DiscardAudioPartResult = "discarded" | "not_unfinished";
+
+/**
+ * アップロードが済んでいない（uploading）2 本目以降の音声を取り除く。途中でやめた取り込みの行が残ると、全部の音声が
+ * アップロード済みのときだけ始められる文字起こしが、その録音ではずっと始められなくなるため（取り込み直しは新しい
+ * 行になり、やめた行を引き継がない）。音声の行と assets の行を 1 つの transaction で消す。保存先の object は、
+ * 途中までのものがあっても bucket のライフサイクル規則で消える（ここでは触らない）。
+ * - 本人の・ゴミ箱でないページの、その番号の音声が無い（part 0 は 1 以上でないので対象外）: null
+ * - 済んでいる音声: not_unfinished（何も消さない。済んだ音声を消すのは別の操作）
+ */
+export async function discardAudioPart(pool: Connectable, owner: OwnerId, pageId: string, partIndex: number): Promise<DiscardAudioPartResult | null> {
+  assertOwner(owner);
+  if (!isPageId(pageId) || !Number.isSafeInteger(partIndex) || partIndex < 1) return null;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    try {
+      const row = (await client.query<{ status: RecordingAudioStatus; asset: string }>(LOCK_PART_TO_DISCARD_SQL, [owner, pageId, partIndex])).rows[0];
+      if (!row) {
+        await rollback(client);
+        return null;
+      }
+      if (row.status !== "uploading") {
+        await rollback(client);
+        return "not_unfinished";
+      }
+      await client.query("DELETE FROM page_recording_audios WHERE owner = $1 AND page_id = $2 AND part_index = $3", [owner, pageId, partIndex]);
+      await client.query("DELETE FROM assets WHERE owner = $1 AND id = $2", [owner, row.asset]);
+      await client.query("COMMIT");
+      return "discarded";
+    } catch (error) {
+      await rollback(client);
+      throw error;
+    }
+  } finally {
+    client.release();
+  }
+}

@@ -227,6 +227,22 @@ export async function completeAudioPartUpload(pageId: string, partIndex: number,
   return { part: data.part, parts: partsOf(data.parts) };
 }
 
+/**
+ * アップロードが済んでいない 2 本目以降の音声を取り除く（途中でやめた取り込みの行が、その録音の文字起こしを止め続けないように）。
+ * 済んでいる音声は 409（not_unfinished）で消えない。残った音声の列を返す。
+ */
+export async function discardAudioPartUpload(pageId: string, partIndex: number, fetchImpl: FetchLike = fetch): Promise<AudioPartView[]> {
+  const response = await fetchImpl(`/api/pages/${encodeURIComponent(pageId)}/recording/audio/parts/${partIndex}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) throw await failure(response);
+  const data = await readJson(response);
+  if (!isPlainObject(data)) throw new AudioUploadError(500);
+  return partsOf(data.parts);
+}
+
 /** ticket の url へ音声を直接 PUT する。412（既に置いてある）は成功と同じに扱い、続けて完了を呼べばよい。 */
 export async function putAudio(ticket: AudioUploadTicket, body: Blob, fetchImpl: FetchLike = fetch): Promise<void> {
   const response = await fetchImpl(ticket.url, { method: "PUT", headers: { ...ticket.headers }, body, credentials: "omit", cache: "no-store" });
