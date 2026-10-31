@@ -28,22 +28,14 @@
 | `/auth/login`、`/auth/callback` | NIHO アカウントの接続 |
 | `/s/{token}` | リンクで共有（読み取り専用、ログイン不要） |
 
-### 2.1 保存先（アカウントの設定）
+### 2.1 保存先（正本はサーバーだけ）
 
-保存先は**アカウント単位**で、設定 › 保存で選ぶ。ページ単位では持たない。既定は NIHO クラウド。Issue #50。
+正本は **NIHO クラウド（サーバー）だけ**。ページ・録音・版・資産はすべてサーバーにあり、Mac アプリ・ブラウザ・PWA は**同じものを読み書きする**。アカウントや端末ごとに保存先を選ぶ仕組みは持たない（オーナー決定 2026-11-01。Issue #50 はこの線に縮める）。
 
-| 保存先 | 状態名（`DocsStorageMode`） | 意味 |
-| --- | --- | --- |
-| NIHO クラウド | `CLOUD`（未選択の `UNSET` も同じ扱い） | 正本はサーバー。この文書の他の節はすべてこの前提 |
-| この Mac だけ | `LOCAL` | ページ・録音・版・資産をサーバーに置かない。正本は Mac の中。同期しない（競合も起きない） |
-| クラウドから移行中 | `CLOSING` | クラウドから Mac へ取り込んでいる間。読むことだけできる |
-
-- **選べる場所**：Mac アプリの設定。Web は現在の保存先を表示するだけ（ブラウザの保存領域は消えることがあるため、Web からは「この Mac だけ」を選べない）。`LOCAL` のアカウントが Web を開くと「このアカウントは、ページを Mac の中だけに保存しています」と出し、ページは出さない。
-- **`CLOUD` 以外でできないこと**：公開、リンクで共有、サーバーへの保存（ページ・録音・版・資産の書き込み）。公開のシートは主ボタンを押せなくし、理由を一言出す（「この Mac だけに保存しているので、公開できません」）。公開を**やめる**ことは、いつでもできる。
-- **サーバー側の強制**：保存先は役割と同じく NIHO から毎回読み（editor に保存しない）、`CLOUD` 以外ではサーバーが書き込みを拒否する。画面で隠すだけにしない。
-- **切り替え**：クラウド → この Mac は、確認 → **公開中のページを先にやめる**（§12 の削除と同じ決まり）→ 取り込み（`CLOSING`、読むだけ）→ `LOCAL`。この Mac → クラウドは、アップロード → `CLOUD`。流れは Mac アプリの既存の実装（`docs_closing`）を使う。
-- **容量の表示**：設定 › 保存に、`CLOUD` のときクラウドの使用量、Mac では「この Mac」の使用量を出す。
-- **別物**：§12 の「オフライン・この端末に保持」（復帰したら保存する一時保持）は保存先の選択ではない。`CLOUD` のまま、オフラインの間だけ端末に持つ。
+- **「この Mac だけ」は保存先ではない。** Mac にあるのは**端末内の文字起こしのための一時置き場**だけ。文字起こしする音声（と参照する本文）をその間だけ Mac に置き、終わったら**結果をサーバーの録音に書いて**一時置き場を消す（§7.1・§13）。Mac だけのページの一覧や、サーバーに上げないページは持たない。
+- **オフライン**は §12 の「オフライン・この端末に保持」（復帰したら保存する一時保持）だけ。オフラインを主な作業場にすることはしない。
+- **以前の案は採らない**：`DocsStorageMode` の `LOCAL`／`CLOSING`、クラウド ↔ この Mac の切り替え、`desktop-vault` の三方向併合。旧 NIHO docs のその仕組みは、Mac アプリの殻への置き換え（§13）とともに退役させる。旧い保管庫のフォルダ（`~/Documents/NIHO docs`）は消さずに残す（旧データの扱いは移行の判断まで保留。[editor-migration-map.md](editor-migration-map.md) §7）。
+- **容量の表示**：設定 › 保存にクラウドの使用量を出す。
 
 `editor.niho.life` は全ページ `noindex, nofollow`。公開 API は `api.editor.niho.life`（§9）。入口は、NIHO アプリのアカウント設定の「書く」（体験への導線と並ぶ）、niho-experience のホストの画面と公開サイトのフッター「For writers」、そしてブックマーク。製品名は NIHO editor。
 
@@ -200,15 +192,28 @@ Block は段落、見出し（2・3）、箇条書き・番号付き、引用、
 | 書いている途中でログインが切れた | 本文は端末に残す。ログインし直したら同じページに戻る |
 | 公開に失敗した | 前の公開版はそのまま。下書きも残す。もう一度 |
 | 文字起こしや手順が失敗した | 段階に「失敗」。もう一度／エンジンを変える。録音は消えない |
-| 保存先が「この Mac だけ」か移行中 | 公開・リンクで共有・サーバーへの保存を断り、理由を一言出す。公開をやめることと、読むことはできる（§2.1） |
+| 端末内の文字起こしの一時置き場が消えた・結果を書けない | 音声はサーバーの資産から取り直して文字起こしをやり直せる。結果をサーバーに書けなかったときは一時置き場を消さず、「もう一度」を出す（§13） |
 | 削除 | ゴミ箱に 30 日。公開中のページを削除するときは先に公開をやめる |
 | 音声の上限 | 1 ファイルの長さと容量の上限を設定に明記し、超えたら保存前に断る |
 
 ## 13. リポジトリと配備
 
-- `niho-docs` を `niho-editor` に改名。`apps/editor-web`（editor.niho.life）を追加し、`packages/docs-ui`・`docs-core` の部品を使う。Mac アプリ（`apps/docs`）は同じ部品でこの設計に作り直して存続させる。Web と Mac の違いは、端末内の文字起こしと「この Mac だけ」の保存が Mac にだけあること。
+- `niho-docs` を `niho-editor` に改名。`apps/editor-web`（editor.niho.life）がこの設計の本体で、`packages/docs-ui`・`docs-core` の部品を使う。**ブラウザ・PWA・Mac アプリは同じ UI を同じサーバー相手に描く**（オーナー決定 2026-11-01：「editor.niho.life がメインで、それをデスクトップアプリが包み込む構成が基本」）。
+- **Mac アプリ（`apps/docs`）は editor.niho.life を読む殻 ＋ 端末の力。** Tauri の webview が editor.niho.life をそのまま読む（UI を同梱しない。Web のデプロイで Mac も同時に更新され、dmg を出すのは native が変わるときだけ。オフラインは PWA のキャッシュと §12 の一時保持に任せる）。Mac だけの力は bridge（docs-ui の `DocsHost` の optional な native 操作）で UI に見せる：
+  - マイクの録音（`niho-speech record`）
+  - 端末内の文字起こし（同梱の `niho-speech` sidecar。音声と本文を**一時置き場**（app data）に置いて文字起こしし、**結果はサーバーの録音 API に書く**。§2.1）
+  - CLI の AI（Claude Code・Codex・Antigravity CLI。Mac で動かし、**提案はサーバーの同じ API に書く**。「接続中か」と「AI がどこで動くか」は別の軸）
+  - 音声ファイルの選択、鍵（Keychain）
+  UI は capability を見て「この Mac で」の選択肢を出すだけで、画面は Web と同じ。
+- **殻の安全性**（remote origin に IPC を開くので手を抜かない）：
+  - Tauri v2 の capability で、IPC を許す origin を `https://editor.niho.life` だけに限る（`remote.urls`）。開発時の `localhost` は開発用の capability に分け、配布物には入れない。
+  - 許す command を上の端末の力だけに絞る（録音・端末内の文字起こし・CLI の AI・ファイル選択・鍵）。旧い画面が使っていた保管庫の読み書き（`load_pages`・`write_page` など）は殻からは**呼べない**ようにする（退役とともに削る）。
+  - CSP は Web 側（editor.niho.life の `Content-Security-Policy`）が正本。webview の側でも `connect-src` を editor.niho.life と `api.editor.niho.life` に限り、`script-src` に `unsafe-eval` を入れない。
+  - 公開リポジトリなので、設定に書くのは実際のドメインだけ（内部の host・鍵・token は書かない。[publication-gates.md](../security/publication-gates.md)）。
+- **旧 NIHO docs の画面は退役**：`DocsApp` 一式（レール・フォルダ画面・工程設計・AI と作る・設定）と、#109 で旗の裏に入れた `EditorScreen`・`vault-pages`・`vault-recordings`。残すのは native 層（`src-tauri` の録音・sidecar・AI の crate・鍵）と純粋ロジック（`docs-core` の工程・テンプレート・プロファイル・文字起こし。サーバーの手順の実装がこれを使う）。`desktop-vault`（三方向併合）と `DocsStorageMode` は退役。
+- bundle identifier `life.niho.docs`・deep link `niho-docs`・配布物の名前 `NIHO-docs-<版>-<sha>`・tag `docs-v*` は変えない（#65）。
 - 公開境界は [publication-gates.md](../security/publication-gates.md) のまま：クライアントと契約は公開、API・DB・鍵・認可は非公開。
-- 認証は NIHO の `niho-experience-editor` クライアントを editor.niho.life の origin で使う（niho-app 側）。
+- 認証は NIHO の `niho-experience-editor` クライアントを editor.niho.life の origin で使う（niho-app 側）。Mac の殻も同じ origin を読むので、別のクライアントは要らない。
 - CI は標準の GitHub-hosted runner。secret なし。
 
 ## 14. 進め方
@@ -219,6 +224,9 @@ Block は段落、見出し（2・3）、箇条書き・番号付き、引用、
 | 2 | AI の提案、録音と文字起こし、手順 | 録音から記事の下書きまで |
 | 3 | 公開（NIHO Experience）、公開 API、プレビュー | experience の `/editor` を editor に置き換える |
 | 4 | 公開（NIHO）、本人のサイト、NIHO アプリのカード | 発信先を選べる |
-| 5 | NIHO docs の機能移行の仕上げ、Mac アプリをこの設計に作り直す | Mac でも同じページ・手順・公開 |
+| 5 | **モデル**：手順（recipes）の表、AI の会話の表、`parent` を全ページで使う（フォルダ＝子を持てるページ。深さはフォルダ › ページ › 録音のサブページまで）。旧データの取り込みの余地（取り込み元の ID・旧フォルダ → 親ページの対応）を残す | T1。以降の土台 |
+| 6 | **旧 NIHO docs の機能を Web に**：フォルダの木（T2）、録音の完成＝ブラウザ録音・再生・複数音声・VTT（T3）、工程設計と実行＝テンプレート・プロファイル・guide・固有名詞・お手本、step の実行 → サブページ（T4）、AI チャットによる文書編集＝会話・提案の差分・採用（T5） | ブラウザ・PWA・Mac で同じ工程設計と AI |
+| 7 | **Mac の殻**（T7）：editor.niho.life を読む、端末の力（録音・端末内の文字起こし・CLI の AI）を bridge で出して結果は同じ API に書く、旧画面の退役、配布 | Mac で同じページ・同じ画面・端末内の文字起こし |
+| 8 | UI の手直し（T9）：左下は「設定」（名前はメニューの中）、状態の丸は公開中だけ（地球）、エディタバーの常設 | — |
 
-段階 1 から本番に出せる（公開の機能が無くても、自分だけのページを書く道具として成立する）。
+段階 1 から本番に出せる（公開の機能が無くても、自分だけのページを書く道具として成立する）。段階 5 の後は T2・T3・T5 が並行でき、T4 は T1・T5 の後、T7 は録音の API がそろった時点で始められる。**旧データの移行はまだ未決**（[editor-migration-map.md](editor-migration-map.md) §7 の 2・4）。段階 5 のモデルは取り込みの余地を残し、移行するかどうかの判断を先送りできるようにする。
