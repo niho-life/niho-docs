@@ -217,7 +217,8 @@ describe("GCS storage: reading an object (the image relay)", () => {
     expect(url.searchParams.get("alt")).toBe("media");
     expect(call.init.method).toBe("GET");
     expect(call.init.redirect).toBe("error");
-    expect(headersOf(call)).toEqual({ authorization: `Bearer ${TOKEN}` });
+    // 同じ token と、中身をそのまま受ける identity だけ（文字起こしの音声の読み出しと同じ規則）
+    expect(headersOf(call)).toEqual({ authorization: `Bearer ${TOKEN}`, "accept-encoding": "identity" });
   });
 
   it("answers null for 404, maps the other failures, and refuses a response without a usable length", async () => {

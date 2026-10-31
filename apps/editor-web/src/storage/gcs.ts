@@ -16,8 +16,10 @@ import { StorageError, isObjectPath, type ObjectStorage, type ReadObject, type S
  * - CORS: 開始の要求の `Origin` header が、そのセッション URI へのブラウザからの要求に返す origin になる
  *   （https://cloud.google.com/storage/docs/cross-origin）。bucket の CORS の設定もあわせて要る（README の「bucket に要求する設定」）。
  * - 確認: `GET https://storage.googleapis.com/storage/v1/b/{bucket}/o/{object（URL エンコード）}` の `size`（10 進の文字列）・`contentType`。
- * - 読み取り（画像の中継。#33）: 同じ URL に `?alt=media` を付けた `GET`（同じ token の道）。応答の本文がそのまま object の中身で、
- *   `Content-Type`・`Content-Length` が種類と大きさ。署名付き URL は作らない（実行 ID に署名の権限が無い前提）。
+ * - 読み取り（画像の中継 #33・文字起こし #36 段 2b）: 同じ URL に `?alt=media` を付けた `GET`（同じ token の道）。応答の本文がそのまま
+ *   object の中身で、`Content-Type` が種類、大きさは `Content-Length`（無ければ `x-goog-stored-content-length`）。`Accept-Encoding: identity`
+ *   （中身をそのまま・`Content-Length` 付きで受ける）。時間切れは header が届くまでだけで、本文の読み取りには時間切れをかけない
+ *   （長い音声をエンジンへ流し終えるまでの時間は、呼び出し側の時間切れが決める）。署名付き URL は作らない（実行 ID に署名の権限が無い前提）。
  * - token: メタデータサーバー `GET {METADATA_TOKEN_URL}`（header `Metadata-Flavor: Google`）の `access_token`・`expires_in`（秒）。
  *
  * 失敗の写し方: 届かない・時間切れ（30 秒）・401・403・408・429・5xx は unavailable、それ以外の 4xx は rejected、確認の 404 は null。
@@ -203,7 +205,19 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
     async readObject(objectPath: string): Promise<ReadObject | null> {
       if (!isObjectPath(objectPath)) throw new StorageError("rejected");
       const url = `${GCS_JSON_BASE}${bucket}/o/${encodeURIComponent(objectPath)}?alt=media`;
-      const response = await send(doFetch, url, { method: "GET", headers: { Authorization: await authorization() } }, timeoutMs);
+      const headers = { Authorization: await authorization(), "Accept-Encoding": "identity" };
+      // 時間切れは header が届くまで（本文を読む間は切らない。届いたら timer を止める）
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let response: Response;
+      try {
+        response = await doFetch(url, { method: "GET", headers, redirect: "error", signal: controller.signal });
+      } catch {
+        // 中身（URL・token を含み得る）は捨てる
+        throw new StorageError("unavailable");
+      } finally {
+        clearTimeout(timer);
+      }
       if (response.status === 404) {
         await discard(response);
         return null;
@@ -212,8 +226,8 @@ export function createGcsStorage(options: GcsStorageOptions): ObjectStorage {
         await discard(response);
         throw failure(response.status);
       }
-      const length = response.headers.get("content-length");
-      const sizeBytes = length !== null && /^\d{1,16}$/.test(length) ? Number(length) : Number.NaN;
+      const length = response.headers.get("content-length") ?? response.headers.get("x-goog-stored-content-length");
+      const sizeBytes = length !== null && /^\d{1,16}$/.test(length.trim()) ? Number(length.trim()) : Number.NaN;
       if (!response.body || !Number.isSafeInteger(sizeBytes)) {
         await discard(response);
         throw new StorageError("unavailable");

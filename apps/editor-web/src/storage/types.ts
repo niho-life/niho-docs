@@ -36,7 +36,10 @@ export type StartUploadInput = {
 /** 保存先にある object（無ければ null）。 */
 export type StoredObject = { sizeBytes: number; contentType: string | null };
 
-/** 保存先から読み出した object（中身は 1 回だけ読める流れ）。 */
+/**
+ * 保存先から読み出した object（中身は 1 回だけ読める流れ。読み終えるか cancel する。読まずに捨てると保存先との接続が残る）。
+ * 画像（#33）の中継と、文字起こし（#36 段 2b。サーバーが音声をエンジンへ流す）が使う。中身はログ・エラー・DB に書かない。
+ */
 export type ReadObject = { body: ReadableStream<Uint8Array>; contentType: string | null; sizeBytes: number };
 
 export interface ObjectStorage {

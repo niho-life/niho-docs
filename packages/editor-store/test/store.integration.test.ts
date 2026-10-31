@@ -53,6 +53,7 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       [schema],
     );
     // page_shares は共有リンク（0004）、ai_usage は AI の使用量（0005）、step_runs・step_attempts は手順の実行（0006。ページの表とは別）、page_recordings は録音の文字起こし（0007）、
+    // transcription_runs は文字起こしの実行（0012）
     // publications（作り直し）・publication_versions・publication_redirects・site_connections・site_connection_keys・preview_tokens は公開（0009）
     const documented = [
       "pages",
@@ -69,6 +70,7 @@ describe("PostgreSQL editor store", { skip: databaseUrl === undefined }, () => {
       "site_connections",
       "site_connection_keys",
       "preview_tokens",
+      "transcription_runs",
     ];
     assert.deepEqual(tables.rows.map((row) => row.table_name), [...documented, MIGRATIONS_TABLE].sort());
     for (const table of documented) {

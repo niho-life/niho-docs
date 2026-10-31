@@ -6,6 +6,7 @@ import type {
   Recording,
   RecordingMutation,
   RecordingPage,
+  TranscriptionRunView,
   UpdateRecordingResult,
 } from "@niho/editor-store";
 import type { AuthProvider } from "../auth/types";
@@ -13,6 +14,7 @@ import { SEGMENT_EDITS_MAX, editSegments, type SegmentEdit, type SegmentEditReje
 import { listSpeakers, mergeSpeakers, renameSpeaker, type SpeakerRejection, type SpeakerSummary } from "../recording/speakers";
 import { VTT_IMPORT_ENGINE, VTT_IMPORT_MAX_BYTES, importVtt, type VttImportFailure } from "../recording/vtt-import";
 import { errorResponse, isSameOriginRequest, jsonResponse, notFoundResponse, readJsonBody } from "./http";
+import { transcriptionRunBody } from "./transcription-api";
 
 /**
  * 録音と文字起こし（#36 段 1）の API: VTT の取り込み（録音ページを作る）、録音の読み取り、段落の編集・話者名の変更・話者をまとめる。
@@ -33,6 +35,8 @@ export type RecordingsStore = {
     baseRevision: number,
     mutate: RecordingMutation<RecordingMutationRejection>,
   ) => Promise<UpdateRecordingResult<RecordingMutationRejection> | null>;
+  /** 最新の文字起こしの run（#36 段 2b）。あれば GET の応答に `transcription`（run が無ければ null）を足す。 */
+  latestTranscription?: (owner: OwnerId, pageId: string) => Promise<TranscriptionRunView | null>;
 };
 
 export type RecordingsApiDeps = {
@@ -158,7 +162,10 @@ export function importVttRoute(request: Request, deps: RecordingsApiDeps): Promi
   });
 }
 
-/** GET /api/pages/{id}/recording — 録音（`{ recording, speakers }`）。無ければ同じ 404。 */
+/**
+ * GET /api/pages/{id}/recording — 録音（`{ recording, speakers, transcription }`。transcription は最新の文字起こしの run（#36 段 2b）で、
+ * 無ければ null）。無ければ同じ 404。
+ */
 export function getRecordingRoute(request: Request, id: string, deps: RecordingsApiDeps): Promise<Response> {
   return guarded("GET /api/pages/[id]/recording", async () => {
     const session = await deps.auth().getSession(request);
@@ -166,7 +173,10 @@ export function getRecordingRoute(request: Request, id: string, deps: Recordings
     const store = deps.store();
     if (!store) return errorResponse("unavailable");
     const recording = await store.getRecording(session.userId, id);
-    return recording ? jsonResponse(200, withSpeakers(recording)) : notFoundResponse();
+    if (!recording) return notFoundResponse();
+    if (!store.latestTranscription) return jsonResponse(200, withSpeakers(recording));
+    const run = await store.latestTranscription(session.userId, id);
+    return jsonResponse(200, { ...withSpeakers(recording), transcription: run ? transcriptionRunBody(run) : null });
   });
 }
 

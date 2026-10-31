@@ -29,7 +29,7 @@ async function freePort() {
   return port;
 }
 
-/** `next dev` を起動し、`/api/pages` が readyStatus を返すまで待つ。止めるときは stop()。 */
+/** `next dev` を起動し、`/api/pages` が readyStatus を返すまで待つ。止めるときは stop()。extraEnv は足す環境変数（#36 段 2b の失敗の試験）。 */
 async function startDev(mode, readyStatus, extraEnv = {}) {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
@@ -77,6 +77,31 @@ async function startDev(mode, readyStatus, extraEnv = {}) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return { base, stop };
+}
+
+/** 文字起こしの run（#36 段 2b）が終わる（succeeded・failed）まで、状態を数回まで読む。 */
+async function waitForRun(base, pageId, runId) {
+  let last = null;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const response = await fetch(`${base}/api/pages/${pageId}/recording/transcription`);
+    assert.equal(response.status, 200);
+    last = (await response.json()).run;
+    if (last && last.id === runId && (last.status === "succeeded" || last.status === "failed")) return last;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`the transcription run did not finish: ${JSON.stringify(last)}`);
+}
+
+/** 音声のアップロード（#36 段 2a の流れ: start → 偽の保存先へ PUT → complete）をして、録音ページの id を返す。 */
+async function uploadAudio(base, write, name) {
+  const started = await write("POST", "/api/recordings/audio/start", { name, contentType: "audio/mp4", sizeBytes: 4, sha256: "e".repeat(64) });
+  assert.equal(started.status, 201);
+  const { page, upload } = await started.json();
+  assert.equal((await fetch(new URL(upload.url, base), { method: "PUT", headers: upload.headers, body: new Uint8Array([1, 2, 3, 4]) })).status, 200);
+  const done = await write("POST", `/api/pages/${page.id}/recording/audio/complete`);
+  assert.equal(done.status, 200);
+  assert.equal((await done.json()).recording.audio.status, "uploaded");
+  return page.id;
 }
 
 describe("editor-web e2e (stub, next dev)", () => {
@@ -882,6 +907,147 @@ describe("editor-web e2e (stub, next dev)", () => {
     assert.match(stored.rows[0].bucket_path, /^audio\/[0-9a-f-]{36}$/);
     assert.equal(stored.rows[0].bytes, 4);
     assert.equal(stored.rows[0].asset_kind, "audio");
+  });
+
+  it("transcribes the uploaded audio with the fake engine, keeps an edited transcript unless replace is asked, and answers the same 404 for others (#36 段 2b)", async () => {
+    // EDITOR_TRANSCRIBE_ENGINE・EDITOR_STORAGE は未設定（next dev なので、どちらも偽物）。合成の名前・小さなバイト列だけを使う
+    const pageId = await uploadAudio(base, write, "合成の文字起こし e2e.m4a");
+    createdIds.push(pageId);
+    const empty = await fetch(`${base}/api/pages/${pageId}/recording/transcription`);
+    assert.equal(empty.status, 200);
+    assert.equal(empty.headers.get("cache-control"), "private, no-store");
+    assert.equal(empty.headers.get("x-robots-tag"), "noindex, nofollow");
+    assert.deepEqual(await empty.json(), { run: null });
+
+    const first = await write("POST", `/api/pages/${pageId}/recording/transcribe`, {});
+    assert.equal(first.status, 202);
+    assert.equal(first.headers.get("cache-control"), "private, no-store");
+    const firstRun = (await first.json()).run;
+    assert.equal(firstRun.engine, "fake");
+    assert.equal(firstRun.language, "ja");
+    const done = await waitForRun(base, pageId, firstRun.id);
+    assert.equal(done.status, "succeeded");
+    assert.equal(done.errorCode, null);
+
+    const read = await fetch(`${base}/api/pages/${pageId}/recording`);
+    assert.equal(read.status, 200);
+    const readBody = await read.json();
+    assert.deepEqual(readBody.transcription, done);
+    const { recording } = readBody;
+    assert.equal(recording.engine, "fake");
+    assert.equal(recording.revision, 2);
+    assert.equal(recording.audio.status, "uploaded", "the audio stays");
+    assert.deepEqual(recording.segments.map((segment) => segment.speaker), [1, 2, 1], "speakers are numbered from 1");
+    assert.ok(recording.segments.every((segment) => segment.text.startsWith("[fake] ")));
+    assert.deepEqual(readBody.speakers.map((speaker) => speaker.speaker), [1, 2]);
+
+    // 段落を直せる（段 1 の PATCH）
+    const edited = await write("PATCH", `/api/pages/${pageId}/recording`, { baseRevision: 2, edits: [{ index: 0, text: "直した合成の段落" }] });
+    assert.equal(edited.status, 200);
+    assert.equal((await edited.json()).recording.revision, 3);
+
+    // もう一度: 段落があるので replace が無ければ断る（直した文章は残る）
+    const refused = await write("POST", `/api/pages/${pageId}/recording/transcribe`, {});
+    assert.equal(refused.status, 409);
+    assert.equal(await refused.text(), '{"error":"cannot_start","reason":"has_transcript"}');
+    assert.equal((await (await fetch(`${base}/api/pages/${pageId}/recording`)).json()).recording.segments[0].text, "直した合成の段落");
+
+    const replace = await write("POST", `/api/pages/${pageId}/recording/transcribe`, { replace: true });
+    assert.equal(replace.status, 202);
+    const replaceRun = (await replace.json()).run;
+    assert.notEqual(replaceRun.id, firstRun.id);
+    assert.equal((await waitForRun(base, pageId, replaceRun.id)).status, "succeeded");
+    const replaced = (await (await fetch(`${base}/api/pages/${pageId}/recording`)).json()).recording;
+    assert.equal(replaced.revision, 4);
+    assert.ok(replaced.segments[0].text.startsWith("[fake] "));
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM transcription_runs WHERE page_id = $1", [pageId])).rows[0].n, 2);
+
+    // 別の owner の音声のページは、存在しない id と同じ 404（run も作らない）
+    const theirs = await pool.query("INSERT INTO pages (owner, kind, title) VALUES ($1, 'rec', 'synthetic other transcription') RETURNING id", [OTHER_OWNER]);
+    const theirId = theirs.rows[0].id;
+    createdIds.push(theirId);
+    const assetId = randomUUID();
+    await pool.query(
+      `INSERT INTO assets (id, owner, page_id, kind, bucket_path, bytes, sha256, content_type) VALUES ($1, $2, $3, 'audio', $4, 4, $5, 'audio/mp4')`,
+      [assetId, OTHER_OWNER, theirId, `audio/${assetId}`, "e".repeat(64)],
+    );
+    await pool.query(
+      `INSERT INTO page_recordings (page_id, owner, source, language, segments, audio_asset, audio_status, audio_expires_at)
+       VALUES ($1, $2, 'audio', 'ja', '[]', $3, 'uploaded', clock_timestamp() + interval '30 days')`,
+      [theirId, OTHER_OWNER, assetId],
+    );
+    const snapshot = async (response) => ({
+      status: response.status,
+      headers: [...response.headers.entries()].filter(([name]) => name !== "date").sort(),
+      body: await response.text(),
+    });
+    const unknownId = randomUUID();
+    const theirStart = await snapshot(await write("POST", `/api/pages/${theirId}/recording/transcribe`, {}));
+    const unknownStart = await snapshot(await write("POST", `/api/pages/${unknownId}/recording/transcribe`, {}));
+    assert.equal(theirStart.status, 404);
+    assert.equal(theirStart.body, '{"error":"not_found"}');
+    assert.deepEqual(unknownStart, theirStart);
+    const theirStatus = await snapshot(await fetch(`${base}/api/pages/${theirId}/recording/transcription`));
+    const unknownStatus = await snapshot(await fetch(`${base}/api/pages/${unknownId}/recording/transcription`));
+    assert.equal(theirStatus.status, 404);
+    assert.deepEqual(unknownStatus, theirStatus);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM transcription_runs WHERE page_id = $1", [theirId])).rows[0].n, 0);
+  });
+});
+
+describe("editor-web e2e (stub, next dev, the fake transcription engine fails) (#36 段 2b)", () => {
+  let base;
+  let dev;
+  const pool = new pg.Pool({ connectionString: databaseUrl, max: 2 });
+  const createdIds = [];
+
+  const write = (method, path, body, headers = {}) =>
+    fetch(`${base}${path}`, {
+      method,
+      headers: { "content-type": "application/json", origin: base, ...headers },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+
+  before(async () => {
+    // 偽物のエンジンだけを失敗させる（本番では偽物が起動しないので、この変数は本番に効かない）
+    dev = await startDev("stub", 200, { EDITOR_TRANSCRIBE_FAKE_FAIL: "unavailable" });
+    base = dev.base;
+  });
+
+  after(async () => {
+    if (createdIds.length > 0) await pool.query("DELETE FROM pages WHERE id = ANY($1::uuid[])", [createdIds]);
+    await pool.end();
+    await dev?.stop();
+  });
+
+  it("records the failure and its reason, keeps the audio, and lets the user try again", async () => {
+    const pageId = await uploadAudio(base, write, "合成の失敗 e2e.m4a");
+    createdIds.push(pageId);
+    const first = await write("POST", `/api/pages/${pageId}/recording/transcribe`, {});
+    assert.equal(first.status, 202);
+    const firstRun = (await first.json()).run;
+    const failed = await waitForRun(base, pageId, firstRun.id);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.errorCode, "engine_unavailable");
+    assert.ok(failed.finishedAt);
+
+    const read = await (await fetch(`${base}/api/pages/${pageId}/recording`)).json();
+    assert.equal(read.recording.audio.status, "uploaded", "the audio is kept after a failure");
+    assert.deepEqual(read.recording.segments, []);
+    assert.equal(read.recording.revision, 1);
+    assert.deepEqual(read.transcription, failed);
+
+    // もう一度（新しい run。偽物は同じ理由でまた失敗する）
+    const again = await write("POST", `/api/pages/${pageId}/recording/transcribe`, {});
+    assert.equal(again.status, 202);
+    const againRun = (await again.json()).run;
+    assert.notEqual(againRun.id, firstRun.id);
+    assert.equal((await waitForRun(base, pageId, againRun.id)).errorCode, "engine_unavailable");
+    const runs = await pool.query("SELECT status, error_code FROM transcription_runs WHERE page_id = $1 ORDER BY created_at", [pageId]);
+    assert.deepEqual(runs.rows, [
+      { status: "failed", error_code: "engine_unavailable" },
+      { status: "failed", error_code: "engine_unavailable" },
+    ]);
   });
 });
 

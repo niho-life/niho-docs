@@ -1,5 +1,6 @@
 import { resolveAuthMode } from "./auth/config";
 import { resolveStorageConfig } from "./storage/config";
+import { resolveTranscriptionConfig } from "./transcription/config";
 import { FACE_CREDENTIALS_ENV, parseFaceCredentials } from "./public-api/source";
 import { parseRateLimit, RATE_LIMIT_ENV } from "./public-api/rate-limit";
 
@@ -17,6 +18,14 @@ export function checkStartupConfig(env: NodeJS.ProcessEnv = process.env): void {
     resolveStorageConfig(env);
   } catch (error) {
     const message = error instanceof Error ? error.message : "invalid storage configuration";
+    console.error(`editor-web: refusing to start: ${message}`);
+    process.exit(1);
+  }
+  // 文字起こし（#36 段 2b）: 本番の fake・deepgram で鍵が無い／不正・未知の値・時間切れの範囲の外は起動しない（メッセージに値を出さない）
+  try {
+    resolveTranscriptionConfig(env);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid transcription configuration";
     console.error(`editor-web: refusing to start: ${message}`);
     process.exit(1);
   }
