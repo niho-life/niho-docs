@@ -118,7 +118,10 @@ fn staging_failed() -> CommandError {
 }
 
 fn staging_missing() -> CommandError {
-  CommandError::new("shell_staging_missing", "取り込んだ音声が見つかりません。もう一度選んでください。")
+  CommandError::new(
+    "shell_staging_missing",
+    "取り込んだ音声が見つかりません。もう一度選んでください。",
+  )
 }
 
 fn audio_too_large() -> CommandError {
@@ -215,7 +218,10 @@ async fn read_audio(path: PathBuf) -> CommandResult<Response> {
 #[tauri::command]
 pub async fn shell_recording_read(state: State<'_, AppState>, recording_id: String) -> CommandResult<Response> {
   crate::safe_id(&recording_id)?;
-  let path = state.recorder.exported_file(&recording_id).ok_or(RecordingError::Missing)?;
+  let path = state
+    .recorder
+    .exported_file(&recording_id)
+    .ok_or(RecordingError::Missing)?;
   read_audio(path).await
 }
 
@@ -242,14 +248,22 @@ fn stage_audio(staging: &Staging, picked: Vec<PathBuf>) -> CommandResult<Option<
   let staged = staging.create().map_err(|_| staging_failed())?;
   let mut files = Vec::new();
   for (index, path) in picked.iter().enumerate() {
-    let ext = path.extension().map(|ext| ext.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let ext = path
+      .extension()
+      .map(|ext| ext.to_string_lossy().to_lowercase())
+      .unwrap_or_default();
     if !path.is_file() || !AUDIO_EXTENSIONS.contains(&ext.as_str()) {
       continue;
     }
-    staged.copy_in("audio", &format!("{index}.{ext}"), path).map_err(|_| staging_failed())?;
+    staged
+      .copy_in("audio", &format!("{index}.{ext}"), path)
+      .map_err(|_| staging_failed())?;
     files.push(ShellStagedFile {
       index,
-      name: path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
+      name: path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default(),
       duration_sec: speech::audio_duration_sec(path),
     });
   }
@@ -257,7 +271,10 @@ fn stage_audio(staging: &Staging, picked: Vec<PathBuf>) -> CommandResult<Option<
     let _ = staged.remove();
     return Ok(None);
   }
-  Ok(Some(ShellStagedAudio { staging_id: staged.id().to_string(), files }))
+  Ok(Some(ShellStagedAudio {
+    staging_id: staged.id().to_string(),
+    files,
+  }))
 }
 
 /// 一時置き場の音声（番号で引く。`<index>.<ext>`）。
@@ -311,7 +328,9 @@ pub async fn shell_audio_read(state: State<'_, AppState>, staging_id: String, in
 /// 一時置き場を消す（やめた・サーバーに書けた）。
 #[tauri::command]
 pub async fn shell_staging_discard(state: State<'_, AppState>, staging_id: String) -> CommandResult<()> {
-  let staged = Staging::new(&state.data_dir).open(&staging_id).ok_or_else(staging_missing)?;
+  let staged = Staging::new(&state.data_dir)
+    .open(&staging_id)
+    .ok_or_else(staging_missing)?;
   staged.remove().map_err(|_| staging_failed())
 }
 
@@ -339,7 +358,10 @@ fn audio_paths(state: &AppState, source: &ShellAudioSource) -> CommandResult<Vec
   match source {
     ShellAudioSource::Recording { recording_id } => {
       crate::safe_id(recording_id)?;
-      let path = state.recorder.exported_file(recording_id).ok_or(RecordingError::Missing)?;
+      let path = state
+        .recorder
+        .exported_file(recording_id)
+        .ok_or(RecordingError::Missing)?;
       Ok(vec![path])
     }
     ShellAudioSource::Staged { staging_id } => Ok(
@@ -373,9 +395,17 @@ pub async fn shell_transcribe_local(
   let hints_json = speech::hints_json(&hints);
   let job = crate::register_job(&state, &job_id)?;
   let result = tauri::async_runtime::spawn_blocking(move || {
-    speech::transcribe(&job, &binary.path, &paths, &language, &hints_json, &speaker_mode, &mut |value| {
-      let _ = on_event.send(value);
-    })
+    speech::transcribe(
+      &job,
+      &binary.path,
+      &paths,
+      &language,
+      &hints_json,
+      &speaker_mode,
+      &mut |value| {
+        let _ = on_event.send(value);
+      },
+    )
   })
   .await
   .unwrap_or(Err(SpeechError::Failed));
@@ -383,7 +413,10 @@ pub async fn shell_transcribe_local(
   Ok(
     result?
       .into_iter()
-      .map(|file| ShellTranscript { jsonl: file.jsonl, duration_sec: file.duration_sec })
+      .map(|file| ShellTranscript {
+        jsonl: file.jsonl,
+        duration_sec: file.duration_sec,
+      })
       .collect(),
   )
 }
@@ -391,7 +424,11 @@ pub async fn shell_transcribe_local(
 /// 端末内の文字起こしを止める（走っていなければ false）。
 #[tauri::command]
 pub async fn shell_transcribe_stop(state: State<'_, AppState>, job_id: String) -> CommandResult<bool> {
-  let job = state.speech_jobs.lock().ok().and_then(|jobs| jobs.get(&job_id).cloned());
+  let job = state
+    .speech_jobs
+    .lock()
+    .ok()
+    .and_then(|jobs| jobs.get(&job_id).cloned());
   match job {
     Some(job) => {
       job.stop();
@@ -439,29 +476,51 @@ mod tests {
 
   #[test]
   fn audio_source_is_id_only() {
-    let recording: ShellAudioSource = serde_json::from_value(serde_json::json!({ "kind": "recording", "recordingId": "rec-1" })).unwrap();
-    assert_eq!(recording, ShellAudioSource::Recording { recording_id: "rec-1".into() });
-    let staged: ShellAudioSource = serde_json::from_value(serde_json::json!({ "kind": "staged", "stagingId": "0123456789abcdef" })).unwrap();
-    assert_eq!(staged, ShellAudioSource::Staged { staging_id: "0123456789abcdef".into() });
+    let recording: ShellAudioSource =
+      serde_json::from_value(serde_json::json!({ "kind": "recording", "recordingId": "rec-1" })).unwrap();
+    assert_eq!(
+      recording,
+      ShellAudioSource::Recording {
+        recording_id: "rec-1".into()
+      }
+    );
+    let staged: ShellAudioSource =
+      serde_json::from_value(serde_json::json!({ "kind": "staged", "stagingId": "0123456789abcdef" })).unwrap();
+    assert_eq!(
+      staged,
+      ShellAudioSource::Staged {
+        staging_id: "0123456789abcdef".into()
+      }
+    );
     // パスは受け取らない
-    assert!(serde_json::from_value::<ShellAudioSource>(serde_json::json!({ "kind": "path", "path": "/tmp/a.m4a" })).is_err());
+    assert!(
+      serde_json::from_value::<ShellAudioSource>(serde_json::json!({ "kind": "path", "path": "/tmp/a.m4a" })).is_err()
+    );
   }
 
   #[test]
   fn staged_audio_keeps_only_audio_files_and_no_paths() {
-    let data = std::env::temp_dir().join(format!("niho-docs-shell-test-{}", crate::process::hex(&crate::process::random_bytes::<6>().unwrap())));
+    let data = std::env::temp_dir().join(format!(
+      "niho-docs-shell-test-{}",
+      crate::process::hex(&crate::process::random_bytes::<6>().unwrap())
+    ));
     fs::create_dir_all(&data).unwrap();
     let audio = data.join("talk.m4a");
     fs::write(&audio, b"not really audio").unwrap();
     let text = data.join("notes.txt");
     fs::write(&text, b"text").unwrap();
     let staging = Staging::new(&data);
-    let staged = stage_audio(&staging, vec![audio.clone(), text.clone()]).unwrap().expect("1 つは音声");
+    let staged = stage_audio(&staging, vec![audio.clone(), text.clone()])
+      .unwrap()
+      .expect("1 つは音声");
     assert_eq!(staged.files.len(), 1);
     assert_eq!(staged.files[0].index, 0);
     assert_eq!(staged.files[0].name, "talk.m4a");
     let json = serde_json::to_value(&staged).unwrap();
-    assert!(!json.to_string().contains(data.to_string_lossy().as_ref()), "パスが混ざっている");
+    assert!(
+      !json.to_string().contains(data.to_string_lossy().as_ref()),
+      "パスが混ざっている"
+    );
     let files = staged_audio_files(&staging, &staged.staging_id).unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(fs::read(&files[0].1).unwrap(), b"not really audio");

@@ -18,7 +18,10 @@ pub const SWEEP_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// 操作の id（16 桁の hex）。画面から受け取る id はこの形だけを通す。
 pub fn is_staging_id(value: &str) -> bool {
-  value.len() == 16 && value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+  value.len() == 16
+    && value
+      .bytes()
+      .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 /// 置き場の根（app data の `staging/`）。
@@ -34,7 +37,9 @@ pub struct Staged {
 
 impl Staging {
   pub fn new(data_dir: &Path) -> Self {
-    Self { root: data_dir.join(STAGING_DIR) }
+    Self {
+      root: data_dir.join(STAGING_DIR),
+    }
   }
 
   /// 新しい操作の置き場を作る（0700）。
@@ -54,7 +59,10 @@ impl Staging {
       return None;
     }
     let path = self.root.join(id);
-    path.is_dir().then(|| Staged { id: id.to_string(), path })
+    path.is_dir().then(|| Staged {
+      id: id.to_string(),
+      path,
+    })
   }
 
   /// 古い残骸を消す（起動時）。消せないものは残す。
@@ -138,7 +146,10 @@ mod tests {
     {
       use std::os::unix::fs::PermissionsExt;
       assert_eq!(fs::metadata(staged.path()).unwrap().permissions().mode() & 0o777, 0o700);
-      assert_eq!(fs::metadata(staged.path().join("audio")).unwrap().permissions().mode() & 0o777, 0o700);
+      assert_eq!(
+        fs::metadata(staged.path().join("audio")).unwrap().permissions().mode() & 0o777,
+        0o700
+      );
       assert_eq!(fs::metadata(&copied).unwrap().permissions().mode() & 0o777, 0o600);
     }
     // 開き直せる
@@ -153,7 +164,14 @@ mod tests {
   fn rejects_ids_that_are_not_ours() {
     let data = temp_data_dir();
     let staging = Staging::new(&data);
-    for bad in ["", "..", "../etc", "0123456789abcdeF", "0123456789abcde", "zzzzzzzzzzzzzzzz"] {
+    for bad in [
+      "",
+      "..",
+      "../etc",
+      "0123456789abcdeF",
+      "0123456789abcde",
+      "zzzzzzzzzzzzzzzz",
+    ] {
       assert!(!is_staging_id(bad), "{bad}");
       assert!(staging.open(bad).is_none(), "{bad}");
     }
