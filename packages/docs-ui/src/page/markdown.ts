@@ -28,12 +28,50 @@ const TASK_ITEM = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[[ xX]\][ \t]/m;
 /** 囲みの目印（引用の最初の段落）。 */
 const CALLOUT_MARKER = "[!note]";
 
+/**
+ * markdown-it の token と core rule の state の型（editor/markdown-it-types.ts と同じ取り出し方。
+ * @types/markdown-it の版で root からの export が違うため、MarkdownIt の型から取る）。
+ */
+type Token = ReturnType<MarkdownIt["parse"]>[number];
+type StateCore = Parameters<MarkdownIt["core"]["process"]>[0];
+
+/**
+ * 引用の最初の段落が目印だけなら、囲みの token に変える（目印の段落は落とす）。
+ * **本文として打った `[!note]` は escape されて `\[!note\]` になる**ので、ここで囲みにはならない
+ * （escape は parse のあとに解けるので、解けた文字では見分けられない。token の生の content で見る）。
+ */
+function calloutRule(state: StateCore): void {
+  const tokens: Token[] = state.tokens;
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index]?.type !== "blockquote_open") continue;
+    const marker = tokens[index + 2];
+    if (tokens[index + 1]?.type !== "paragraph_open" || marker?.type !== "inline" || marker.content !== CALLOUT_MARKER) continue;
+    if (tokens[index + 3]?.type !== "paragraph_close") continue;
+    tokens[index]!.type = "callout_open";
+    // 対応する閉じ（入れ子の引用・囲みを数える）
+    let depth = 0;
+    for (let close = index + 4; close < tokens.length; close++) {
+      const type = tokens[close]!.type;
+      if (type === "blockquote_open" || type === "callout_open") depth++;
+      else if (type === "blockquote_close") {
+        if (depth === 0) {
+          tokens[close]!.type = "callout_close";
+          break;
+        }
+        depth--;
+      }
+    }
+    tokens.splice(index + 1, 3);
+  }
+}
+
 /** 限定 AST と同じ範囲だけの schema（エディタと同じもの）。 */
 export const pageMarkdownSchema: Schema = getSchema(buildPageExtensions());
 
 const tokens: Record<string, ParseSpec> = {
   paragraph: { block: "paragraph" },
   blockquote: { block: "blockquote" },
+  callout: { block: CALLOUT_NODE_NAME },
   bullet_list: { block: "bulletList" },
   ordered_list: {
     block: "orderedList",
@@ -54,6 +92,10 @@ const tokens: Record<string, ParseSpec> = {
 // CommonMark ＋表・取り消し線。HTML は文字として扱い、実行しない。表と取り消し線は限定 AST の外だが、
 // **読まないと文字として取り込んでしまい、保存で記法が壊れる**ので、読んで（知らない token として）断る。
 const markdownIt = MarkdownIt("commonmark", { html: false }).enable(["table", "strikethrough"]);
+markdownIt.core.ruler.push("niho_page_callout", (state) => {
+  calloutRule(state);
+  return true;
+});
 const parser = new MarkdownParser(pageMarkdownSchema, markdownIt, tokens);
 
 function inlineMark(open: string) {
@@ -108,7 +150,9 @@ const serializer = new MarkdownSerializer(
       }
     },
     text(state: MarkdownSerializerState, node: ProseMirrorNode) {
-      state.text(node.text ?? "", false);
+      // escape する（prosemirror-markdown の既定）。`a * b`・バックティック・`[`・行頭の `-` `#` をそのまま書くと、
+      // 読み直しで斜体・コードになったり（コードは限定 AST の外なのでページが開けなくなる）、箇条書きに化ける
+      state.text(node.text ?? "");
     },
   },
   {
@@ -126,28 +170,6 @@ const serializer = new MarkdownSerializer(
 export type MarkdownToBlocks = { ok: true; blocks: Block[] } | { ok: false; reason: string };
 export type BlocksToMarkdown = { ok: true; markdown: string } | { ok: false; reason: string };
 
-function isMarkerParagraph(block: unknown): boolean {
-  if (typeof block !== "object" || block === null) return false;
-  const node = block as { type?: unknown; content?: unknown };
-  if (node.type !== "paragraph" || !Array.isArray(node.content) || node.content.length !== 1) return false;
-  const only = node.content[0] as { type?: unknown; text?: unknown; marks?: unknown } | undefined;
-  return only?.type === "text" && only.text === CALLOUT_MARKER && only.marks === undefined;
-}
-
-/** 引用の中の `[!note]` の行を囲みに戻す（中身が空になったら空の段落を 1 つ置く）。 */
-function restoreCallouts(blocks: unknown[]): unknown[] {
-  return blocks.map((block) => {
-    if (typeof block !== "object" || block === null) return block;
-    const node = block as { type?: unknown; content?: unknown };
-    const content = Array.isArray(node.content) ? restoreCallouts(node.content) : node.content;
-    if (node.type === "blockquote" && Array.isArray(content) && content.length > 0 && isMarkerParagraph(content[0])) {
-      const rest = content.slice(1);
-      return { ...node, type: CALLOUT_NODE_NAME, content: rest.length > 0 ? rest : [{ type: "paragraph" }] };
-    }
-    return Array.isArray(content) ? { ...node, content } : block;
-  });
-}
-
 /**
  * Markdown を限定 AST の blocks にする。限定 AST の外の記法（表・コード・画像・HTML・見出し 1 と 4 以下）があれば断る。
  * 空の本文は空の配列（エディタは空の段落 1 つを置く）。
@@ -164,7 +186,7 @@ export function markdownToBlocks(markdown: string): MarkdownToBlocks {
   if (doc === null) return { ok: false, reason: "Markdown を読めませんでした" };
   const json = doc.toJSON() as { content?: unknown[] };
   // 保存してよい形だけで組み直す（見出しの深さ・リンクの scheme・入れ子の深さはここで断られる）
-  return validateBlocks(restoreCallouts(json.content ?? []));
+  return validateBlocks(json.content ?? []);
 }
 
 /** 限定 AST の blocks を Markdown にする。Markdown に置き場の無いもの（画像・録音）があれば断る。 */

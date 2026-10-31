@@ -70,6 +70,56 @@ async function waitSave() {
   await settle();
 }
 
+/** 本文の末尾に段落を足す。 */
+async function appendBody(container: HTMLElement, text: string) {
+  await act(async () => {
+    const editor = body(container);
+    editor.commands.insertContentAt(editor.state.doc.content.size, { type: "paragraph", content: [{ type: "text", text }] });
+  });
+}
+
+/** 保管庫の、フォルダの外の文書のページ 1 枚（id と本文）。 */
+function savedDoc(bridge: FakeBridge): { id: string; markdown: string } {
+  const page = projectPages(bridge.outside.project).find((candidate) => candidate.kind === "doc");
+  if (!page) throw new Error("保管庫に文書のページがありません");
+  return { id: page.id, markdown: bridge.outside.docs[page.id] ?? "" };
+}
+
+/** ⌘S（保存を今すぐにする）。 */
+async function pressSave() {
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", metaKey: true, bubbles: true }));
+  });
+  await waitSave();
+}
+
+/** 保存の 1 回目を止めておく（止めている間に編集できる）。返す関数で通す。 */
+function holdFirstSave(bridge: FakeBridge): () => void {
+  const original = bridge.saveOpenedDocument.bind(bridge);
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  bridge.saveOpenedDocument = async (handle: string, markdown: string) => {
+    calls += 1;
+    if (calls === 1) await held;
+    return original(handle, markdown);
+  };
+  return release;
+}
+
+/** 保存を失敗させる（返す関数で元に戻す）。 */
+function failSaves(bridge: FakeBridge, error: unknown): () => void {
+  const original = bridge.saveOpenedDocument.bind(bridge);
+  bridge.saveOpenedDocument = async () => {
+    throw error;
+  };
+  return () => {
+    bridge.saveOpenedDocument = original;
+  };
+}
+
 describe("Mac の新しい editor の画面", () => {
   it("枠（1 段のヘッダー・左の一覧・本人の行）を出す", async () => {
     const { container } = await render(editorBridge());
@@ -146,6 +196,96 @@ describe("Mac の新しい editor の画面", () => {
     expect(container.querySelector("textarea.page-title")).toBeNull();
     // 本文のファイルは変えない
     expect(bridge.outside.docs[created.id]).toContain("| a | b |");
+  });
+
+  it("保存の最中に来た編集も、成功を報告する前に書き切る", async () => {
+    const bridge = editorBridge();
+    const release = holdFirstSave(bridge);
+    const { container } = await render(bridge);
+    await newPage(container);
+    await appendBody(container, "はじめの本文");
+    // 1 回目の保存が走り出すまで待ち、その最中に続きを書く
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    });
+    await appendBody(container, "あとの本文");
+    // 2 回目の自動保存の timer が、1 回目の保存の最中に来る（ここで取りこぼすと「あとの本文」が書かれない）
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    await act(async () => {
+      release();
+    });
+    await waitSave();
+
+    const saved = savedDoc(bridge);
+    expect(saved.markdown).toContain("はじめの本文");
+    expect(saved.markdown).toContain("あとの本文");
+    expect(container.querySelector("[data-save-state]")?.getAttribute("data-save-state")).toBe("saved");
+  });
+
+  it("保存が失敗した変更は捨てず、ページも替えずに、⌘S で書き直せる", async () => {
+    const bridge = editorBridge();
+    const other = await bridge.createPage(null, { kind: "doc", title: "別のページ", createdAt: new Date(Date.now() - 60_000).toISOString() });
+    const restore = failSaves(bridge, { code: "store_stale_document", message: "文書が変わっています。" });
+    const { container } = await render(bridge);
+    await newPage(container);
+    await appendBody(container, "消えない本文");
+    await waitSave();
+
+    expect(container.querySelector("[data-save-state]")?.getAttribute("data-save-state")).toBe("error");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("別の所で変わりました");
+
+    // 保存できていないのでページを替えない（替えると本文が置き換わって消える）
+    const another = rows(container).find((row) => row.textContent?.includes("別のページ"));
+    await click(another!);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("ページを替えませんでした");
+    expect(body(container).getText()).toContain("消えない本文");
+    expect(bridge.outside.docs[other.id]).toBe("");
+
+    // 書けるようになったら、⌘S で同じ変更を書ける
+    restore();
+    await pressSave();
+    const page = projectPages(bridge.outside.project).find((candidate) => candidate.id !== other.id && candidate.kind === "doc");
+    expect(bridge.outside.docs[page!.id]).toContain("消えない本文");
+    expect(container.querySelector("[data-save-state]")?.getAttribute("data-save-state")).toBe("saved");
+  });
+
+  it("窓を閉じる要求では、書きかけを書き終えてから閉じる", async () => {
+    const bridge = editorBridge();
+    const { container } = await render(bridge);
+    await newPage(container);
+    // 自動保存（250ms）を待たずに閉じる要求が来る
+    await appendBody(container, "閉じる前の本文");
+
+    let closes = false;
+    await act(async () => {
+      closes = await bridge.requestClose();
+    });
+    expect(closes).toBe(true);
+    expect(savedDoc(bridge).markdown).toContain("閉じる前の本文");
+  });
+
+  it("書きかけを保存できないときは、一度閉じるのを止めて知らせる", async () => {
+    const bridge = editorBridge();
+    const restore = failSaves(bridge, { code: "store_stale_document", message: "文書が変わっています。" });
+    const { container } = await render(bridge);
+    await newPage(container);
+    await appendBody(container, "保存できない本文");
+
+    let closes = true;
+    await act(async () => {
+      closes = await bridge.requestClose();
+    });
+    expect(closes).toBe(false);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("もう一度閉じると");
+
+    // もう一度閉じれば閉じる（窓が閉じられなくならないように）
+    await act(async () => {
+      closes = await bridge.requestClose();
+    });
+    expect(closes).toBe(true);
+    restore();
   });
 
   it("capability が無ければ旧い画面のまま", async () => {

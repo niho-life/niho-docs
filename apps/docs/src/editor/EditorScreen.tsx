@@ -43,12 +43,20 @@ import { vaultPages, type VaultPage } from "./vault-pages";
 const SAVE_DELAY_MS = 250;
 /** 打ち続けていても、これだけ経ったら送る。 */
 const SAVE_MAX_MS = 1000;
+/** 窓を閉じる要求で、書き終わるのを待つ上限（旧い画面の workspace-model.ts の CLOSE_FLUSH_MS と同じ）。 */
+const CLOSE_FLUSH_MS = 5000;
 
 type Opened = {
   page: VaultPage;
   handle: string;
   blocks: Block[];
 };
+
+/** まだ書いていない変更（本文は、送る直前にだけ JSON にする）。 */
+type PageChange = { blocks?: () => Block[]; title?: string };
+
+/** 保存できていない変更があるときに、ページを替えなかったことを知らせる文。 */
+const NOT_SAVED_NOTE = "保存できていない変更があるので、ページを替えませんでした（⌘S でもう一度試せます）";
 
 function listItems(pages: readonly VaultPage[], now: number): ShellListItem[] {
   return pages.map((page) => ({
@@ -96,51 +104,88 @@ export function EditorScreen({ bridge, me }: { bridge: DocsHost; me: { name: str
   }, []);
 
   // ===== 自動保存 =====
-  const pending = useRef<{ blocks?: () => Block[]; title?: string } | null>(null);
+  /** まだ書いていない変更。**保存が失敗したらここへ積み直す**（捨てると未保存の本文が消える）。 */
+  const pending = useRef<PageChange | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const since = useRef<number | null>(null);
-  const writing = useRef(false);
+  /** 走っている保存。新しい flush はこれの後ろに並べる（同時に 2 つ書かない・順番を入れ替えない）。 */
+  const chain = useRef<Promise<boolean>>(Promise.resolve(true));
 
-  const flush = useCallback(async () => {
+  /** 1 回分を書く。書けたら null、書けなければ画面に出す理由。 */
+  const write = useCallback(
+    async (current: Opened, change: PageChange): Promise<string | null> => {
+      try {
+        if (change.title !== undefined && change.title !== savedTitle.current) {
+          const next = change.title;
+          await pages.rename(current.page.id, next);
+          savedTitle.current = next;
+          setRows((list) => list.map((row) => (row.id === current.page.id ? { ...row, title: next } : row)));
+        }
+        if (change.blocks) {
+          const saved = await pages.save(current.handle, change.blocks());
+          if (!saved.ok) return saved.problem;
+        }
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : "保存できませんでした";
+      }
+    },
+    [pages],
+  );
+
+  /**
+   * 積んだ変更が無くなるまで書く。**保存の最中に来た編集も、成功を報告する前に書き切る**。
+   * 1 つでも書けなければ、その変更を積み直して false（呼ぶ側は、ページを替えたり窓を閉じたりしない）。
+   */
+  const writeAll = useCallback(async (): Promise<boolean> => {
+    let wrote = false;
+    while (pending.current !== null) {
+      const change = pending.current;
+      const current = openedRef.current;
+      if (!current) {
+        // ページを閉じたので、書く先が無い（積んだ変更は捨てる）
+        pending.current = null;
+        since.current = null;
+        return true;
+      }
+      pending.current = null;
+      setStatus("saving");
+      const problem = await write(current, change);
+      if (problem !== null) {
+        // 失敗した変更は捨てない。書いている間に来た新しい編集は、その上に重ねる
+        pending.current = { ...change, ...(pending.current ?? {}) };
+        setStatus("error");
+        setProblem(problem);
+        return false;
+      }
+      wrote = true;
+      setRows((list) => list.map((row) => (row.id === current.page.id ? { ...row, updatedMs: Date.now() } : row)));
+    }
+    since.current = null;
+    if (wrote) {
+      setStatus("saved");
+      setProblem(null);
+    }
+    return true;
+  }, [write]);
+
+  /** 積んだ変更を今すぐ書く。走っている保存の後ろに並べるので、戻ったときには自分の分も書けている。 */
+  const flush = useCallback((): Promise<boolean> => {
     if (timer.current !== null) {
       clearTimeout(timer.current);
       timer.current = null;
     }
-    const change = pending.current;
-    const current = openedRef.current;
-    if (!change || !current || writing.current) return;
-    pending.current = null;
-    since.current = null;
-    writing.current = true;
-    setStatus("saving");
-    try {
-      if (change.title !== undefined && change.title !== savedTitle.current) {
-        const next = change.title;
-        await pages.rename(current.page.id, next);
-        savedTitle.current = next;
-        setRows((list) => list.map((row) => (row.id === current.page.id ? { ...row, title: next } : row)));
-      }
-      if (change.blocks) {
-        const saved = await pages.save(current.handle, change.blocks());
-        if (!saved.ok) {
-          setStatus("error");
-          setProblem(saved.problem);
-          return;
-        }
-      }
-      setStatus("saved");
-      setProblem(null);
-      setRows((list) => list.map((row) => (row.id === current.page.id ? { ...row, updatedMs: Date.now() } : row)));
-    } catch (error) {
-      setStatus("error");
-      setProblem(error instanceof Error ? error.message : "保存できませんでした");
-    } finally {
-      writing.current = false;
-    }
-  }, [pages]);
+    const next = chain.current.catch(() => false).then(() => writeAll());
+    chain.current = next.catch(() => false);
+    return next;
+  }, [writeAll]);
+
+  /** 画面を離れるとき・窓を閉じるときに読む（effect を貼り直さない）。 */
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
 
   const change = useCallback(
-    (next: { blocks?: () => Block[]; title?: string }) => {
+    (next: PageChange) => {
       pending.current = { ...pending.current, ...next };
       setStatus("saving");
       const start = since.current ?? Date.now();
@@ -188,7 +233,11 @@ export function EditorScreen({ bridge, me }: { bridge: DocsHost; me: { name: str
   const select = useCallback(
     async (id: string) => {
       if (openedRef.current?.page.id === id) return;
-      await flush();
+      // 書き残しを書き切れないうちは、handle を返さない・本文を置き換えない（未保存の本文が消える）
+      if (!(await flush())) {
+        setProblem(NOT_SAVED_NOTE);
+        return;
+      }
       const previous = openedRef.current;
       if (previous) await pages.release(previous.handle);
       const row = rows.find((page) => page.id === id);
@@ -209,12 +258,51 @@ export function EditorScreen({ bridge, me }: { bridge: DocsHost; me: { name: str
     [flush, pages, rows],
   );
 
-  // 画面を閉じるときは、書きかけを送って handle を返す
+  /**
+   * 窓を閉じる要求（旧い画面の useWorkspaceCloseGuard と同じ決まり）。書きかけを書き終えるまで閉じるのを待ち、
+   * 書き切れなかったときは一度だけ閉じるのを止めて知らせる（もう一度閉じれば閉じる。窓が閉じられなくならないように）。
+   * unmount の cleanup では webview の close を止められないので、ここで登録する。
+   */
+  useEffect(() => {
+    let cancelled = false;
+    let warned = false;
+    let unlisten: (() => void) | null = null;
+    void bridge
+      .onCloseRequested?.(async () => {
+        let closeTimer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<boolean>((resolve) => {
+          closeTimer = setTimeout(() => resolve(false), CLOSE_FLUSH_MS);
+        });
+        const saved = await Promise.race([flushRef.current(), timeout]);
+        clearTimeout(closeTimer);
+        if (saved) {
+          warned = false;
+          return true;
+        }
+        if (warned) return true;
+        warned = true;
+        setProblem("本文を保存できませんでした。もう一度閉じると、書きかけは失われます");
+        return false;
+      })
+      .then(
+        (stop) => {
+          if (cancelled) stop?.();
+          else unlisten = stop ?? null;
+        },
+        () => undefined,
+      );
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [bridge]);
+
+  // 画面を離れるときは、書きかけを送ってから handle を返す（cleanup は待てないので、送るだけ）
   useEffect(
     () => () => {
       const current = openedRef.current;
       if (!current) return;
-      void pages.release(current.handle);
+      void flushRef.current().finally(() => void pages.release(current.handle));
     },
     [pages],
   );
@@ -227,7 +315,10 @@ export function EditorScreen({ bridge, me }: { bridge: DocsHost; me: { name: str
         setProblem("この画面では、まだ空のページだけを作れます");
         return;
       }
-      await flush();
+      if (!(await flush())) {
+        setProblem(NOT_SAVED_NOTE);
+        return;
+      }
       const previous = openedRef.current;
       if (previous) await pages.release(previous.handle);
       try {

@@ -75,6 +75,30 @@ describe("限定 AST ↔ Markdown", () => {
     expect(roundTrip(blocks)).toEqual(blocks);
   });
 
+  it("記号を含む本文が、往復で記号のまま残る（斜体・コードに化けない）", () => {
+    for (const text of ["a * b * c", "小計 * 2 個", "値は `code` と書く", "a_b_c", "[かっこ] と ~~波~~", "# シャープ", "- ハイフン", "1. 数字"]) {
+      const blocks: Block[] = [{ type: "paragraph", content: [{ type: "text", text }] }];
+      expect(roundTrip(blocks), text).toEqual(blocks);
+    }
+  });
+
+  it("バックティックを含む本文を保存したあと、同じページをもう一度開ける", () => {
+    const blocks: Block[] = [{ type: "paragraph", content: [{ type: "text", text: "`npm ci` を実行する" }] }];
+    const markdown = blocksToMarkdown(blocks);
+    expect(markdown.ok).toBe(true);
+    if (!markdown.ok) throw new Error(markdown.reason);
+    // escape していないと markdown-it が code の token を作り、限定 AST の外なので開けなくなる
+    const back = markdownToBlocks(markdown.markdown);
+    expect(back.ok).toBe(true);
+    if (!back.ok) throw new Error(back.reason);
+    expect(back.blocks).toEqual(blocks);
+  });
+
+  it("囲みの目印と同じ文字を打っても、囲みにならない", () => {
+    const blocks: Block[] = [{ type: "blockquote", content: [{ type: "paragraph", content: [{ type: "text", text: "[!note]" }] }] }];
+    expect(roundTrip(blocks)).toEqual(blocks);
+  });
+
   it("限定 AST の外の記法は、黙って捨てずに断る", () => {
     for (const markdown of [
       "| a | b |\n| --- | --- |\n| 1 | 2 |",
