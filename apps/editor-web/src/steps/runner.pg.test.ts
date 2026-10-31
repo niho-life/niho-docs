@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { StepError, fakeExecutor, type StepExecutor } from "./executor";
 import { createInlineQueue } from "./inline";
 import { MemoryTaskQueue, taskName } from "./queue";
-import { findRecipe } from "./recipes";
+import { DEFAULT_RECIPES, findRecipeIn } from "./recipes";
 import { runAttempt } from "./runner";
 import { pgStepRunStore } from "./store";
 
@@ -38,7 +38,7 @@ describe.skipIf(databaseUrl === undefined)("runAttempt with PostgreSQL", () => {
   async function begin(recipeId: "tpl-1" | "tpl-2", fromStep = 0, parent?: string) {
     const store = pgStepRunStore(pool);
     const parentId = parent ?? (await new EditorStore(pool).createPage(OWNER, { kind: "rec", blocks: transcript })).id;
-    const created = await store.createRun(OWNER, parentId, { recipe: findRecipe(recipeId)!, fromStep });
+    const created = await store.createRun(OWNER, parentId, { recipe: findRecipeIn(DEFAULT_RECIPES, recipeId)!, fromStep });
     if (created.status !== "created") throw new Error(created.status);
     return { store, parentId, run: created.run };
   }
@@ -49,7 +49,7 @@ describe.skipIf(databaseUrl === undefined)("runAttempt with PostgreSQL", () => {
     const drainAll = async (executor: StepExecutor) => {
       const statuses: string[] = [];
       for (let tasks = queue.drain(); tasks.length > 0; tasks = queue.drain()) {
-        for (const task of tasks) statuses.push((await runAttempt({ store, executor, queue }, task)).status);
+        for (const task of tasks) statuses.push((await runAttempt({ store, recipes: async () => DEFAULT_RECIPES, executor, queue }, task)).status);
       }
       return statuses;
     };
@@ -58,10 +58,10 @@ describe.skipIf(databaseUrl === undefined)("runAttempt with PostgreSQL", () => {
     const done = (await store.listRun(OWNER, parentId))?.run;
     expect(done?.state).toBe("succeeded");
     expect(done?.steps.map((step) => step.stepStatus)).toEqual(["done", "done", "done"]);
-    expect(await store.refreshStale(OWNER, parentId, findRecipe("tpl-1")!)).toBe(0);
+    expect(await store.refreshStale(OWNER, parentId, findRecipeIn(DEFAULT_RECIPES, "tpl-1")!)).toBe(0);
 
     const upstream = await pool.query("SELECT id, blocks FROM pages WHERE parent = $1 ORDER BY id", [parentId]);
-    const rerun = await store.createRun(OWNER, parentId, { recipe: findRecipe("tpl-1")!, fromStep: 1 });
+    const rerun = await store.createRun(OWNER, parentId, { recipe: findRecipeIn(DEFAULT_RECIPES, "tpl-1")!, fromStep: 1 });
     if (rerun.status !== "created") throw new Error(rerun.status);
     await queue.enqueue({ name: taskName(rerun.run.id, 1, 0), runId: rerun.run.id, stepIndex: 1 });
     const failing: StepExecutor = { run: async () => Promise.reject(new StepError("model_timeout", true)) };
@@ -74,7 +74,7 @@ describe.skipIf(databaseUrl === undefined)("runAttempt with PostgreSQL", () => {
 
   it("runs tpl-2 in the same process through the inline queue", async () => {
     const { store, parentId, run } = await begin("tpl-2");
-    const queue = createInlineQueue({ store });
+    const queue = createInlineQueue({ store, recipes: async () => DEFAULT_RECIPES });
     await queue.enqueue({ name: taskName(run.id, 0, 0), runId: run.id, stepIndex: 0 });
     await vi.waitFor(async () => expect((await store.listRun(OWNER, parentId))?.run?.state).toBe("succeeded"), { timeout: 5_000 });
   });

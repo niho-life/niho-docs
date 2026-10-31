@@ -32,7 +32,8 @@ export const SCREENS: ScreenDef[] = [
   { id: "sheet:addDest", label: "発信先を追加（シート）", url: "/destinations + シート" },
   { id: "site", label: "自分のサイト", url: "/destinations/site" },
   { id: "account", label: "役割とつながり", url: "/account" },
-  { id: "settings", label: "設定", url: "/settings" },
+  { id: "settings", label: "設定（モック v6 の全項目）", url: "/settings" },
+  { id: "settings-web", label: "設定（editor-web。#108）", url: "/settings" },
 ];
 
 export const findScreen = (id: string): ScreenDef | undefined => SCREENS.find((screen) => screen.id === id);

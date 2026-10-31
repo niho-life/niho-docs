@@ -5,7 +5,7 @@ import { CloudTasksQueue, METADATA_TOKEN_URL, type CloudTasksConfig } from "../s
 import { StepError, createFakeExecutor, fakeExecutor, type StepExecutor } from "../steps/executor";
 import { MemoryStepRunStore } from "../steps/memory-store";
 import { MemoryTaskQueue, taskName, type TaskQueue } from "../steps/queue";
-import { findRecipe } from "../steps/recipes";
+import { DEFAULT_RECIPES, findRecipeIn } from "../steps/recipes";
 import { verifyGoogleOidc, type OidcVerifyResult } from "./google-oidc";
 import { RUN_BODY_LIMIT, SWEEP_LIMIT, SWEEP_MAX_PAGES, runStepTask, sweepStepTasks, type StepsWorkerDeps } from "./steps-worker-api";
 
@@ -55,6 +55,7 @@ function setup(options: { executor?: StepExecutor; queue?: TaskQueue; config?: C
     config: () => (options.config === undefined ? CONFIG : options.config),
     verify,
     steps,
+    recipes: () => async () => DEFAULT_RECIPES,
     queue: () => queue,
     executor: () => options.executor ?? fakeExecutor,
   };
@@ -63,7 +64,7 @@ function setup(options: { executor?: StepExecutor; queue?: TaskQueue; config?: C
 
 async function startRun(store: MemoryStepRunStore, recipe: "tpl-1" | "tpl-2" = "tpl-1") {
   const parent = store.addPage(OWNER, { kind: "rec", blocks: transcript });
-  const created = await store.createRun(OWNER, parent, { recipe: findRecipe(recipe)! });
+  const created = await store.createRun(OWNER, parent, { recipe: findRecipeIn(DEFAULT_RECIPES, recipe)! });
   if (created.status !== "created") throw new Error(created.status);
   return { parent, runId: created.run.id };
 }

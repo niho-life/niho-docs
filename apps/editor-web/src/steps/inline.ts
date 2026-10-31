@@ -25,7 +25,7 @@ export function resolveStepsMode(env: Readonly<Record<string, string | undefined
   }
 }
 
-export type InlineQueueDeps = Pick<RunnerDeps, "store" | "leaseSeconds" | "retryDelaySeconds"> & {
+export type InlineQueueDeps = Pick<RunnerDeps, "store" | "recipes" | "leaseSeconds" | "retryDelaySeconds"> & {
   executor?: StepExecutor;
   /** 想定外の失敗の知らせ（既定はログに名前だけを書く）。 */
   onError?: (error: unknown) => void;

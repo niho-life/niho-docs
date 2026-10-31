@@ -4,6 +4,7 @@ import type { AuthProvider } from "../auth/types";
 import { fakeExecutor } from "../steps/executor";
 import { MemoryStepRunStore } from "../steps/memory-store";
 import { MemoryTaskQueue, taskName, type TaskQueue } from "../steps/queue";
+import { DEFAULT_RECIPES, recipesOf, type RecipeDef } from "../steps/recipes";
 import { runAttempt } from "../steps/runner";
 import { MAX_BODY_BYTES } from "./http";
 import { cancelStepRun, createStepRun, getSteps, type RunView, type StepsApiDeps } from "./steps-api";
@@ -30,10 +31,11 @@ function authAs(userId: string | null): AuthProvider {
 function deps(
   userId: string | null,
   store: MemoryStepRunStore | null,
-  options: { env?: Record<string, string | undefined>; queue?: TaskQueue | null } = {},
+  options: { env?: Record<string, string | undefined>; queue?: TaskQueue | null; recipes?: readonly RecipeDef[] } = {},
 ): StepsApiDeps {
   const queue = options.queue === undefined ? new MemoryTaskQueue() : options.queue;
-  return { auth: () => authAs(userId), steps: () => store, queue: () => queue, env: options.env ?? INLINE };
+  const recipes = options.recipes ?? DEFAULT_RECIPES;
+  return { auth: () => authAs(userId), steps: () => store, recipes: () => async () => recipes, queue: () => queue, env: options.env ?? INLINE };
 }
 
 function request(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Request {
@@ -81,6 +83,37 @@ describe("/api/pages/{id}/steps", () => {
     expect(queue.drain()).toEqual([{ name: taskName(run.id, 0, 0), runId: run.id, stepIndex: 0 }]);
   });
 
+  it("uses the 手順 of the person who owns the page (設定で変えた名前・足した手順。#108)", async () => {
+    const { store, recording } = setup();
+    // 既定の tpl-2 に手を入れ、足した手順も 1 つ持っている人
+    const recipes = recipesOf([
+      { id: "tpl-2", name: "議事録（短め）", guide: "短く", steps: [{ id: "d9c3x7mf", name: "要点", instruction: "要点だけ。" }] },
+      { id: "r-talk", name: "対談", guide: "", steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。" }] },
+    ]);
+    const d = deps("user-a", store, { recipes });
+
+    const edited = await runOf(await start(recording, { recipe: "tpl-2" }, d));
+    expect(edited.steps.map((step) => [step.id, step.name])).toEqual([["d9c3x7mf", "要点"]]);
+
+    const other = store.addPage("user-a", { kind: "rec", blocks: transcript });
+    const addedRun = await start(other, { recipe: "r-talk" }, d);
+    expect(addedRun.status).toBe(202);
+    expect((await runOf(addedRun)).steps.map((step) => [step.id, step.name])).toEqual([["s-1", "まとめ"]]);
+  });
+
+  it("answers 400 for a 手順 the person does not have, and 503 when the 手順 cannot be read", async () => {
+    const { store, recording } = setup();
+    const only = deps("user-a", store, { recipes: DEFAULT_RECIPES });
+    for (const recipe of ["r-talk", "tpl-4", "TPL-1", "", "tpl 1"]) {
+      const response = await start(recording, { recipe }, only);
+      expect(response.status, recipe).toBe(400);
+      expect(await response.text()).toBe('{"error":"bad_request"}');
+    }
+    const broken: StepsApiDeps = { ...only, recipes: () => null };
+    expect((await start(recording, { recipe: "tpl-1" }, broken)).status).toBe(503);
+    expect((await read(recording, broken)).status).toBe(503);
+  });
+
   it("returns the same run for the same Idempotency-Key and queues it once", async () => {
     const { store, recording } = setup();
     const queue = new MemoryTaskQueue();
@@ -122,7 +155,7 @@ describe("/api/pages/{id}/steps", () => {
 
     const created = await runOf(await start(recording, { recipe: "tpl-1" }, d));
     for (let tasks = queue.drain(); tasks.length > 0; tasks = queue.drain()) {
-      for (const task of tasks) await runAttempt({ store, executor: fakeExecutor, queue }, task);
+      for (const task of tasks) await runAttempt({ store, recipes: async () => DEFAULT_RECIPES, executor: fakeExecutor, queue }, task);
     }
     const refresh = vi.spyOn(store, "refreshStale");
     const done = await runOf(await read(recording, d));

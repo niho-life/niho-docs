@@ -72,6 +72,21 @@ export {
 export { DestinationsPage, SitePage, type DestinationRow, type DestinationsPageProps, type SitePageProps } from "./destinations";
 export { AccountPage, type AccountLink, type AccountPageProps, type AccountRole } from "./account";
 export {
+  EDITOR_SETTINGS_NAV,
+  EDITOR_SETTINGS_TEXT,
+  EditorSettingsPage,
+  type EditorSettingsAiLang,
+  type EditorSettingsEngine,
+  type EditorSettingsPageProps,
+  type EditorSettingsRecipe,
+  type EditorSettingsStep,
+  type EditorSettingsStorage,
+  type EditorSettingsTerm,
+  type EditorSettingsTermDraft,
+  type EditorSettingsTranscription,
+  type EditorSettingsUsage,
+} from "./editor-settings";
+export {
   SettingsPage,
   type SettingsAiLang,
   type SettingsEngine,
