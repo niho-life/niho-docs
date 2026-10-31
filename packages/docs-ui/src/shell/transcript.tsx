@@ -305,18 +305,22 @@ export function ShellRecording({
         </button>
       </div>
       <div className="es-tr">
-        {segments.map((segment) => (
-          <div key={segment.id} className={`es-seg${segment.current && !editing ? " es-seg--cur" : ""}`}>
-            <div className="es-who">
-              <span>
-                <i className={`es-tone es-tone--${segment.tone}`} aria-hidden="true" />
-                {segment.who}
-              </span>
-              {timestamps && <time>{segment.time}</time>}
+        {segments.map((segment) => {
+          // 時刻の無い段落（空文字）は、時刻を出さない
+          const time = timestamps && segment.time !== "" ? segment.time : null;
+          return (
+            <div key={segment.id} className={`es-seg${segment.current && !editing ? " es-seg--cur" : ""}`}>
+              <div className="es-who">
+                <span>
+                  <i className={`es-tone es-tone--${segment.tone}`} aria-hidden="true" />
+                  {segment.who}
+                </span>
+                {time && <time>{time}</time>}
+              </div>
+              <SegmentText id={segment.id} text={segment.text} label={`${segment.who}${time ? ` ${time}` : ""} の文字起こし`} onChange={onSegmentChange} />
             </div>
-            <SegmentText id={segment.id} text={segment.text} label={`${segment.who}${timestamps ? ` ${segment.time}` : ""} の文字起こし`} onChange={onSegmentChange} />
-          </div>
-        ))}
+          );
+        })}
       </div>
       {editing && (
         <div className="es-trhint">

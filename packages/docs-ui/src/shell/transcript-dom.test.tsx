@@ -180,6 +180,12 @@ describe("ShellRecording: 表示", () => {
     expect(legacy).not.toMatch(/aria-pressed="[a-z]+"[^>]*>タイムスタンプ/);
   });
 
+  it("時刻の無い段落（time が空）は、時刻の欄も名前の中の時刻も出さない", () => {
+    const html = renderToStaticMarkup(<ShellRecording segments={[{ ...SEGMENTS[0]!, time: "" }, SEGMENTS[1]!]} speakers={SPEAKERS} />);
+    expect(html).toContain('aria-label="Takuya の文字起こし"');
+    expect(html.match(/<time>/g)).toHaveLength(1);
+  });
+
   it("話者は 6 色まで。どの色も class になる", () => {
     expect(SHELL_TONES).toEqual(["a", "b", "c", "d", "e", "f"]);
     const html = renderToStaticMarkup(
