@@ -174,6 +174,9 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [meOpen, setMeOpen] = useState(false);
   const [search, setSearch] = useState({ open: false, value: "" });
+  // ページを削除するたびに増やす。検索の結果は削除の前の答えのことがあり、読み込んでいない子ページはここでは分からないので、
+  // サーバーにもう一度聞く（その間も、この画面で消したと分かっているページは結果から外す）
+  const [removedTick, setRemovedTick] = useState(0);
   // ⌘K のたびに増やし、検索の入力へフォーカスを移す合図にする（すでに開いているときも）
   const [searchFocus, setSearchFocus] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -201,7 +204,20 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
       setList((current) => {
         if (current.next !== cursor) return current;
         const known = new Set(current.pages.map((page) => page.id));
-        return { ...current, pages: [...current.pages, ...chunk.pages.filter((page) => !known.has(page.id))], next: chunk.next };
+        // 要求を出してから削除した場合、返ってきた区切りは削除の前の一覧のこと。削除したページと、その下のページ（この区切りに
+        // 載っているもの。親が区切りの中で先に出るとは限らないので、増えなくなるまで）は戻さない
+        const dead = new Set(current.gone);
+        for (let grew = true; grew; ) {
+          grew = false;
+          for (const page of chunk.pages) {
+            if (!dead.has(page.id) && page.parent !== null && dead.has(page.parent)) {
+              dead.add(page.id);
+              grew = true;
+            }
+          }
+        }
+        const fresh = chunk.pages.filter((page) => !known.has(page.id) && !dead.has(page.id));
+        return { ...current, pages: [...current.pages, ...fresh], next: chunk.next, gone: dead.size === current.gone.size ? current.gone : dead };
       });
     } catch {
       // 次に末尾が見えたときにもう一度
@@ -241,13 +257,15 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
         const page: PageSummary = { id, kind, title, lang: "ja", parent: null, stepStatus: null, createdAt: at, updatedAt: at };
         setList((current) => ({ ...current, pages: toTop(current.pages, page) }));
       },
-      pageRemoved: (id) =>
+      pageRemoved: (id) => {
+        setRemovedTick((tick) => tick + 1);
         setList((current) => {
           const pages = withoutPageTree(current.pages, id);
           const kept = new Set(pages.map((page) => page.id));
           const gone = new Set([...current.gone, id, ...current.pages.filter((page) => !kept.has(page.id)).map((page) => page.id)]);
           return { ...current, pages, gone, opened: current.opened && gone.has(current.opened.id) ? null : current.opened };
-        }),
+        });
+      },
       attachPage: (page) => {
         attachedRef.current = page;
         setAttached(page);
@@ -280,7 +298,7 @@ export function EditorFrame({ initial, children }: { initial: FrameInitial; chil
 
   // 打つたびにサーバーで探す（題名と本文）。検索語が空のあいだは、ふつうの一覧のまま
   const searching = search.open && search.value.trim() !== "";
-  const found = usePageSearch(search.open ? search.value : "");
+  const found = usePageSearch(search.open ? search.value : "", { refresh: removedTick });
   const hits = useMemo(() => found.results.filter((hit) => !list.gone.has(hit.id)), [found.results, list.gone]);
   const items = useMemo(
     () => (searching ? searchRows(hits, now) : arrangeSidebarItems(list.pages, { now })),

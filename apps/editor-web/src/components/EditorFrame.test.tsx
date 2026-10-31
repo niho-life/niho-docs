@@ -580,6 +580,61 @@ describe("EditorFrame: the header's state and the … menu (#34)", () => {
     expect(container!.querySelector('.es-sb-list [role="status"]')?.textContent).toBe("1 件");
   });
 
+  it("delete: asks the server for the search results again, so a subpage that was never loaded goes too", async () => {
+    const E = "00000000-0000-4000-8000-00000000000e";
+    const hit = (id: string, title: string) => ({ id, kind: "note", title, snippet: "朝", updatedAt: UPDATED_AT });
+    let deleted = false;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") {
+        deleted = true;
+        return new Response(null, { status: 204 });
+      }
+      // サーバーは、削除したページの下のページも削除済み。削除の前の答えには E（読み込んでいない子ページ）が載っている
+      return json(200, { results: deleted ? [hit(D, "別のページ")] : [hit(A, "合成の題名"), hit(E, "手順の結果"), hit(D, "別のページ")] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await mount({ pages: [page(A, "合成の題名"), page(D, "別のページ")] }, <FakePage page={fakePage(A)} />);
+    await act(async () => container!.querySelector<HTMLButtonElement>('button[aria-label="探す"]')!.click());
+    const input = container!.querySelector<HTMLInputElement>('input[type="search"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "朝");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 260)));
+    expect(rows()).toEqual(["合成の題名", "手順の結果", "別のページ"]);
+    await choose("削除");
+    await act(async () => dialogButton("削除する").click());
+    await tick();
+    // 消したと分かっているページはすぐ外れ、そのあとサーバーの新しい答えで、読み込んでいなかった子ページも外れる
+    expect(rows()).toContain("別のページ");
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 260)));
+    expect(rows()).toEqual(["別のページ"]);
+    expect(container!.querySelector('.es-sb-list [role="status"]')?.textContent).toBe("1 件");
+    expect(fetchMock.mock.calls.filter(([url]) => url.startsWith("/api/search"))).toHaveLength(2);
+  });
+
+  it("delete: a page chunk requested before the delete does not bring the page or its subpages back", async () => {
+    const E = "00000000-0000-4000-8000-00000000000e";
+    const F = "00000000-0000-4000-8000-00000000000f";
+    const chunk = deferred<Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => (init?.method === "DELETE" ? new Response(null, { status: 204 }) : chunk.promise)),
+    );
+    await mount({ pages: [page(A, "合成の題名"), page(D, "別のページ")], next: "cursor-1" }, <FakePage page={fakePage(A)} />);
+    await intersect();
+    // 要求の途中で A を削除する
+    await choose("削除");
+    await act(async () => dialogButton("削除する").click());
+    await tick();
+    expect(rows()).toEqual(["別のページ"]);
+    // 削除の前の一覧が返ってくる: A、A の子 E、E の子 F（子が親より先に並ぶこともある）、関係ない C
+    await act(async () =>
+      chunk.resolve(chunkResponse([{ ...page(F, "孫"), parent: E }, { ...page(E, "子"), parent: A }, page(A, "合成の題名"), page(C, "関係ないページ")], null)),
+    );
+    expect(rows()).toEqual(["別のページ", "関係ないページ"]);
+  });
+
   it("acts on the page the … belongs to: after moving to another page, an old result neither moves nor shows there", async () => {
     const answer = deferred<Response>();
     vi.stubGlobal("fetch", vi.fn(() => answer.promise));
