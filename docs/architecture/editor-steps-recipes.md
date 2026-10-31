@@ -45,6 +45,8 @@
 
 **移すときの救い**は、`recipes.ts` が既に `RecipeReader = (owner) => Promise<readonly RecipeDef[]>` という口を切っていること。置き場を替えても変わるのは `apps/editor-web/src/server/steps-deps.ts` の `ownerRecipes()` **1 関数**で、受付 API・worker・runner・画面は触らない（#108 がこの口を作ってくれた形がそのまま効く）。
 
+**ただし 1 か所、口を通っていない読み手がある。** 開発・CI の inline 実行の `createInlineQueue`（同じ `steps-deps.ts`）は、`recipes:` に自分用の reader を渡し、`getEditorSettings(pool, owner).recipes` を直接読んでいる。`ownerRecipes()` だけ替えると、受付 API は新しい表の定義を読み、inline の実行は古い jsonb の定義を読む（または新しく作った手順が見つからない）形になる。**移すときは、この reader も `ownerRecipes()` を使うようにして、読み手を 1 つにする**（移行の範囲に含め、受付 API と inline の実行が同じ手順を見ることをテストで固定する）。
+
 **`samples` は hot path から外す。** お手本の本文は `recipe_samples`（別の表か、同じ表の別の列）に置き、`RecipeDef` には**名前と字数だけ**を載せる。本文を読むのは (a) 文書ガイドの抽出のとき、(b)（もし入力に入れるなら）段階の実行のとき、の 2 つだけ。帯の polling では読まない。
 
 ### 1.3 docs-core の `Flow` と `recipes` の表の対応
