@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { API_CSP, buildCsp, newNonce } from "./csp";
+import { API_CSP, AUDIO_UPLOAD_ORIGIN, buildCsp, newNonce } from "./csp";
 
 const NONCE = "c3ludGhldGljLW5vbmNl";
 
@@ -24,7 +24,18 @@ describe("buildCsp (production)", () => {
     expect(directive(policy, "base-uri")).toEqual(["'self'"]);
     expect(directive(policy, "form-action")).toEqual(["'self'"]);
     expect(directive(policy, "frame-ancestors")).toEqual(["'none'"]);
-    expect(policy).not.toMatch(/https?:|\*/);
+    expect(policy).not.toMatch(/\*/);
+    expect(policy).not.toContain("http:");
+    // 外部の origin は connect-src の GCS（音声の PUT）だけ
+    const origins = policy.split("; ").flatMap((part) => [...part.matchAll(/https:\S*/g)].map((match) => `${part.split(" ")[0]} ${match[0]}`));
+    expect(origins).toEqual([`connect-src ${AUDIO_UPLOAD_ORIGIN}`]);
+  });
+
+  it("keeps every other directive as it was", () => {
+    expect(directive(policy, "img-src")).toEqual(["'self'", "data:", "blob:"]);
+    expect(directive(policy, "media-src")).toEqual(["'self'", "blob:"]);
+    expect(directive(policy, "font-src")).toEqual(["'self'"]);
+    expect(directive(policy, "style-src")).toEqual(["'self'", "'unsafe-inline'"]);
   });
 
   it("allows the manifest and the service worker only from this origin, and upgrades insecure requests", () => {
@@ -33,8 +44,9 @@ describe("buildCsp (production)", () => {
     expect(policy).toContain("upgrade-insecure-requests");
   });
 
-  it("limits connections to this origin (no WebSocket)", () => {
-    expect(directive(policy, "connect-src")).toEqual(["'self'"]);
+  it("limits connections to this origin and the audio upload to GCS (no WebSocket)", () => {
+    expect(AUDIO_UPLOAD_ORIGIN).toBe("https://storage.googleapis.com");
+    expect(directive(policy, "connect-src")).toEqual(["'self'", "https://storage.googleapis.com"]);
   });
 });
 
@@ -43,7 +55,7 @@ describe("buildCsp (development)", () => {
 
   it("adds only what next dev needs: unsafe-eval for scripts and a WebSocket for HMR, and no upgrade-insecure-requests", () => {
     expect(directive(policy, "script-src")).toContain("'unsafe-eval'");
-    expect(directive(policy, "connect-src")).toEqual(["'self'", "ws:", "wss:"]);
+    expect(directive(policy, "connect-src")).toEqual(["'self'", "https://storage.googleapis.com", "ws:", "wss:"]);
     expect(policy).not.toContain("upgrade-insecure-requests");
   });
 });

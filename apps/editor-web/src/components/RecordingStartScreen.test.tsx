@@ -8,7 +8,12 @@ const frame = { pageCreated: vi.fn(), pageTitleChanged: vi.fn(), pageSaved: vi.f
 
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 vi.mock("./EditorFrame", () => ({ useEditorFrame: () => frame }));
+// jsdom の <audio> はメタデータを読まないので、長さは偽物にする（既定は「分からない」）
+vi.mock("@/lib/audio-duration", () => ({ probeAudioDuration: vi.fn(async () => null) }));
 
+import { createHash } from "node:crypto";
+import { probeAudioDuration } from "@/lib/audio-duration";
+import { resetAudioLimitsCache } from "@/lib/audio-upload-client";
 import { RecordingStartScreen } from "./RecordingStartScreen";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -42,8 +47,122 @@ function respond(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+// ---- 音声の取り込み（#36 段 3b-1）の偽物。合成の値だけ（ticket の url はダミー） ----
+
+const TICKET_URL = "https://storage.example.test/upload?session=synthetic";
+const LIMITS = {
+  maxBytes: 2 * 1024 ** 3,
+  maxDurationSec: 21600,
+  retentionDays: 30,
+  extensions: ["m4a", "mp3", "wav", "aac", "ogg", "flac", "webm"],
+  contentTypes: ["audio/mp4", "audio/x-m4a", "audio/m4a", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/wave", "audio/aac", "audio/ogg", "audio/flac", "audio/x-flac", "audio/webm"],
+};
+const audioPage = { id: PAGE_ID, kind: "rec", title: "合成の会議", lang: "ja", createdAt: "2030-01-01T00:00:00.000Z", updatedAt: "2030-01-01T00:00:00.000Z" };
+const audioRecording = (status: "uploading" | "uploaded") => ({ ...created.recording, source: "audio", segments: [], speakerNames: {}, audio: { status, bytes: 3, contentType: "audio/mp4", expiresAt: "2030-01-31T03:00:00.000Z" } });
+
+type Route = () => Response | Promise<Response>;
+/** 同じ origin の API の偽物（上限・開始・完了）。 */
+function audioApi(routes: { limits?: Route; start?: Route; complete?: Route } = {}) {
+  const fetchMock = vi.fn(async (resource: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(resource);
+    void init;
+    if (path === "/api/recordings/audio/limits") return routes.limits ? routes.limits() : respond(200, LIMITS);
+    if (path === "/api/recordings/audio/start") {
+      return routes.start ? routes.start() : respond(201, { page: audioPage, recording: audioRecording("uploading"), speakers: [], upload: { url: TICKET_URL, method: "PUT", headers: { "Content-Type": "audio/mp4" }, expiresAt: "2030-01-08T00:00:00.000Z", maxBytes: 3 } });
+    }
+    if (path === `/api/pages/${PAGE_ID}/recording/audio/complete`) return routes.complete ? routes.complete() : respond(200, { recording: audioRecording("uploaded"), speakers: [] });
+    throw new Error(`unexpected ${path}`);
+  });
+  const calls = (path: string) => fetchMock.mock.calls.filter(([resource]) => String(resource) === path);
+  return { fetchMock, calls };
+}
+
+/** XMLHttpRequest の偽物。send されたら xhrScript を呼ぶ。 */
+let xhrScript: (xhr: FakeXhr) => void = (xhr) => xhr.respond(200);
+class FakeXhr {
+  static created: FakeXhr[] = [];
+  url = "";
+  headers: Record<string, string> = {};
+  body: Blob | null = null;
+  status = 0;
+  withCredentials = true;
+  aborted = false;
+  upload: { onprogress: ((event: { loaded: number; total: number; lengthComputable: boolean }) => void) | null } = { onprogress: null };
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onabort: (() => void) | null = null;
+  ontimeout: (() => void) | null = null;
+  constructor() {
+    FakeXhr.created.push(this);
+  }
+  open(_method: string, url: string) {
+    this.url = url;
+  }
+  setRequestHeader(name: string, value: string) {
+    this.headers[name] = value;
+  }
+  send(body: Blob) {
+    this.body = body;
+    xhrScript(this);
+  }
+  abort() {
+    this.aborted = true;
+    this.onabort?.();
+  }
+  progress(loaded: number, total: number) {
+    this.upload.onprogress?.({ loaded, total, lengthComputable: true });
+  }
+  respond(status: number) {
+    this.status = status;
+    this.onload?.();
+  }
+}
+
+/** マイクの偽物（getUserMedia・MediaRecorder・トラック）。 */
+function installMic(options: { deny?: string; noRecorder?: boolean } = {}) {
+  const tracks: { stopped: boolean; stop: () => void; addEventListener: () => void }[] = [];
+  const recorders: { emit: (bytes: number[]) => void }[] = [];
+  const getUserMedia = vi.fn(async () => {
+    if (options.deny) throw Object.assign(new Error(options.deny), { name: options.deny });
+    const track = { stopped: false, stop: () => (track.stopped = true), addEventListener: () => undefined };
+    tracks.push(track);
+    return { getTracks: () => [track] } as unknown as MediaStream;
+  });
+  Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia }, configurable: true });
+  class FakeRecorder {
+    static isTypeSupported = (type: string) => type === "audio/webm;codecs=opus";
+    state = "inactive";
+    mimeType: string;
+    ondataavailable: ((event: { data: Blob }) => void) | null = null;
+    onstop: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor(_stream: MediaStream, init?: { mimeType?: string }) {
+      this.mimeType = init?.mimeType ?? "audio/webm";
+      recorders.push(this);
+    }
+    start() {
+      this.state = "recording";
+    }
+    emit(bytes: number[]) {
+      this.ondataavailable?.({ data: new Blob([new Uint8Array(bytes)], { type: this.mimeType }) });
+    }
+    stop() {
+      this.state = "inactive";
+      this.emit([7]);
+      this.onstop?.();
+    }
+  }
+  if (options.noRecorder) vi.stubGlobal("MediaRecorder", undefined);
+  else vi.stubGlobal("MediaRecorder", FakeRecorder);
+  return { getUserMedia, tracks, recorders };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  resetAudioLimitsCache();
+  FakeXhr.created = [];
+  xhrScript = (xhr) => xhr.respond(200);
+  vi.stubGlobal("XMLHttpRequest", FakeXhr);
 });
 afterEach(async () => {
   await act(async () => root?.unmount());
@@ -51,6 +170,7 @@ afterEach(async () => {
   root = null;
   container = null;
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 async function mount() {
@@ -83,10 +203,13 @@ async function settle() {
 }
 
 describe("RecordingStartScreen", () => {
-  it("accepts only .vtt and .vtt text/vtt files in the file picker", async () => {
+  it("accepts .vtt and the audio formats in the file picker, and names them in the drop area", async () => {
     await mount();
-    expect(fileInput().accept).toBe(".vtt,text/vtt");
+    const accept = fileInput().accept.split(",");
+    expect(accept.slice(0, 2)).toEqual([".vtt", "text/vtt"]);
+    expect(accept).toEqual(expect.arrayContaining([".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac", ".webm", "audio/mp4", "audio/webm"]));
     expect(fileInput().hidden).toBe(true);
+    expect(container!.textContent).toContain(".m4a .mp3 .wav .aac .ogg .flac .webm、文字起こし済みの .vtt も");
   });
 
   it("opens the file picker from the drop area, and shows the chosen file", async () => {
@@ -140,29 +263,21 @@ describe("RecordingStartScreen", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("tells that audio files are not available yet, and keeps nothing", async () => {
-    const fetchMock = vi.fn();
+  it("takes audio files (any listed format) and asks for a file when none is chosen", async () => {
+    const { fetchMock } = audioApi();
     vi.stubGlobal("fetch", fetchMock);
     await mount();
-    for (const name of ["talk.m4a", "talk.mp3", "TALK.WAV"]) {
-      await choose(new File(["x"], name, { type: "audio/x" }));
-      expect(status()).toContain("音声ファイルの文字起こしは、まだ使えません");
-      expect(container!.textContent).not.toContain(name);
+    await start();
+    expect(alertText()).toBe("取り込むファイルを選んでください。");
+    for (const name of ["talk.m4a", "talk.mp3", "TALK.WAV", "talk.flac", "録音 2030-01-02 09-05.webm"]) {
+      await choose(new File(["x"], name, { type: "" }));
+      await settle();
+      expect(container!.textContent).toContain(name);
+      expect(alertText()).toBe("");
+      expect(buttonByText("取り込む")).toBeTruthy();
     }
-    await start();
-    expect(alertText()).toBe("取り込む .vtt ファイルを選んでください。");
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("tells that the microphone is not available yet", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    await mount();
-    await act(async () => buttonByText("録音する").click());
-    expect(status()).toContain("マイクでの録音は、まだ使えません");
-    await start();
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(router.push).not.toHaveBeenCalled();
+    // 調べたのは上限だけ（「取り込む」を押すまで何も送らない）
+    expect(fetchMock.mock.calls.map(([path]) => String(path))).toEqual(["/api/recordings/audio/limits"]);
   });
 
   it("refuses a file over 4 MiB before sending, and other kinds of file", async () => {
@@ -227,5 +342,251 @@ describe("RecordingStartScreen", () => {
     await settle();
     expect(alertText()).toContain("大きすぎます");
     expect(container!.textContent).toContain("a.vtt");
+  });
+});
+
+async function until(check: () => boolean) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (check()) return;
+    await settle();
+  }
+  throw new Error("condition not met");
+}
+
+const progressBar = () => container!.querySelector("progress");
+const audioFile = (name = "合成の会議.m4a", bytes = [1, 2, 3], type = "audio/mp4") => new File([new Uint8Array(bytes)], name, { type });
+const fireBeforeUnload = () => {
+  const event = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(event);
+  return event.defaultPrevented;
+};
+
+describe("RecordingStartScreen（音声ファイル）", () => {
+  it("imports an audio file with progress: hashes, starts with a key, PUTs to the ticket, completes, and moves to the recording page", async () => {
+    const { fetchMock, calls } = audioApi();
+    vi.stubGlobal("fetch", fetchMock);
+    let sending: FakeXhr | null = null;
+    xhrScript = (xhr) => {
+      sending = xhr;
+      xhr.progress(1, 3);
+    };
+    await mount();
+    await choose(audioFile());
+    await settle();
+    expect(container!.textContent).toContain("合成の会議.m4a");
+    expect(container!.textContent).toContain("1 KB · 別のファイルを選ぶ");
+    await start("取り込む");
+    await until(() => sending !== null);
+    // 送っている途中: 進み具合（progress）・段階の読み上げ・中止
+    await until(() => progressBar()?.value === 33);
+    expect(progressBar()!.max).toBe(100);
+    expect(progressBar()!.getAttribute("aria-label")).toBe("取り込みの進み具合");
+    expect(status()).toBe("送っています");
+    expect(container!.querySelector('[role="status"]')!.getAttribute("aria-live")).toBe("polite");
+    expect(buttonByText("中止")).toBeTruthy();
+    expect(fireBeforeUnload()).toBe(true);
+    const start1 = calls("/api/recordings/audio/start")[0]![1]!;
+    expect((start1.headers as Record<string, string>)["idempotency-key"]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(JSON.parse(start1.body as string)).toEqual({ name: "合成の会議.m4a", contentType: "audio/mp4", sizeBytes: 3, sha256: createHash("sha256").update(new Uint8Array([1, 2, 3])).digest("hex") });
+    expect(sending!.url).toBe(TICKET_URL);
+    expect(sending!.withCredentials).toBe(false);
+    expect(sending!.headers).toEqual({ "Content-Type": "audio/mp4" });
+    await act(async () => sending!.respond(200));
+    await until(() => router.push.mock.calls.length > 0);
+    expect(calls(`/api/pages/${PAGE_ID}/recording/audio/complete`)).toHaveLength(1);
+    expect(frame.pageCreated).toHaveBeenCalledWith(PAGE_ID, "合成の会議", "rec");
+    expect(router.push).toHaveBeenCalledWith(`/p/${PAGE_ID}`);
+    expect(alertText()).toBe("");
+  });
+
+  it("shows the length when the browser can read it", async () => {
+    vi.mocked(probeAudioDuration).mockResolvedValueOnce(878.4);
+    vi.stubGlobal("fetch", audioApi().fetchMock);
+    await mount();
+    await choose(audioFile());
+    await settle();
+    expect(container!.textContent).toContain("14:38 · 1 KB · 別のファイルを選ぶ");
+  });
+
+  it("takes a dropped audio file", async () => {
+    vi.stubGlobal("fetch", audioApi().fetchMock);
+    await mount();
+    const target = container!.querySelector(".es-start")!.parentElement!;
+    const event = new Event("drop", { bubbles: true, cancelable: true }) as Event & { dataTransfer: { files: File[] } };
+    event.dataTransfer = { files: [audioFile("dropped.wav", [1], "audio/wav")] };
+    await act(async () => {
+      target.dispatchEvent(event);
+    });
+    expect(container!.textContent).toContain("dropped.wav");
+    expect(buttonByText("取り込む")).toBeTruthy();
+  });
+
+  it("refuses before sending: over the limit (from the server), an unknown format, an empty file", async () => {
+    const { fetchMock, calls } = audioApi({ limits: () => respond(200, { ...LIMITS, maxBytes: 1024 * 1024 }) });
+    vi.stubGlobal("fetch", fetchMock);
+    await mount();
+    await choose(new File([new Uint8Array(1024 * 1024 + 1)], "大きい.m4a", { type: "audio/mp4" }));
+    await settle();
+    expect(alertText()).toBe("ファイルが大きすぎます。音声は 1 MiB までです。");
+    expect(container!.textContent).not.toContain("大きい.m4a");
+    await choose(new File(["x"], "talk.opus", { type: "audio/opus" }));
+    expect(alertText()).toContain("音声ファイルか、文字起こし済みの .vtt ファイルを選んでください");
+    await choose(audioFile("空.m4a", []));
+    expect(alertText()).toContain("ファイルが空です");
+    expect(container!.textContent).not.toContain("空.m4a");
+    expect(calls("/api/recordings/audio/start")).toHaveLength(0);
+    expect(FakeXhr.created).toHaveLength(0);
+  });
+
+  it("cancels while sending: keeps the file, says so politely, and takes it in again with the same key", async () => {
+    const { fetchMock, calls } = audioApi();
+    vi.stubGlobal("fetch", fetchMock);
+    xhrScript = (xhr) => xhr.progress(1, 3);
+    await mount();
+    await choose(audioFile());
+    await start("取り込む");
+    await until(() => FakeXhr.created.length === 1 && progressBar() !== null);
+    await act(async () => buttonByText("中止").click());
+    await until(() => progressBar() === null);
+    expect(FakeXhr.created[0]!.aborted).toBe(true);
+    expect(status()).toBe("取り込みを中止しました。");
+    expect(alertText()).toBe("");
+    expect(container!.textContent).toContain("合成の会議.m4a");
+    expect(fireBeforeUnload()).toBe(false);
+    expect(calls(`/api/pages/${PAGE_ID}/recording/audio/complete`)).toHaveLength(0);
+
+    xhrScript = (xhr) => xhr.respond(200);
+    await start("取り込む");
+    await until(() => router.push.mock.calls.length > 0);
+    const keys = calls("/api/recordings/audio/start").map(([, init]) => (init!.headers as Record<string, string>)["idempotency-key"]);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it("shows failures as an alert in Japanese without the url, and lets me try again", async () => {
+    const { fetchMock } = audioApi({ start: () => respond(503, { error: "storage_unavailable" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    await mount();
+    await choose(audioFile());
+    await start("取り込む");
+    await until(() => alertText() !== "");
+    expect(alertText()).toBe("いまは音声を取り込めません。少ししてから、もう一度試してください。");
+    expect(container!.querySelector('[role="alert"]')).not.toBeNull();
+
+    vi.stubGlobal("fetch", audioApi().fetchMock);
+    xhrScript = (xhr) => xhr.onerror?.();
+    await start("取り込む");
+    await until(() => alertText().includes("送れませんでした"));
+    expect(alertText()).toBe("音声を送れませんでした。ネットワークを確かめて、もう一度試してください。");
+    expect(container!.textContent).not.toContain("storage.example.test");
+    expect(container!.textContent).toContain("合成の会議.m4a");
+    expect(router.push).not.toHaveBeenCalled();
+  });
+});
+
+describe("RecordingStartScreen（マイク）", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, "mediaDevices");
+  });
+
+  it("records: start, elapsed time, stop; the recording is taken in like a file and opens the recording page", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2030, 0, 2, 9, 5, 30));
+    const mic = installMic();
+    const { fetchMock, calls } = audioApi();
+    vi.stubGlobal("fetch", fetchMock);
+    await mount();
+    await act(async () => buttonByText("録音する").click());
+    expect(buttonByText("録音する").getAttribute("aria-pressed")).toBe("true");
+    await start("録音をはじめる");
+    await until(() => container!.querySelector('[data-mic="recording"]') !== null);
+    expect(mic.getUserMedia).toHaveBeenCalledWith({ audio: true });
+    expect(container!.querySelector('[role="timer"]')!.textContent).toBe("00:00");
+    expect(fireBeforeUnload()).toBe(true);
+    mic.recorders[0]!.emit([1, 2]);
+    await start("止める");
+    await until(() => router.push.mock.calls.length > 0);
+    const body = JSON.parse(calls("/api/recordings/audio/start")[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.name).toBe("録音 2030-01-02 09-05.webm");
+    expect(body.contentType).toBe("audio/webm");
+    expect(body.sizeBytes).toBe(3);
+    expect(body.sha256).toBe(createHash("sha256").update(new Uint8Array([1, 2, 7])).digest("hex"));
+    expect(mic.tracks[0]!.stopped).toBe(true);
+    expect(frame.pageCreated).toHaveBeenCalledWith(PAGE_ID, "合成の会議", "rec");
+    vi.useRealTimers();
+  });
+
+  it("counts the elapsed time, and discards the recording after one confirmation (stopping the microphone)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const mic = installMic();
+    vi.stubGlobal("fetch", audioApi().fetchMock);
+    await mount();
+    await act(async () => buttonByText("録音する").click());
+    await start("録音をはじめる");
+    await until(() => container!.querySelector('[role="timer"]') !== null);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(65_000);
+    });
+    expect(container!.querySelector('[role="timer"]')!.textContent).toBe("01:05");
+    await act(async () => buttonByText("やり直す").click());
+    expect(container!.querySelector('[data-mic="confirm"]')!.textContent).toContain("いまの録音を消しますか");
+    await act(async () => buttonByText("やめる").click());
+    expect(mic.tracks[0]!.stopped).toBe(false);
+    await act(async () => buttonByText("やり直す").click());
+    await act(async () => buttonByText("消す").click());
+    expect(mic.tracks[0]!.stopped).toBe(true);
+    expect(container!.querySelector('[data-mic="recording"]')).toBeNull();
+    expect(buttonByText("録音をはじめる")).toBeTruthy();
+    expect(fireBeforeUnload()).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("says why it cannot record: permission denied, no microphone, an unsupported browser", async () => {
+    for (const [options, text] of [
+      [{ deny: "NotAllowedError" }, "マイクの使用が許可されていません。ブラウザの設定でマイクを許可してください。"],
+      [{ deny: "NotFoundError" }, "マイクが見つかりません。マイクをつないでから、もう一度試してください。"],
+      [{ noRecorder: true }, "このブラウザでは録音できません。音声ファイルを選んでください。"],
+    ] as const) {
+      installMic(options);
+      await mount();
+      await act(async () => buttonByText("録音する").click());
+      await start("録音をはじめる");
+      await until(() => alertText() !== "");
+      expect(alertText()).toBe(text);
+      expect(buttonByText("録音をはじめる")).toBeTruthy();
+      await act(async () => root?.unmount());
+      container?.remove();
+      root = null;
+      vi.unstubAllGlobals();
+      vi.stubGlobal("XMLHttpRequest", FakeXhr);
+    }
+  });
+
+  it("stops the microphone when the screen goes away while recording", async () => {
+    const mic = installMic();
+    await mount();
+    await act(async () => buttonByText("録音する").click());
+    await start("録音をはじめる");
+    await until(() => mic.tracks.length === 1);
+    await act(async () => root?.unmount());
+    root = null;
+    expect(mic.tracks[0]!.stopped).toBe(true);
+  });
+
+  it("keeps the recording when taking it in fails, and takes it in again", async () => {
+    installMic();
+    vi.stubGlobal("fetch", audioApi({ start: () => respond(502, { error: "storage_failed" }) }).fetchMock);
+    await mount();
+    await act(async () => buttonByText("録音する").click());
+    await start("録音をはじめる");
+    await until(() => container!.querySelector('[data-mic="recording"]') !== null);
+    await start("止める");
+    await until(() => alertText() !== "");
+    expect(alertText()).toBe("いまは音声を取り込めません。少ししてから、もう一度試してください。");
+    expect(container!.querySelector('[data-mic="ready"]')!.textContent).toMatch(/^録音 \d{4}-\d{2}-\d{2} \d{2}-\d{2}\.webm · 00:00 · 1 KB/);
+    expect(fireBeforeUnload()).toBe(true);
+    vi.stubGlobal("fetch", audioApi().fetchMock);
+    await start("取り込む");
+    await until(() => router.push.mock.calls.length > 0);
   });
 });

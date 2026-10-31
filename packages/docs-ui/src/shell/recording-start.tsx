@@ -15,6 +15,8 @@ export type RecordingStartProps = {
   onHow: (how: RecordingHow) => void;
   /** 選んだ音声ファイル（how が file のとき）。 */
   file?: { name: string; detail: string };
+  /** ファイルを選ぶ前の欄の一言（取り込める形式）。無ければ「.m4a .mp3 .wav、文字起こし済みの .vtt も」。 */
+  fileHint?: string;
   background: string;
   onBackground: (value: string) => void;
   /** 登場人物。話者の名前になる。 */
@@ -26,6 +28,8 @@ export type RecordingStartProps = {
   next: RecordingNext;
   onNext: (next: RecordingNext) => void;
   onStart: () => void;
+  /** 下の主ボタンの文言（録音中の「止める」、音声の「取り込む」など）。無ければ how に応じて「録音をはじめる」「文字起こしをはじめる」。 */
+  startLabel?: string;
 };
 
 /** 「録音から」の開始画面。録音する／音声ファイルを置く → 背景情報・登場人物・固有名詞 → このあと。 */
@@ -52,7 +56,7 @@ export function RecordingStart(props: RecordingStartProps) {
         ) : (
           <>
             <b>音声ファイルをここにドロップ</b>
-            <small>.m4a .mp3 .wav、文字起こし済みの .vtt も</small>
+            <small>{props.fileHint ?? ".m4a .mp3 .wav、文字起こし済みの .vtt も"}</small>
           </>
         )}
       </button>
@@ -112,7 +116,7 @@ export function RecordingStart(props: RecordingStartProps) {
         <span>文字起こしは NIHO クラウドで行います</span>
         <span className="es-sp" />
         <button type="button" className="es-btn es-btn--primary" onClick={props.onStart}>
-          {props.how === "mic" ? "録音をはじめる" : "文字起こしをはじめる"}
+          {props.startLabel ?? (props.how === "mic" ? "録音をはじめる" : "文字起こしをはじめる")}
         </button>
       </div>
     </div>

@@ -30,7 +30,7 @@ describe("audio limits", () => {
       maxBytes: AUDIO_MAX_BYTES,
       maxDurationSec: AUDIO_MAX_DURATION_SEC,
       retentionDays: 30,
-      extensions: ["m4a", "mp3", "wav", "aac", "ogg", "flac"],
+      extensions: ["m4a", "mp3", "wav", "aac", "ogg", "flac", "webm"],
       contentTypes: [...AUDIO_CONTENT_TYPES],
     });
     expect(AUDIO_EXTENSIONS).not.toContain("vtt");
@@ -72,9 +72,30 @@ describe("audio limits", () => {
     expect(reason({ name: "合成." })).toBe("extension");
     expect(reason({ name: "合成.m4a.exe" })).toBe("extension");
     expect(reason({ name: "合成.constructor" })).toBe("extension");
-    for (const contentType of ["text/vtt", "video/mp4", "application/octet-stream", "audio/mp4; codecs=mp4a", "", 1, null]) {
+    for (const contentType of ["text/vtt", "video/mp4", "video/webm", "application/octet-stream", ";codecs=opus", "", 1, null]) {
       expect(reason({ contentType }), String(contentType)).toBe("content_type");
     }
+  });
+
+  it("accepts the browser's recording (.webm) and compares content types without their parameters", () => {
+    for (const contentType of ["audio/webm", "audio/webm;codecs=opus", 'AUDIO/WEBM; codecs="opus"', " audio/webm ;codecs=opus "]) {
+      const result = validateAudioStart(valid({ name: "録音 2030-01-01 09-05.webm", contentType }));
+      expect(result.ok, contentType).toBe(true);
+      if (result.ok) {
+        expect(result.value.contentType).toBe("audio/webm");
+        expect(result.value.extension).toBe("webm");
+        expect(result.value.title).toBe("録音 2030-01-01 09-05");
+      }
+    }
+    // パラメータを除いた形で比べるので、他の形式でも同じ（拡張子との対応も除いた形で見る）
+    expect(reason({ contentType: "audio/mp4; codecs=mp4a" })).toBe("ok");
+    expect(reason({ name: "合成.webm", contentType: "audio/ogg;codecs=opus" })).toBe("extension");
+    expect(reason({ name: "合成.m4a", contentType: "audio/webm;codecs=opus" })).toBe("extension");
+    // 冪等の比較も除いた形（パラメータの有無で別の要求にならない）
+    const plain = validateAudioStart(valid({ name: "合成.webm", contentType: "audio/webm" }));
+    const withCodecs = validateAudioStart(valid({ name: "合成.webm", contentType: "audio/webm;codecs=opus" }));
+    expect(plain.ok && withCodecs.ok).toBe(true);
+    if (plain.ok && withCodecs.ok) expect(audioRequestHash(withCodecs.value)).toBe(audioRequestHash(plain.value));
   });
 
   it("refuses names with paths, control characters, or over 200 characters", () => {
