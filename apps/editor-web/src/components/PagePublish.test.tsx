@@ -18,7 +18,7 @@ vi.mock("next/navigation", () => ({
 
 /** 操作の順（エディタの保存・GET・POST）と、エディタの「今すぐ保存」の結果。 */
 const order: string[] = [];
-const editor = { saved: true };
+const editor = { saved: true, saveGate: null as Promise<boolean> | null };
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -32,6 +32,7 @@ beforeEach(() => {
   nav.pathname = `/p/${PAGE}`;
   order.length = 0;
   editor.saved = true;
+  editor.saveGate = null;
 });
 
 afterEach(async () => {
@@ -138,7 +139,7 @@ function FakePage() {
     () =>
       registerPageSaver(async () => {
         order.push("save");
-        return editor.saved;
+        return editor.saveGate ?? editor.saved;
       }),
     [registerPageSaver],
   );
@@ -332,6 +333,66 @@ describe("公開のシート", () => {
     expect(primary().textContent).toBe("発信先を変える");
     await click(primary());
     expect(calls.find((call) => call.method === "POST")!.body).toMatchObject({ handle: "exp" });
+  });
+
+  it("別の発信先を選ぶと、前の発信先だけにある「あわせて」は持ち越さない（体験ページに載せる → NIHO で公開できなくならない）", async () => {
+    const expPlan = sheet({
+      selection: { handle: "exp", range: "live", extras: { app: false, news: false, xp: true }, slug: null },
+      extras: [
+        { key: "app", checked: false },
+        { key: "xp", checked: true },
+      ],
+      url: "https://experience.niho.life/guides/morning-walk",
+      slug: { value: "morning-walk", editable: true, error: null },
+      slugPrefix: "https://experience.niho.life/guides/",
+      primary: "publish",
+    });
+    const { calls } = server({ sheets: [sheet(), expPlan, nihoPlan()] });
+    await mount();
+    await click($(".es-pubbtn"));
+    const requested = () => calls.filter((call) => call.method === "GET").map((call) => new URL(call.url, "http://localhost").searchParams);
+    await click(dest("NIHO"));
+    const last = requested().at(-1)!;
+    expect(last.get("handle")).toBe("niho");
+    expect(last.get("extras") ?? "").toBe("");
+    expect(primary().disabled).toBe(false);
+    // 同じ発信先を選び直すときは、選んでいたものを残す
+    await click(dest("NIHO"));
+    expect(requested().at(-1)!.get("extras") ?? "").toBe("");
+  });
+
+  it("保存を待つあいだに別のページへ移ったら、前のページの読み込みを始めず、移った先の公開の状態は捨てられない", async () => {
+    const PAGE_B = "7a1d3b5f-2c4e-4d6f-9a81-0b2c3d4e5f60";
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        const published = url.includes(PAGE_B);
+        return new Response(JSON.stringify({ sheet: published ? sheet({ status: "published", publication: LIVE, canStop: true }) : sheet() }), { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+    let release!: () => void;
+    editor.saveGate = new Promise<boolean>((resolve) => {
+      release = () => resolve(true);
+    });
+    const pageB: PageSummary = { ...summary(), id: PAGE_B, title: "Evening walk" };
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    const initial: FrameInitial = { pages: [summary(), pageB], next: null, now: Date.parse("2026-10-31T03:00:00.000Z"), me: { name: "開発ユーザー", caption: "stub", initial: "開" }, initialNarrow: false };
+    const render = () => act(async () => root!.render(<EditorFrame initial={initial}>{<FakePage />}</EditorFrame>));
+    await render();
+    await click($(".es-pubbtn"));
+    // A の保存を待っている途中で B へ移る
+    nav.pathname = `/p/${PAGE_B}`;
+    await render();
+    await act(async () => release());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+    // A は最初の読み込みの 1 回だけ（保存のあとの読み込みは始めない）。B の応答（公開中）が画面に出る
+    expect(calls.filter((url) => url.includes(PAGE))).toHaveLength(1);
+    expect(calls.filter((url) => url.includes(PAGE_B))).toHaveLength(1);
+    expect($(".es-pubbtn")?.textContent).toContain("公開中");
   });
 
   it("「接続する」「発信先を追加」は発信先の設定へ移る", async () => {
