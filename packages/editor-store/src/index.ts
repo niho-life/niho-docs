@@ -68,6 +68,28 @@ export {
   type UpdateRecordingResult,
 } from "./recordings.ts";
 export {
+  IMAGE_ALT_MAX_CHARS,
+  IMAGE_CREDIT_MAX_CHARS,
+  IMAGE_OBJECT_PREFIX,
+  IMAGE_UPLOAD_STATUSES,
+  InvalidImageError,
+  completeImageUpload,
+  countPageImages,
+  imageAsset,
+  imageObjectPath,
+  sharedImageAsset,
+  startImageUpload,
+  updateImageMeta,
+  type CompleteImageUploadResult,
+  type ImageAsset,
+  type ImageMetaPatch,
+  type ImageUploadStatus,
+  type SharedImageAsset,
+  type StartImageUploadInput,
+  type StartImageUploadResult,
+  type StartedImageUpload,
+} from "./images.ts";
+export {
   AUDIO_OBJECT_PREFIX,
   audioInfo,
   audioObjectPath,

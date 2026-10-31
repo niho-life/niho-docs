@@ -28,7 +28,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | `EDITOR_AI_MODE` | 任意。未設定・`off` は AI を使わない（提案・採用は 503 `ai_unavailable`）。`fake` は偽物のモデル（開発・CI だけ。`NODE_ENV=production` では 503） |
 | `EDITOR_AI_MONTHLY_LIMIT_USD` | 任意。owner ごとの月の上限（見込みの USD）。未設定は上限なし。0 以上の数でない値は 0（AI を止める） |
 | `EDITOR_STEPS_MODE` | 手順の実行の方式。`inline`（開発・CI だけ）。未設定・`off`・未知の値と、本番（`NODE_ENV=production`）の `inline` では手順の開始は 503 |
-| `EDITOR_STORAGE` | 任意。資産（音声）の保存先。`fake`（メモリの偽物。開発・CI だけで、`NODE_ENV=production` では起動しない）・`gcs`・`off`。未設定は本番 `off`（音声の API は 503 `storage_unavailable`）、それ以外は `fake`。未知の値は起動しない |
+| `EDITOR_STORAGE` | 任意。資産（音声・画像）の保存先。`fake`（メモリの偽物。開発・CI だけで、`NODE_ENV=production` では起動しない）・`gcs`・`off`。未設定は本番 `off`（音声・画像の API は 503 `storage_unavailable`）、それ以外は `fake`。未知の値は起動しない |
 | `EDITOR_ASSETS_BUCKET` | `EDITOR_STORAGE=gcs` のとき必須。資産の bucket 名（無い・規則に合わなければ起動しない。値は表示しない） |
 
 確認のコマンド: `typecheck`・`lint`・`test`（vitest）・`build`・`test:startup`（build の後。本番の起動の守り）・`test:e2e`（`DATABASE_URL` と migration が要る。`next dev` を起動して API と画面を確かめ、作った行は消す）。
@@ -39,7 +39,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **ログイン（#32）**: `/auth/login`（枠の外の画面）、`/auth/login/start?next=`（GET）、`/auth/callback`（GET）、`/auth/logout`（POST。同じ origin でなければ 403）。route の応答は `Cache-Control: no-store`。未ログインで画面を開くと `/auth/login?next=…` へ移る（今の path は `src/proxy.ts` が header で渡すだけで、認証は読まない）。戻り先は `src/auth/return-to.ts` の `safeReturnTo` で editor の画面の path（`/`・`/p/new`・`/p/{uuid}`・`/destinations`・`/account`・`/settings` など）だけにし、それ以外（外の URL・`/auth/*`・`/api/*`）は `/`。stub はいつもログイン済みで、`/auth/login` は戻り先へ移る。
 - **画面（#32）**: 枠は `app/(editor)/layout.tsx`（niho-docs-ui の shell）。`/` はデスクトップでは最後に開いたページ（cookie `editor_last_page` の id。無い・消えたなら `/p/new`）へ移る。`/p/new` は題名か本文を入力した時点で POST して作り、`history.replaceState` で `/p/{id}` に替える（エディタは作り直さない）。`/p/new?from=recording` は開始の画面だけ。`/destinations`・`/account`・`/settings` は題名だけ。900px 以下（shell.css と同じ）では `/` が一覧の画面で、ページと設定は全画面、ヘッダーの左のボタンで一覧を出す。
 - **一覧（#32）**: 更新順（同じ時刻は id の降順）で 100 件ずつ。layout が最初の 100 件を描き、末尾が近づいたら `GET /api/pages?limit=&cursor=` で続きを読む。cursor は `<updated_at（UTC・マイクロ秒まで）>_<id>`。読み込んだ親の下に子ページを作った順で並べる。検索は今は読み込んだ行の題名だけ。
-- **CSP と HSTS（#44）**: ページの CSP は `src/proxy.ts` が要求ごとに作る nonce で付ける（`src/security/csp.ts`）。script は nonce ＋ `strict-dynamic` で、インラインの script・`unsafe-eval`・外部 origin を許さない。style だけ `'self' 'unsafe-inline'`（TipTap が実行時に nonce なしの `<style>` を注入し、共有の docs-ui が SSR で `style=""` を出すため。絞るには docs-ui 側の変更が要る）。nonce は静的な HTML に入れられないので、root layout で `connection()` を呼び全 route を要求のときに描く。`/api` は何も読み込まない固定の CSP（`default-src 'none'`）。`Strict-Transport-Security` は全応答。画像・音声を GCS の署名付き URL から読む段階（#33・#36）で、その origin だけを `img-src` / `media-src` に足す。開発（`next dev`）だけ `unsafe-eval` と HMR の WebSocket を許す。
+- **CSP と HSTS（#44）**: ページの CSP は `src/proxy.ts` が要求ごとに作る nonce で付ける（`src/security/csp.ts`）。script は nonce ＋ `strict-dynamic` で、インラインの script・`unsafe-eval`・外部 origin を許さない。style だけ `'self' 'unsafe-inline'`（TipTap が実行時に nonce なしの `<style>` を注入し、共有の docs-ui が SSR で `style=""` を出すため。絞るには docs-ui 側の変更が要る）。nonce は静的な HTML に入れられないので、root layout で `connection()` を呼び全 route を要求のときに描く。`/api` は何も読み込まない固定の CSP（`default-src 'none'`）。`Strict-Transport-Security` は全応答。**画像（#33）は署名付き URL を使わずサーバーが中継する**（`/api/assets/{id}`・`/s/{token}/a/{id}`）ので、`img-src` は `'self' data: blob:` のまま変えない。音声を GCS から直に読む段階（#36 段 3）で、その origin だけを `media-src` に足す。開発（`next dev`）だけ `unsafe-eval` と HMR の WebSocket を許す。
 - **PWA（#49）**: `src/app/manifest.ts`（`/manifest.webmanifest`。`display: standalone`、`start_url: /`）、アイコンは `public/icons`（NIHO docs の `icon.svg` から `node scripts/build-icons.mjs` で作る。any 192/512、maskable 512、apple-touch 180。再生成は Chrome が要る）。`public/sw.js` は**殻だけ**: `/_next/static/` と offline 画面だけを手元に置き、圏外でページを開くと `/offline.html`（「つながっていません」）を出す。ページの HTML・`/api`・認証の絡む応答はキャッシュしない。オフライン編集は含まない（#50）。登録は本番だけ（`RegisterServiceWorker`）。インストール後も全ページ noindex。standalone の出力には `public/` が入らないので、`postbuild`（`scripts/copy-standalone-assets.mjs`）と Dockerfile で置く。
 - **API**: `GET/POST /api/pages`、`GET/PATCH /api/pages/{id}`。`GET /api/pages` は `{ pages, next }`（next が null なら終わり。ゴミ箱のページは出さない）。未認証 401、別の人・存在しない・UUID として不正な id は同じ 404、本文は 1 MiB まで（超えたら 413）、JSON でない・形が違う・読めない limit や cursor は 400、更新系は同じ origin でなければ 403。エラーの本文は短い code だけ。
 - **保存の競合**: `PATCH /api/pages/{id}` は `baseRevision`（読んだときの revision。必須）を付ける。今の revision と違えば何も書かずに 409 と今のページ（`{ error: "conflict", page }`）。自分のページでなければ revision によらず 404。「この内容で上書き」は 409 の revision を付け直し、`overwrite: true` で再送する（上書き前の本文は版に残る）。`/p/new` で作ったページは、POST の応答の revision（1）から `baseRevision` を始める。
@@ -54,7 +54,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **本文**: niho-docs-ui の `BlockEditor`（TipTap）を使い、`blocks` は TipTap の doc の `content`（ブロックの配列）をそのまま保存する。サーバーが見るのは「`type` を持つ object の配列で、大きさと深さが上限の内側」だけ。**限定 AST としての厳密な検証（許すブロックの種類・HTML の正規化）は #33。**
 - **React を 1 本にする**: `.npmrc` の `install-links=true` で packages/* を node_modules に複製して入れる。docs-ui の側の node_modules（React 18）を拾わず、react・TipTap はこの app の 1 本に解決する（`src/components/PageEditor.test.tsx` が確かめる）。packages を書き換えたら `npm install` し直し、`apps/editor-web/.next` も消す（packages の version が同じだと webpack の cache が古い版を使い続け、`next build` は警告だけで通って実行時に 500 になる。CI は毎回新しい checkout なので影響しない）。
 - **bundler は webpack**（`--webpack`）: docs-core は `./types.js` で `./types.ts` を指す書き方で、Turbopack は node_modules の中のこれを解決しないため。`experimental.extensionAlias` で `.js` を `.ts` にも当てる。
-- **packages/editor-store**: migration（`migrations/NNNN_*.sql`、BEGIN/COMMIT で包み辞書順）と `EditorStore`。全てのクエリが `owner` と `deleted_at IS NULL` で絞る。`page_versions` には保存・上書き・戻す直前の本文を書く。`assets`・`publications` は表だけで、書くコードはまだ無い。
+- **packages/editor-store**: migration（`migrations/NNNN_*.sql`、BEGIN/COMMIT で包み辞書順）と `EditorStore`。全てのクエリが `owner` と `deleted_at IS NULL` で絞る。`page_versions` には保存・上書き・戻す直前の本文を書く。`assets` は音声（`src/recording-audio.ts`）と画像（`src/images.ts`）が書く。`publications` は表だけで、書くコードはまだ無い。
 
 ## 検索（#35）
 
@@ -129,6 +129,27 @@ const found = usePageSearch(find.open ? find.value : ""); // found.results を�
 - 配備で `EDITOR_STORAGE=gcs` を渡すまで、本番の音声の API は 503 `storage_unavailable`。
 - 画面の CSP の `connect-src` に `https://storage.googleapis.com` を足すのは、画面に組み込む段 3（今の CSP は `'self'` だけなので、ブラウザから GCS への PUT は通らない）。
 
+## 本文の画像（#33）
+
+本文に画像を入れる（貼り付け・ドロップ・ファイル選択）。実体は private bucket に置き、**読み取りはサーバーが中継する**（署名付き URL をブラウザへ渡さないので、CSP の `img-src` は `'self' data: blob:` のまま）。アップロードは音声（#36 段 2a）と同じ二段で、保存先の口（`src/storage/`）も同じものを使う。
+
+- **本文に保存するのは資産の id と欄だけ**: 限定 AST の `image`（`assetId`・`alt`・`credit`・`consent`。`src/ast/blocks.ts`）。URL は保存しない。貼り付けた HTML の外部の `<img src>` は文字どおり落とす（`src/editor/paste.ts`。他のサイトの画像に繋いだまま（hotlink）にしない）。
+- **API**（本人の・ゴミ箱でないページだけ。未認証 401、DB が無い 503、更新系は同じ origin でなければ 403、別の人・存在しない・不正な id・削除済み・画像でない資産・まだ済んでいない画像は同じ 404）:
+  `POST /api/pages/{id}/images/start`（本文 `{ contentType, sizeBytes, sha256 }`、任意の `Idempotency-Key`（UUID）。201 `{ assetId, upload: { url, method: "PUT", headers, expiresAt, maxBytes } }`）・
+  `POST /api/pages/{id}/images/{assetId}/complete`（200 `{ image }`）・
+  `PATCH /api/assets/{assetId}`（`{ alt?, credit?, consent? }` のうち 1 つ以上。200 `{ image }`）・
+  `GET /api/assets/{assetId}`（中身の中継。`Content-Type` は行の値、`Content-Disposition: inline`、`X-Content-Type-Options: nosniff`、`Cache-Control: private, max-age=86400, immutable`）・
+  `GET /s/{token}/a/{assetId}`（共有リンクの中継。ログイン不要。`Cache-Control: private, no-store`）。`image` は `{ assetId, pageId, status, bytes, contentType, alt, credit, consent }`（object の場所・sha256 は出さない）。
+- **流れ**: start → ブラウザが `upload.url` へ直接 PUT（credentials なし）→ complete（保存先の object の大きさが申告と同じなら ready）。画面から呼ぶ関数とエディタに渡す口は `src/lib/image-upload-client.ts`。
+- **エラー**: 400 `{"error":"bad_request","reason":…}`（`body`・`idempotency_key`・`content_type`・`size`・`too_large`・`too_many`・`sha256`・`alt`・`credit`・`consent`）、413（開始の本文が 4 KiB 超・欄の本文が 16 KiB 超）、503 `storage_unavailable`、502 `storage_failed`、409 `idempotency_conflict`、409 `{"error":"incomplete","reason":"missing"|"size_mismatch"}`。
+- **上限**（`src/image/image-limits.ts` の 1 か所）: 受け付ける種類は `image/jpeg`・`image/png`・`image/webp`・`image/avif`・`image/gif`（**SVG は script を持てるので受け付けない**）、1 枚 **20MB**、1 ページ **100 枚**、alt 1000 文字・クレジット 500 文字。種類と大きさはブラウザでも先に見て、枚数はサーバーが数える。超えたら保存（資産の行・保存先のセッション）の前に断る。
+- **申告値**: `sha256`・`contentType`・`sizeBytes` はクライアントの申告（ブラウザで sha256 を計算して送る）。サーバーは中身を読まず、sha256 を検証しない。大きさだけ complete で保存先と照らす。中継のときだけ中身を通す。
+- **冪等**: 同じ `Idempotency-Key`・同じページ・同じ内容（ページ・種類・大きさ・sha256 を正規化した SHA-256 で比べる）は 200 で同じ資産。アップロード中なら ticket を作り直し、済んでいれば `upload: null`。complete は何度呼んでもよい。
+- **エディタ**（`src/editor/`）: `image-node.ts`（TipTap のノード。block・atom・draggable、貼り付け・ドロップのファイルを受ける plugin、「/」「＋」の「画像」からのファイル選択）と `ImageNodeView.tsx`（React の NodeView。`src` は中継の path。**画像を選ぶと alt・クレジット・掲載許諾の欄をここに出し**、直すと本文の自動保存と資産の行の両方へ入る）。入れられないとき（ページがまだ無い・種類・大きさ・枚数・失敗）は本文を変えずに、本文の下に理由を出す。
+- **表**: migration `0009_image_assets.sql`（assets に `upload_status`（uploading／ready）・`upload_key`・`request_hash`）。資産は assets（`kind=image`、`bucket_path` = `image/{asset id}`、`alt`・`credit`・`consent` は 0001 から）。コードは `packages/editor-store/src/images.ts`。
+- **共有リンク**: `/s/{token}` の本文の画像は `sharedImageAsset`（その token のページの、ready の画像だけ）で絞って中継する。描くのは `src/share/render-blocks.tsx`（`assetSrc` を渡さなければ画像を描かない＝読めない `img` を置かない。クレジットは `figcaption`）。**ページの複製（#34）は本文（資産の id）を写すが資産の行は写さない**ので、複製したページの共有リンクでは画像が出ない（資産は 1 つのページに属する。必要になったら写す側で足す）。
+- **消さない**: アプリは画像の object を消さない。ゴミ箱の purge は資産の行だけを消し、object は残る（`purgeTrash` が場所を返す。画像には音声のような期限のライフサイクル規則を置かない）。
+
 ## まだやらないこと
 
-見た目（#48）、版・履歴・オフライン・画像・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、一覧の 2 行目の公開先（#39）、公開と公開 API（#39〜#41）、録音の開始（#36）、題名と本文の検索（#35）、発信先・役割とつながり・設定の中身（#41・#42 とその後）、AI の画面・本物のプロバイダ・固有名詞の設定（#38 の後段）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。
+見た目（#48）、版・履歴・オフライン・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、一覧の 2 行目の公開先（#39）、公開と公開 API（#39〜#41）、録音の開始（#36）、題名と本文の検索（#35）、発信先・役割とつながり・設定の中身（#41・#42 とその後）、AI の画面・本物のプロバイダ・固有名詞の設定（#38 の後段）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。

@@ -3,10 +3,14 @@ import { Fragment, type ReactNode } from "react";
 /**
  * 共有ページ（`/s/{token}`）の本文を React の要素にする（#34）。HTML の文字列は作らず、注入もしない。
  * 本文は TipTap の doc の content（ブロックの配列）。描くのは:
- * paragraph・heading（2 は h2、それ以外は h3）・bulletList・orderedList・listItem・blockquote・horizontalRule・hardBreak・text。
+ * paragraph・heading（2 は h2、それ以外は h3）・bulletList・orderedList・listItem・blockquote・horizontalRule・hardBreak・text・image。
  * mark は bold・italic・link だけ（他の mark は無視して文字だけ）。リンクは https・http・mailto の絶対 URL だけを
  * リンクにし（javascript:・data:・相対・資格情報つきは文字だけ）、常に rel="noopener noreferrer nofollow ugc" を付ける。
- * 未知のノードは投げずに子だけを描く。画像・録音は描かない（資産は未実装）。再帰は深さ 64 で止める。
+ * 未知のノードは投げずに子だけを描く。再帰は深さ 64 で止める。
+ *
+ * 画像（#33）は資産の id を持つものだけを、`assetSrc`（共有リンクの中継 `/s/{token}/a/{id}`）で描く。`assetSrc` が無い・
+ * id が UUID でない・外の `src` を持つ古い形のノードは、**描かない**（読めない img を置かない。外の URL へは繋がない）。
+ * 録音は描かない（資産は #36）。
  */
 
 const MAX_DEPTH = 64;
@@ -15,8 +19,13 @@ export const SHARED_LINK_REL = "noopener noreferrer nofollow ugc";
 
 type JsonNode = { readonly [key: string]: unknown };
 
-/** 描かないノード（資産）。 */
-const SKIPPED = new Set(["image", "docAssetImage", "recording"]);
+/** 描かないノード（まだ扱えない資産）。 */
+const SKIPPED = new Set(["docAssetImage", "recording"]);
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** 画像の中継の path を作る関数（共有ページが渡す）。null を返した画像は描かない。 */
+export type AssetSrc = (assetId: string) => string | null;
 
 function isNode(value: unknown): value is JsonNode {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -36,9 +45,29 @@ export function safeShareHref(value: unknown): string | null {
   return url.href;
 }
 
-function renderChildren(node: JsonNode, depth: number): ReactNode[] {
+function renderChildren(node: JsonNode, depth: number, assetSrc: AssetSrc | null): ReactNode[] {
   if (!Array.isArray(node.content)) return [];
-  return node.content.map((child, index) => renderNode(child, index, depth + 1));
+  return node.content.map((child, index) => renderNode(child, index, depth + 1, assetSrc));
+}
+
+/**
+ * 画像。alt は本文の attrs の値（無ければ空の alt）、クレジットがあれば figcaption に出す。
+ * 大きさ・読み込みの指示は付けない（元の大きさで、遅延読み込み）。
+ */
+function renderImage(node: JsonNode, key: number, assetSrc: AssetSrc | null): ReactNode {
+  if (!assetSrc || !isNode(node.attrs)) return null;
+  const { assetId, alt, credit } = node.attrs;
+  if (typeof assetId !== "string" || !UUID.test(assetId)) return null;
+  const src = assetSrc(assetId);
+  if (src === null) return null;
+  const caption = typeof credit === "string" && credit !== "" ? credit : null;
+  return (
+    <figure key={key}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- 中継の path をそのまま読む（next/image の最適化・外部 loader を通さない） */}
+      <img src={src} alt={typeof alt === "string" ? alt : ""} loading="lazy" decoding="async" data-doc-asset="" />
+      {caption ? <figcaption>{caption}</figcaption> : null}
+    </figure>
+  );
 }
 
 function renderText(node: JsonNode, key: number): ReactNode {
@@ -67,7 +96,7 @@ function renderText(node: JsonNode, key: number): ReactNode {
   return <Fragment key={key}>{element}</Fragment>;
 }
 
-function renderNode(value: unknown, key: number, depth: number): ReactNode {
+function renderNode(value: unknown, key: number, depth: number, assetSrc: AssetSrc | null): ReactNode {
   if (depth > MAX_DEPTH || !isNode(value)) return null;
   switch (value.type) {
     case "text":
@@ -76,37 +105,40 @@ function renderNode(value: unknown, key: number, depth: number): ReactNode {
       return <br key={key} />;
     case "horizontalRule":
       return <hr key={key} />;
+    case "image":
+      return renderImage(value, key, assetSrc);
     case "paragraph":
-      return <p key={key}>{renderChildren(value, depth)}</p>;
+      return <p key={key}>{renderChildren(value, depth, assetSrc)}</p>;
     case "heading":
       return isNode(value.attrs) && value.attrs.level === 2 ? (
-        <h2 key={key}>{renderChildren(value, depth)}</h2>
+        <h2 key={key}>{renderChildren(value, depth, assetSrc)}</h2>
       ) : (
-        <h3 key={key}>{renderChildren(value, depth)}</h3>
+        <h3 key={key}>{renderChildren(value, depth, assetSrc)}</h3>
       );
     case "bulletList":
-      return <ul key={key}>{renderChildren(value, depth)}</ul>;
+      return <ul key={key}>{renderChildren(value, depth, assetSrc)}</ul>;
     case "orderedList": {
       const start = isNode(value.attrs) && Number.isInteger(value.attrs.start) && (value.attrs.start as number) > 1 ? (value.attrs.start as number) : undefined;
       return (
         <ol key={key} start={start}>
-          {renderChildren(value, depth)}
+          {renderChildren(value, depth, assetSrc)}
         </ol>
       );
     }
     case "listItem":
-      return <li key={key}>{renderChildren(value, depth)}</li>;
+      return <li key={key}>{renderChildren(value, depth, assetSrc)}</li>;
     case "blockquote":
-      return <blockquote key={key}>{renderChildren(value, depth)}</blockquote>;
+      return <blockquote key={key}>{renderChildren(value, depth, assetSrc)}</blockquote>;
     default:
       if (SKIPPED.has(String(value.type))) return null;
       // 未知のノードは子だけを描く
-      return <Fragment key={key}>{renderChildren(value, depth)}</Fragment>;
+      return <Fragment key={key}>{renderChildren(value, depth, assetSrc)}</Fragment>;
   }
 }
 
-/** 本文のブロックの配列を描く。 */
-export function SharedBlocks(props: { blocks: readonly unknown[] }): ReactNode {
+/** 本文のブロックの配列を描く。`assetSrc` を渡さなければ画像は描かない。 */
+export function SharedBlocks(props: { blocks: readonly unknown[]; assetSrc?: AssetSrc }): ReactNode {
   const blocks = Array.isArray(props.blocks) ? props.blocks : [];
-  return <>{blocks.map((block, index) => renderNode(block, index, 1))}</>;
+  const assetSrc = props.assetSrc ?? null;
+  return <>{blocks.map((block, index) => renderNode(block, index, 1, assetSrc))}</>;
 }

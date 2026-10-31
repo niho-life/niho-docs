@@ -37,7 +37,11 @@ type Doc = JSONContent;
 const paragraph = (text?: string): JSONContent => (text ? { type: "paragraph", content: [{ type: "text", text }] } : { type: "paragraph" });
 const doc = (...content: JSONContent[]): Doc => ({ type: "doc", content });
 
-/** 空の行（空の段落）から、それぞれの項目で作られるブロック。 */
+/**
+ * 空の行（空の段落）から、それぞれの項目で作られるブロック。
+ * 「画像」はファイル選択を開くだけで、本文には何も入れない（アップロードが済んでから入る。この harness は画像の口を渡して
+ * いないので開かない）。行は空の段落のまま＝見出しの空の行は段落に戻る。画像のノードが入るところは src/editor の試験で見る。
+ */
 const MADE: Record<BlockChoiceId, JSONContent> = {
   paragraph: paragraph(),
   h2: { type: "heading", attrs: { level: 2 } },
@@ -46,6 +50,7 @@ const MADE: Record<BlockChoiceId, JSONContent> = {
   ordered: { type: "orderedList", content: [{ type: "listItem", content: [paragraph()] }] },
   quote: { type: "blockquote", content: [paragraph()] },
   hr: { type: "horizontalRule" },
+  image: paragraph(),
 };
 
 /** PageEditor と同じ並び（`.be` の中に本文と PageChrome）だけを描く。 */
@@ -389,9 +394,9 @@ describe("the AI button of the format bar", () => {
 });
 
 describe("the 「/」 block list", () => {
-  const ALL = ["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "区切り線"];
+  const ALL = ["テキスト", "見出し 2", "見出し 3", "箇条書き", "番号付き", "引用", "区切り線", "画像"];
 
-  it("opens on 「/」 in an empty line with the blocks this body can hold (no image or recording), keeping focus in the body", async () => {
+  it("opens on 「/」 in an empty line with the blocks this body can hold (no recording), keeping focus in the body", async () => {
     const editor = await renderHarness(doc(paragraph()));
     await cursorAt(editor, 1);
     await type(editor, "/");
@@ -399,7 +404,7 @@ describe("the 「/」 block list", () => {
     expect(list.getAttribute("role")).toBe("menu");
     expect(list.getAttribute("aria-label")).toBe("ブロックを足す");
     expect(itemNames(list)).toEqual(ALL);
-    expect(list.textContent).not.toMatch(/画像|録音|音声ファイル/);
+    expect(list.textContent).not.toMatch(/録音|音声ファイル/);
     expect(list.closest(".es-root")).toBe(chrome());
     expect(document.activeElement).toBe(editor.view.dom);
     // いまの項目は面だけでなく太字（.es-mi--on）で示し、本文の aria-activedescendant にも出す
@@ -450,7 +455,8 @@ describe("the 「/」 block list", () => {
     await cursorAt(editor, 1);
     await type(editor, "/");
     await press(editor.view.dom, "ArrowUp");
-    expect(menuItem(slashMenu(), "区切り線").className).toContain("es-mi--on");
+    // ↑ は末尾へ回る（今の末尾は「画像」）
+    expect(menuItem(slashMenu(), "画像").className).toContain("es-mi--on");
     await press(editor.view.dom, "Escape");
     expect(slashMenu()).toBeNull();
     expect(savedBlocks(editor)).toEqual([paragraph("/")]);

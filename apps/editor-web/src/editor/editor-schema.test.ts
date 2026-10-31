@@ -13,6 +13,9 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = () => undefined;
 });
 
+/** 合成の資産の id（実在の資産ではない）。 */
+const ASSET_ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
+
 let editor: Editor | null = null;
 
 function makeEditor(content?: unknown): Editor {
@@ -58,11 +61,23 @@ describe("the page editor schema matches the limited AST", () => {
     expect(Object.keys(current.schema.marks).filter((name) => !MARK_NAMES.includes(name))).toEqual([]);
   });
 
-  it("differs from the AST only by what has no way to be created yet (callout, image, recording)", () => {
+  it("differs from the AST only by what has no way to be created yet (callout, recording)", () => {
     const current = makeEditor();
     const missing = [...BLOCK_NODE_NAMES, ...INLINE_NODE_NAMES, "listItem"].filter((name) => !(name in current.schema.nodes));
-    expect(missing.sort()).toEqual(["callout", "image", "recording"]);
+    // 画像（#33）は入れ方があるので schema にある。囲み・録音はまだ作る手段が無い
+    expect(missing.sort()).toEqual(["callout", "recording"]);
     expect(MARK_NAMES.filter((name) => !(name in current.schema.marks))).toEqual([]);
+  });
+
+  it("keeps a saved image through the editor with only the four attributes of the AST", () => {
+    const current = makeEditor();
+    const image = { type: "image", attrs: { assetId: ASSET_ID, alt: "合成の写真", credit: "合成の提供元", consent: true } };
+    current.chain().setContent({ type: "doc", content: [image, { type: "paragraph" }] }).run();
+    const blocks = savedBlocks(current);
+    expect(blocks[0]).toEqual(image);
+    // 本文に URL・外の src は入らない（描くときに中継の path を組む）
+    expect(flatten(blocks)).not.toContain("http");
+    expect(flatten(blocks)).not.toContain("src");
   });
 
   it("produces a body the server accepts for every block the editor can make", () => {

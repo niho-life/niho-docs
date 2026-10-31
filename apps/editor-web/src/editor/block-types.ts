@@ -7,12 +7,13 @@ import type { ShellIconName } from "niho-docs-ui/shell";
 /**
  * 本文のブロックの種類（「/」と「＋」のブロックの一覧、書式の帯の「行の種類」で共有する）。
  * 限定 AST（src/ast/blocks.ts）とこのエディタの schema（src/editor/page-extensions.ts）で作れるものだけを並べる。
- * 見出し 1・コード・チェック・画像・録音・音声ファイルは出さない（画像・録音は作る手段がまだ無い）。
+ * 見出し 1・コード・チェック・録音・音声ファイルは出さない（録音は作る手段がまだ無い）。
+ * 画像（#33）はファイル選択を開く（選んだ画像を private bucket に入れてから、その行に入れる）。
  */
 
-export type BlockChoiceId = "paragraph" | "h2" | "h3" | "bullet" | "ordered" | "quote" | "hr";
-/** 行の種類（区切り線は行の種類ではないので除く）。 */
-export type LineTypeId = Exclude<BlockChoiceId, "hr">;
+export type BlockChoiceId = "paragraph" | "h2" | "h3" | "bullet" | "ordered" | "quote" | "hr" | "image";
+/** 行の種類（区切り線・画像は行の種類ではないので除く）。 */
+export type LineTypeId = Exclude<BlockChoiceId, "hr" | "image">;
 
 export type BlockChoice = {
   id: BlockChoiceId;
@@ -33,10 +34,11 @@ export const BLOCK_CHOICES: readonly BlockChoice[] = [
   { id: "ordered", label: "番号付き", icon: "list", hint: "1.", aliases: ["number", "numbered", "ordered", "list", "ol", "bangou", "ばんごう", "番号"] },
   { id: "quote", label: "引用", hint: ">", aliases: ["quote", "blockquote", "inyou", "いんよう"] },
   { id: "hr", label: "区切り線", icon: "minus", hint: "---", aliases: ["divider", "hr", "line", "rule", "kugiri", "くぎり", "くぎりせん"] },
+  { id: "image", label: "画像", icon: "img", hint: "", aliases: ["image", "img", "photo", "picture", "gazou", "がぞう", "しゃしん", "写真"] },
 ];
 
 export const LINE_TYPE_CHOICES: readonly (BlockChoice & { id: LineTypeId })[] = BLOCK_CHOICES.filter(
-  (choice): choice is BlockChoice & { id: LineTypeId } => choice.id !== "hr",
+  (choice): choice is BlockChoice & { id: LineTypeId } => choice.id !== "hr" && choice.id !== "image",
 );
 
 /** 「/」のあとに打った文字で絞る（docs-ui の「/」と同じ規則: 名前・別名に含む、または書き始めと一致。全角・大文字も同じに扱う）。 */
@@ -179,5 +181,9 @@ export function fillBlankLine(editor: Editor, id: BlockChoiceId, target: { range
     case "hr":
       // 空の段落を区切り線に置き換え、次の行（無ければ空の段落を足す）へカーソルを移す
       return chain.setHorizontalRule().run();
+    case "image":
+      // 行は空の段落のままにして、ファイル選択を開く（選んだ画像はアップロードが済んでから、この行に入る）。
+      // 画像の口・ページが無ければ false（画像のノードが理由を本文の下に出す）
+      return chain.command(({ commands }) => (typeof commands.choosePageImage === "function" ? commands.choosePageImage() : false)).run();
   }
 }
