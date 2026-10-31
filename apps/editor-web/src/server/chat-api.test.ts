@@ -43,6 +43,7 @@ function memoryStore() {
       parent: input.parent ?? null,
       recipe: null,
       stepStatus: null,
+      sortOrder: 0,
       revision: 1,
       createdAt: now,
       updatedAt: now,

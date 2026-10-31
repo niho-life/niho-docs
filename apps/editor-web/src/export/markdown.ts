@@ -8,7 +8,8 @@
  * - `- ` と `1. ` のリスト（1 行 1 項目・入れ子なし。入れ子は 1 段に平坦化し、項目の中の段落・改行は空白でつなぐ）
  * - `:::note` … `:::` の箱（引用・囲み。中は段落とリストだけに平坦化）
  * - `**太字**` `*斜体*` `[文字](https://…)`（https で資格情報の無いリンクだけ。それ以外のリンクは文字だけ）
- * 区切り線・画像・録音は出さない。code・取り消し線などその他の mark は文字だけ。
+ * - `![alt](photos/…)` の写真（`photoPath` を渡したときだけ。フォルダの書き出し（#37）が zip の中の相対 path を渡す）
+ * 区切り線・録音は出さない。`photoPath` が無ければ画像も出さない。code・取り消し線などその他の mark は文字だけ。
  *
  * 箱は既定で `:::note`。一般の Markdown の読み手へ渡すときは `{ boxes: "quote" }` で `> ` にする（Google ドキュメントへの書き出し）。
  * 本文の文字は、サブセットの記法として読まれないよう `\` で逃がす（日本語の文字は変えない）。
@@ -29,7 +30,12 @@ const ITALIC = 2;
 type Char = { ch: string; marks: number; href: string | null };
 
 type TextBlock = { type: "paragraph"; inline: Char[] } | { type: "list"; ordered: boolean; items: Char[][] };
-type Block = { type: "heading"; level: 2 | 3; inline: Char[] } | TextBlock | { type: "note"; blocks: TextBlock[] };
+type Block =
+  | { type: "heading"; level: 2 | 3; inline: Char[] }
+  | TextBlock
+  | { type: "note"; blocks: TextBlock[] }
+  | { type: "photo"; path: string; alt: string };
+
 
 /** 書き出さないノード（資産・区切り）。 */
 const SKIPPED = new Set(["horizontalRule", "image", "docAssetImage", "recording"]);
@@ -157,6 +163,8 @@ function toTextBlocks(blocks: Block[]): TextBlock[] {
   return blocks.flatMap((block): TextBlock[] => {
     if (block.type === "heading") return [{ type: "paragraph", inline: block.inline }];
     if (block.type === "note") return block.blocks;
+    // 箱の中の写真は出さない（箱の中は段落とリストだけ。写真は箱の外に置く）
+    if (block.type === "photo") return [];
     return [block];
   });
 }
@@ -166,7 +174,12 @@ function headingLevel(attrs: unknown): 2 | 3 {
   return isNode(attrs) && attrs.level === 2 ? 2 : 3;
 }
 
-function convertBlocks(nodes: unknown, depth: number, out: Block[]): void {
+/** `![alt](path)` の alt に入れる文字（記法として読まれる文字と改行を落とす）。 */
+function escapeAlt(alt: string): string {
+  return alt.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/[\\[\]]/g, (char) => `\\${char}`).trim();
+}
+
+function convertBlocks(nodes: unknown, depth: number, out: Block[], options?: ExportMarkdownOptions): void {
   if (!Array.isArray(nodes) || depth > MAX_DEPTH) return;
   let loose: Char[] | null = null;
   const flushLoose = () => {
@@ -182,6 +195,16 @@ function convertBlocks(nodes: unknown, depth: number, out: Block[]): void {
       continue;
     }
     flushLoose();
+    if (type === "image" && options?.photoPath) {
+      // 写真（#33 の資産）。zip に入った写真だけを出す（読めなかった写真は出さない）
+      const attrs = isNode(node.attrs) ? node.attrs : {};
+      const assetId = typeof attrs.assetId === "string" ? attrs.assetId : null;
+      const path = assetId === null ? null : options.photoPath(assetId);
+      if (path !== null) {
+        out.push({ type: "photo", path, alt: typeof attrs.alt === "string" ? attrs.alt : "" });
+        continue;
+      }
+    }
     if (SKIPPED.has(type)) continue;
     if (type === "paragraph") out.push({ type: "paragraph", inline: inlineOf(node, depth) });
     else if (type === "heading") out.push({ type: "heading", level: headingLevel(node.attrs), inline: inlineOf(node, depth) });
@@ -191,14 +214,14 @@ function convertBlocks(nodes: unknown, depth: number, out: Block[]): void {
       out.push({ type: "list", ordered: type === "orderedList", items });
     } else if (BOXES.has(type)) {
       const inner: Block[] = [];
-      convertBlocks(node.content, depth + 1, inner);
+      convertBlocks(node.content, depth + 1, inner, options);
       out.push({ type: "note", blocks: toTextBlocks(inner) });
     } else if (hasInlineChild(node)) {
       // 未知の文字のブロック（コードのブロックなど）は段落にする
       out.push({ type: "paragraph", inline: inlineOf(node, depth) });
     } else {
       // 未知の入れ物（表など）は中身のブロックを並べる
-      convertBlocks(node.content, depth + 1, out);
+      convertBlocks(node.content, depth + 1, out, options);
     }
   }
   flushLoose();
@@ -434,6 +457,7 @@ function renderTextBlock(block: TextBlock): string[] {
 }
 
 function renderBlock(block: Block, boxes: MarkdownBoxStyle): string[] {
+  if (block.type === "photo") return [`![${escapeAlt(block.alt)}](${block.path})`];
   if (block.type === "heading") {
     const line = renderInline(block.inline);
     return line === "" ? [] : [`${"#".repeat(block.level)} ${line}`];
@@ -466,7 +490,15 @@ function renderBlock(block: Block, boxes: MarkdownBoxStyle): string[] {
  */
 export type MarkdownBoxStyle = "note" | "quote";
 
-export type ExportMarkdownOptions = { boxes?: MarkdownBoxStyle };
+export type ExportMarkdownOptions = {
+  /** 箱（引用・囲み）の書き方。既定は `note`。 */
+  boxes?: MarkdownBoxStyle;
+  /**
+   * 写真の書き出し先（資産の id → 書き出しの中の相対の path。入っていない資産は null）。
+   * 渡さなければ画像は出さない（共有・公開の書き出しは今までどおり本文だけ）。
+   */
+  photoPath?: (assetId: string) => string | null;
+};
 
 /**
  * 本文（TipTap の doc の content）を Markdown にする。空の本文は空文字列、それ以外は末尾に改行 1 つ。
@@ -475,7 +507,7 @@ export type ExportMarkdownOptions = { boxes?: MarkdownBoxStyle };
 export function exportMarkdown(blocks: readonly unknown[], options: ExportMarkdownOptions = {}): string {
   const boxes = options.boxes ?? "note";
   const converted: Block[] = [];
-  convertBlocks(Array.isArray(blocks) ? blocks : [], 0, converted);
+  convertBlocks(Array.isArray(blocks) ? blocks : [], 0, converted, options);
   const parts = converted.flatMap((block) => renderBlock(block, boxes));
   return parts.length === 0 ? "" : `${parts.join("\n\n")}\n`;
 }
