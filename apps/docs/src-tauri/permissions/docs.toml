@@ -64,3 +64,8 @@ commands.allow = ["personal_open", "personal_cancel", "personal_close", "persona
 identifier = "allow-docs-pc-runner"
 description = "Allows the NIHO docs window to read whether this Mac takes over the signed-in person's follow-up steps requested from a phone (on or off, waiting, running with the step name, login needed or NIHO unreachable) and to turn it on or off. Turning it on registers this Mac with NIHO using the account's ID token in Rust (the token never reaches the window), keeps the app in the menu bar and starts it at login; turning it off removes both. The window cannot claim, run or submit steps itself."
 commands.allow = ["pc_runner_status", "pc_runner_set_enabled"]
+
+[[permission]]
+identifier = "allow-editor-shell"
+description = "Allows the editor screen (editor.niho.life in the Mac shell, and the bundled screen) to ask what this Mac can do: the app version, whether this is a development launch, and whether microphone recording, on-device transcription and the local AI CLIs exist here. Nothing else is granted to the remote screen by this permission: no paths, keys, settings or document stores."
+commands.allow = ["shell_capabilities"]
