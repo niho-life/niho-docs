@@ -25,13 +25,25 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 | `DATABASE_URL` | ページの正本の PostgreSQL。未設定なら API は 503、画面は「保存先を使えません」 |
 | `EDITOR_AUTH_MODE` | `stub`（開発・CI だけ）か `niho`。開発では未設定で `stub` |
 | `EDITOR_ORIGIN` | 任意。更新系の要求の Origin 検査に使う origin（未設定なら Host と転送の header から） |
-| `EDITOR_AI_MODE` | 任意。未設定・`off` は AI を使わない（提案・採用は 503 `ai_unavailable`）。`fake` は偽物のモデル（開発・CI だけ。`NODE_ENV=production` では 503） |
+| `EDITOR_AI_MODE` | 任意。未設定・`off` は AI を使わない（提案・採用は 503 `ai_unavailable`）。`anthropic` は本物のモデル（Anthropic の Messages API。`ANTHROPIC_API_KEY` が空・未設定なら 503）。`fake` は偽物のモデル（開発・CI だけ。`NODE_ENV=production` では 503） |
+| `ANTHROPIC_API_KEY` | `EDITOR_AI_MODE=anthropic` の鍵。サーバーだけが要求のたびに読む（本番は Secret Manager から。[editor-deploy.md](../../docs/ops/editor-deploy.md) §10）。リポジトリ・ログに書かない |
+| `EDITOR_AI_MODEL` | 任意。`anthropic` のモデル。既定 `claude-sonnet-5-5`。`^[a-z0-9][a-z0-9._-]{0,63}$` に合わなければ 503 |
+| `EDITOR_AI_TIMEOUT_MS` | 任意。モデルの 1 回の呼び出しの時間切れ（ミリ秒）。既定 120,000、1,000〜300,000 に丸める |
+| `EDITOR_AI_MAX_TOKENS` | 任意。1 回の出力の上限（トークン。思考の分を含む）。既定 12,000、256〜32,000 に丸める（提案は送る文字数からこれ以下で決める） |
 | `EDITOR_AI_MONTHLY_LIMIT_USD` | 任意。owner ごとの月の上限（見込みの USD）。未設定は上限なし。0 以上の数でない値は 0（AI を止める） |
-| `EDITOR_STEPS_MODE` | 手順の実行の方式。`inline`（開発・CI だけ）。未設定・`off`・未知の値と、本番（`NODE_ENV=production`）の `inline` では手順の開始は 503 |
+| `EDITOR_STEPS_MODE` | 手順の実行の方式。`inline`（開発・CI だけ）か `cloud-tasks`（本番。下の 3 つが揃い形が正しいときだけ）。未設定・`off`・未知の値、本番（`NODE_ENV=production`）の `inline`、3 つが欠けた `cloud-tasks` では手順の開始は 503 |
+| `EDITOR_STEPS_QUEUE` | `cloud-tasks` のキュー（`projects/<p>/locations/<l>/queues/<q>`） |
+| `EDITOR_STEPS_WORKER_URL` | `cloud-tasks` の worker の基点（`https://<host>`。path なし）。task の宛先と OIDC の audience |
+| `EDITOR_STEPS_INVOKER_SA` | `cloud-tasks` の task と掃除の OIDC トークンの身元（`<name>@<project>.iam.gserviceaccount.com`）。worker の route はこの 1 つだけを通す |
+| `EDITOR_FACE_CREDENTIALS` | 任意（secret）。公開 API を NIHO の面が読むサービス間の資格。JSON の配列 `[{ "audience": "exp"\|"niho", "sha256": "<token の SHA-256 の小文字 hex>", "expiresAt": "<ISO 8601 UTC>" }]`。token の平文は置かない。未設定・不正（1 つでも形が違う）なら面は誰も読めない（不正は起動時と最初の要求で「不正」とだけログ）。署名つきのサービス間 token の契約ができるまでの暫定 |
+| `EDITOR_PUBLIC_API_RATE_LIMIT_PER_MINUTE` | 任意。公開 API の資格（の SHA-256）ごとの 1 分の要求数の上限（instance ごと）。未設定・不正は 600 |
+| `EDITOR_STUB_ROLES` | stub の方式だけ。NIHO の役割の代わり（カンマ区切り）。未設定なら `writer,kamakura`（両方の面に出せる）、空なら役割なし。niho の方式では読まず、役割の契約（#42）まで面には出せない（公開もプレビューの発行も） |
+| `EDITOR_DESTINATION_DECLARATIONS` | 任意。面の宣言の取得先 `{"exp": url, "niho": url}`（https だけ）。60 秒だけ持ち ETag で確かめ直す（5 秒・64 KiB まで。redirect は同じ host の https だけ）。未設定なら stub は同梱の dev 用の宣言（`src/publish/dev-declarations.ts`）、niho は「いまは公開できません」。値が読めなければどちらも宣言なし。公開 API のプレビューも、まだ公開していない面の URL をここから作る（宣言が無ければ 404） |
+| `EDITOR_ASSET_ORIGIN` | 任意。公開版の写真の URL の origin（https の origin だけ）。写真は `${origin}/assets/${sha256}.${ext}`。未設定・不正なら写真のあるページは公開できない（422。シートでは押せない）。公開 API のプレビューの写真も同じ URL（未設定なら写真のある下書きのプレビューは 503） |
 | `EDITOR_STORAGE` | 任意。資産（音声・画像）の保存先。`fake`（メモリの偽物。開発・CI だけで、`NODE_ENV=production` では起動しない）・`gcs`・`off`。未設定は本番 `off`（音声・画像の API は 503 `storage_unavailable`）、それ以外は `fake`。未知の値は起動しない |
 | `EDITOR_ASSETS_BUCKET` | `EDITOR_STORAGE=gcs` のとき必須。資産の bucket 名（無い・規則に合わなければ起動しない。値は表示しない） |
 
-確認のコマンド: `typecheck`・`lint`・`test`（vitest）・`build`・`test:startup`（build の後。本番の起動の守り）・`test:e2e`（`DATABASE_URL` と migration が要る。`next dev` を起動して API と画面を確かめ、作った行は消す）。
+確認のコマンド: `typecheck`・`lint`・`test`（vitest。`TEST_DATABASE_URL` があれば `*.pg.test.ts` も専用の schema で動く）・`build`・`test:startup`（build の後。本番の起動の守り）・`test:e2e`（`DATABASE_URL` と migration、build が要る。`next dev` を起動して API と画面を確かめ、公開 API は本番の build で確かめる。作った行・schema は消す）。packages を入れ直したあとは `.next` を消してから（`rm -rf .next`）build・e2e をする。
 
 ## 決まっていること
 
@@ -46,15 +58,17 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **保存の状態と端末の下書き（#33）**: 自動保存は入力の 1 秒後（⌘S・Ctrl+S は今すぐ）。送れない間（オフライン・サーバーの失敗・ログイン切れ）も本文は端末の IndexedDB（`niho-editor` / `page-drafts`、key はページの id）に残し、サーバーに届いたら消す。開いたときに下書きがあれば、同じ revision なら載せて送り直し、サーバーが先へ進んでいれば競合の帯を出す（`src/lib/drafts.ts`）。`/p/new` の作る前の本文は key `new` の 1 つの枠に残し、次に `/p/new` を開いたときに載せてそのままページを作る。作ったら以後の下書きはそのページの id に書き、枠の下書きは消す。
 - **版**: `GET /api/pages/{id}/versions`（新しい順・最大 100）、`GET …/versions/{n}`、`POST …/versions/{n}/restore`（`baseRevision` 付き。戻す直前の本文は版に残る。今の形で保存できない古い版は 422）。自動保存は本文が変わるとき、最新の版から 10 分以上空いていれば、保存の前の本文を版にする。1 ページ 200 版を超えたら古い自動保存の版から捨てる。
 - **ゴミ箱**: `DELETE /api/pages/{id}`（子孫も一緒。公開中は 409 `published`）、`GET /api/trash`、`POST /api/trash/{id}/restore`。30 日を過ぎたものは `npm -C packages/editor-store run purge-trash` が完全に削除する（定期実行の配線はクラウド側で別途）。
-- **AI の提案（#38 段 1。サーバー側だけ）**: `POST /api/pages/{id}/ai/proposals`（`baseRevision`・`intent`（`{ preset }` か `{ text }`）・任意の `scope`（最上位のブロックの位置の範囲。`toIndex` を含む））は提案を返すだけで、ページには何も書かない。`POST /api/pages/{id}/ai/adoptions` は採用したものだけを、今の本文を版（`ai`）に残してから `baseRevision` 付きで保存する（履歴から戻せる）。`GET /api/ai/usage` は今月（Asia/Tokyo）の使用量。実装は `src/ai/`（提案エンジン・語単位の差分・候補・偽物のモデル・プロンプト）と `src/server/ai-api.ts`。モデルと鍵はサーバー側で、この段は偽物だけ（本物のプロバイダは後段）。
+- **公開のシート（#39）**: `GET /api/pages/{id}/publish`（シートの中身。発信先・条件・URL・主ボタン）、`POST /api/pages/{id}/publish`（`{ handle, range, extras, slug? }`。公開していなければ公開、同じ発信先なら更新を公開、別の発信先なら発信先を変える）、`POST /api/pages/{id}/publish/stop`（公開をやめる。もう一度呼んでも同じ）。判定と状態遷移は `packages/editor-publish`、ポートの組み立ては `src/publish/ports.ts`、Postgres は `src/publish/pg-store.ts`。公開・更新の前に自動保存を待ち（届かなければ送らない）、条件はサーバーでも評価し直す。カテゴリ・関連する体験は editor にまだ欄が無いので、同じ発信先なら公開中の値を引き継ぐ。 保存先（#50。設計 §2.1）がクラウドでない（`LOCAL`・移行中の `CLOSING`・知らない値）アカウントは、公開が 403 `storage_not_cloud` で、シートは `storageBlock` を返して主ボタンを出さない。保存先は NIHO から読む契約が出るまで「未選択（`UNSET`＝クラウドと同じ）」で、要求の本人でなければ `LOCAL`（fail closed）。
+- **AI の提案（#38 段 1。サーバー側だけ）**: `POST /api/pages/{id}/ai/proposals`（`baseRevision`・`intent`（`{ preset }` か `{ text }`）・任意の `scope`（最上位のブロックの位置の範囲。`toIndex` を含む））は提案を返すだけで、ページには何も書かない。`POST /api/pages/{id}/ai/adoptions` は採用したものだけを、今の本文を版（`ai`）に残してから `baseRevision` 付きで保存する（履歴から戻せる）。`GET /api/ai/usage` は今月（Asia/Tokyo）の使用量。実装は `src/ai/`（提案エンジン・語単位の差分・候補・偽物のモデル・プロンプト・Anthropic のアダプタ）と `src/server/ai-api.ts`。モデルと鍵はサーバー側だけ。
   - 編集の対象は最上位の段落と見出しだけ（箇条書き・引用・囲み・画像などは文脈として送るだけ）。段落はブロックの位置で指す。**変更した段落の太字・斜体・リンクは外れてプレーンテキストになる**（v1 の制限）。変更しない段落には触れない。
-  - 足すだけの候補（要約・見出しをつける・Add headings・記事にできそうな部分・Check facts to confirm）は、モデルが既存の文の変更を返しても捨てる。長いページは段落の切れ目で約 12,000 文字ずつに分けて頼み、20 万文字を超える範囲は 413 `too_large`。
+  - 足すだけの候補（要約・見出しをつける・Add headings・記事にできそうな部分・Check facts to confirm）は、モデルが既存の文の変更を返しても捨てる。長いページは段落の切れ目で約 4,000 文字ずつに分けて頼み、30,000 文字を超える範囲は 413 `too_large`（範囲を選んで頼む）。
+  - 本物のモデル（`src/ai/anthropic.ts`）: 呼ぶのは固定の `https://api.anthropic.com/v1/messages` だけ（設定で変えられない。転送も追わない）。本文は `<untrusted_data>` の中だけに入れ、規則は system に置く。応答の最初の text ブロックを JSON として読む（コードフェンスは外す）。読めない・空・途中で切れた（`stop_reason: "max_tokens"`）応答と、HTTP の失敗・時間切れは 502 `ai_failed`（読めない・途中で切れた応答の使用量は数える）。自動の再試行はしない。`temperature` は送らない（claude-sonnet-5-5 など新しいモデルは既定以外の値を断る）。鍵・プロンプト・本文はエラーとログに出さない（ログは失敗の種類と HTTP ステータスだけ）。テストは差し替えた `fetch` だけで、本物の API は CI でも手元でも呼ばない。
   - 使用量は表 `ai_usage`（migration 0005。owner × 月）に原子的に足す。金額は docs-core の単価表の見込み（偽物・単価不明は 0）。上限以上はモデルを呼ぶ前に 429 `quota_exceeded`、上限の 80% 以上で `nearLimit`。モデルの失敗・検証に通らない出力は 502 `ai_failed`（使った分は記録する）。
-- **索引に載せない**: 全ての応答に `X-Robots-Tag: noindex, nofollow`（`next.config.ts`）、全ページに `<meta name="robots" content="noindex, nofollow">`。`robots.txt` は Disallow を付けない（クロールを止めると noindex が読まれない）。
+- **索引に載せない**: 全ての応答に `X-Robots-Tag: noindex, nofollow`（`next.config.ts`）、全ページに `<meta name="robots" content="noindex, nofollow">`。`robots.txt` は Disallow を付けない（クロールを止めると noindex が読まれない）。公開 API の `/v1/*` だけは契約どおり `X-Robots-Tag: noindex` を handler が付ける（Next は config の header があると route の値を捨てるので、全体の規則から `/v1/` を外している）。
 - **本文**: niho-docs-ui の `BlockEditor`（TipTap）を使い、`blocks` は TipTap の doc の `content`（ブロックの配列）をそのまま保存する。サーバーが見るのは「`type` を持つ object の配列で、大きさと深さが上限の内側」だけ。**限定 AST としての厳密な検証（許すブロックの種類・HTML の正規化）は #33。**
 - **React を 1 本にする**: `.npmrc` の `install-links=true` で packages/* を node_modules に複製して入れる。docs-ui の側の node_modules（React 18）を拾わず、react・TipTap はこの app の 1 本に解決する（`src/components/PageEditor.test.tsx` が確かめる）。packages を書き換えたら `npm install` し直し、`apps/editor-web/.next` も消す（packages の version が同じだと webpack の cache が古い版を使い続け、`next build` は警告だけで通って実行時に 500 になる。CI は毎回新しい checkout なので影響しない）。
 - **bundler は webpack**（`--webpack`）: docs-core は `./types.js` で `./types.ts` を指す書き方で、Turbopack は node_modules の中のこれを解決しないため。`experimental.extensionAlias` で `.js` を `.ts` にも当てる。
-- **packages/editor-store**: migration（`migrations/NNNN_*.sql`、BEGIN/COMMIT で包み辞書順）と `EditorStore`。全てのクエリが `owner` と `deleted_at IS NULL` で絞る。`page_versions` には保存・上書き・戻す直前の本文を書く。`assets` は音声（`src/recording-audio.ts`）と画像（`src/images.ts`）が書く。`publications` は表だけで、書くコードはまだ無い。
+- **packages/editor-store**: migration（`migrations/NNNN_*.sql`、BEGIN/COMMIT で包み辞書順）と `EditorStore`。全てのクエリが `owner` と `deleted_at IS NULL` で絞る。`page_versions` には保存・上書き・戻す直前の本文を書く。`assets` は音声（`src/recording-audio.ts`）と画像（`src/images.ts`）が書く。公開（公開版・転送・接続・鍵・プレビューの token）の表は `0009_publications.sql`（プレビューの token に結ぶ著者の列は `0010_preview_token_author.sql`）、SQL は `src/publications.ts`。
 
 ## 検索（#35）
 
@@ -62,7 +76,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **索引**: migration `0003_search_text.sql` が `pages.search_text`（題名 + 本文の text ノードの文字だけ。generated column なので保存のコードは触らない）と pg_trgm の GIN（`deleted_at IS NULL`）を足す。pg_trgm は PostgreSQL の contrib（Cloud SQL・postgres:16-alpine・homebrew の postgresql@16 に入っている）。検索のコードは `packages/editor-store/src/search.ts`。
 - **フック**: `usePageSearch(query)`（150ms 止まってから 1 回だけ問い合わせ、古い要求は中止。`idle | loading | ready | error`）と `useSearchShortcut(onOpen)`（Mac は ⌘K、それ以外は Ctrl+K。入力欄の中でも効き、IME の変換中は無視）。
 - **画面（`EditorFrame`）**: サイドバーの検索入力に打つと、サーバーで題名と本文を探し、結果を更新順に出す（2 行目に当たった所の一文）。検索中は続きの読み込みを止め、一覧の下に状況（「N 件」「探しています…」「見つかりませんでした」と失敗）を `role="status"` で出す。検索語が空に戻ればふつうの一覧。⌘K（Mac 以外は Ctrl+K）で、畳まれた一覧を出し（狭い画面ではページから一覧へ）、検索入力を開いてフォーカスする。すでに開いていれば入力へフォーカスを戻す。専用のパレットは作っていない（モック v6 にもサイドバー内の検索しかない）。
-- **まだ**: 絞り込み（公開中・録音・日記。`/api/search` に引数が無く、公開中は `publications` の join が要る＝公開の配線の後）。
+- **まだ**: 絞り込み（公開中・録音。`/api/search` に引数が無く、公開中は `publications` の join が要る＝公開の配線の後）。
 
 ## リンクで共有・複製・書き出し（#34）
 
@@ -72,7 +86,19 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **`/s/{token}`**（`src/app/s/[token]/page.tsx`。`app/(editor)` の外なので、枠・一覧を出さず、未ログインでもログインへ移さない。CSP の nonce は他の画面と同じく `src/proxy.ts` が付ける）: 認証を使わず、題名と本文（最新の保存版）だけを `src/share/render-blocks.tsx` で React の要素にする（HTML を注入しない。リンクは https・http・mailto だけ、`rel="noopener noreferrer nofollow ugc"`）。形の違う・未共有・止めた・作り直す前の token とゴミ箱のページは同じ 404、DB を使えないときは汎用の 500。header は `next.config.ts` の `/s/:token*` の規則で `Cache-Control: private, no-store`・`Referrer-Policy: no-referrer`（全体の規則の後に置き、値は 1 つ）。`next dev` はページの Cache-Control を開発用の値に置き換えるので、本番の値は `test:startup` で確かめる。
 - **表**: migration `0004_page_shares.sql`（共有中のページに 1 行。止める＝行を消す。token は 256 bit の乱数の base64url を平文で持つ）。コードは `packages/editor-store/src/shares.ts`・`duplicate.ts`。
 - **書き出し**（`src/export/markdown.ts`）: niho-experience の Markdown サブセット（`apps/web/src/lib/guide-markdown.ts`）として読める形だけを出す。見出しは `##`/`###`、リストは 1 行 1 項目に平坦化、引用・囲みは `:::note`、リンクは https だけ、画像・区切り線は出さない。本文の記号は `\` で逃がす（日本語は変えない）。parser の受理規則を写した oracle が `src/export/markdown.test.ts` にある。
-- **画面から呼ぶ関数**（組み込みは #32）: `src/lib/page-actions-client.ts`（`getPageShare`・`startPageShare`・`rotatePageShare`・`stopPageShare`・`duplicatePageRequest`・`pageExportUrl`）。
+- **画面から呼ぶ関数**: `src/lib/page-actions-client.ts`（`getPageShare`・`startPageShare`・`rotatePageShare`・`stopPageShare`・`duplicatePageRequest`（新しい id・題名・種類を返す）・`pageExportUrl`・`deletePageRequest`・`listPageVersions`・`restorePageVersion`（`baseRevision` 付き。30 秒で打ち切る））。
+- **ヘッダーの状態と「…」（#34 第 1 段・第 2 段）**:
+  - **状態の丸**（docs-ui の `StatusDot`）: 公開の状態（公開中・更新あり・限定公開・公開をやめた。公開のシートが読んだもの。#39）＋保存の状態（「公開中 · … · 保存済み」「自分だけ · 保存中」「· オフライン・この端末に保持」など。言葉は `src/lib/save-status.ts` の `headerStatus`）。公開のシートがまだ読めていない間は「自分だけ」。ページの外（`/`・設定・録音から）では出さない。
+  - **読み上げ**: 保存の状態を読み上げるのはヘッダーの丸（`aria-live="polite"`）だけ。本文の上の「保存済み」などの表示は見える文字として残し、live region にしない（二重に読み上げない）。
+  - **「…」**: リンクで共有・書き出し（.md）・履歴・複製・削除（docs-ui の `shellMoreItems` の順）。Google ドキュメントへの書き出しは NIHO の API 待ち。まだ作っていないページ（`/p/new`）と、端末の下書きを読み終える前は出さない。開閉と項目の移動は `ShellMenu`（↑↓・Home・End・Esc）で、選んだらフォーカスは「…」へ戻る。リンクで共有の補足「共有中」は、共有していると分かっているときだけ出す（`/p/{id}` の RSC が開くときに真偽だけを読んで渡し、共有のシートで読んだ・変えた値で更新する。読めなければ出さない。リンクそのものは RSC の payload に入れない）。
+  - **どの操作も先に保存する**: まだ届いていない変更を今送り、全て届くまで待つ（`Autosave.settle`）。届かなければ（オフライン・ログイン切れ・サーバーの失敗・競合で止めている）操作を止め、シートも開かずに「〜の前に変更を保存できませんでした」（履歴は「履歴を開く前に…」）と出す（編集は捨てない）。同じページの操作は 1 つずつ。
+  - **複製**: `POST …/duplicate` → 一覧の上に足し、`/p/{新しい id}` へ。失敗は「…」の左に短く（`role="alert"`。「複製できませんでした」）。
+  - **書き出し**: 同じ origin の `<a href="/api/pages/{id}/export.md" download>` を押す（本文は fetch で読まない。ファイル名はサーバーの Content-Disposition）。
+  - **削除**: 確認のダイアログ（docs-ui の `ShellSheet` を `EditorShell` の overlay に。外は inert、Esc・「やめる」で閉じ、フォーカスは「…」へ戻る）→ `DELETE /api/pages/{id}`（204）→ 一覧からそのページと子孫（読み込み済みの分。サーバーは子孫ごとゴミ箱へ入れる）を外し、`/` へ（`editor_last_page` が消したページを指していても、`/` はサーバーで確かめて新しいページへ移す）。409 `published` は「公開中のページは、先に公開をやめてください」、他の失敗は「削除できませんでした」をダイアログの中に出し、閉じない（一覧もページもそのまま）。送っている間は 2 回目を送らず、閉じない（応答は 30 秒で打ち切る）。
+  - **リンクで共有**（`src/lib/use-page-share.ts`・`src/components/ShareSheet.tsx`。ShellSheet）: 開くたびに `GET …/share` を読む（その間「読み込み中」を `role="status"`）。共有していなければ「リンクを作る」（`PUT`）、共有中ならリンク（読み取り専用の入力）・「コピー」・「作り直す」・「共有を止める」（`DELETE`）。「作り直す」はその場で「作り直すと、古いリンクは読めなくなります。」と確かめてから `POST …/share/rotate`（やめる・Esc は確かめるのをやめるだけ）。コピーは `navigator.clipboard.writeText`、使えなければ入力を選んで「⌘C でコピー」（Mac 以外は Ctrl+C）。作った・作り直した・止めた・コピーしたは同じ `role="status"` で短く知らせ、失敗はシートの中に短く（閉じない）。操作は同じページで 1 つずつで、送っている間もシートは閉じられる（開き直すと、その結果を待つ。2 つ目は送らない）。リンクは共有中のこのシートにだけ出し、例外・ログには入れない。
+  - **履歴**（`src/lib/use-page-history.ts`・`src/components/HistorySheet.tsx`。ShellSheet）: 開くたびに `GET …/versions`（新しい順）を読み、各行に いつ（一覧と同じ `formatWhen`）・理由（自動保存／AI の提案の前／公開／上書きの前／戻す前）・ブロック数・「この版に戻す」。0 件は「まだ履歴がありません」。「この版に戻す」は同じシートで確かめる（「本文がこの版になります（題名はそのまま）。いまの本文は、戻したあとも履歴から戻せます。」。サーバーは戻す前の本文を版 `restore` に残してから戻し、題名は変えない）。「戻す」でもう一度保存を確かめ、今の revision を `baseRevision` に `POST …/versions/{n}/restore`。409 は「別の画面で保存されました。開き直してからもう一度」、422 は「この版には戻せません」（どちらもシートの中。閉じない）。戻している間は閉じず、2 回目を送らない。戻せたらシートを閉じ、エディタを応答のページ（題名・本文・revision）で開き直し（`PageEditor` が key を替えて作り直す。保存・下書き・Undo の部品も新しく、次の保存はその revision の上に送るので競合にしない。端末の下書きは開いたときと同じく比べ直す）、ヘッダーの `role="status"` で「この版の本文に戻しました」と知らせ、一覧の上へ動かす。下書きを読み直す間に「…」が消えてフォーカスが外れたら、出し直したときに「…」へ戻す。
+  - **枠とページの橋渡し**: ヘッダーは枠（`EditorFrame`）、保存の状態とエディタはページの中（`PageEditor`）にあるので、`PageEditor` が `useEditorFrame().attachPage({ id, status, flush, revision, reopen, shared, setShared })`（`src/lib/attached-page.ts`）で自分を登録し（保存の状態が変わるたびに登録し直す）、画面を離れたら外す。操作は「…」を開いたページの id に対して行い、終わったときに別のページへ移っていたら（id と flush で見分ける。版に戻して開き直した画面も別の画面）、その画面には何も出さず移動も開き直しもしない（複製・削除が済んだことは一覧には反映する）。一覧からは `pageRemoved(id)` で外す。
+  - **まだ**: 版の中身を見る（`GET …/versions/{n}` は使っていない。一覧から戻すだけ）、情報パネル、写真の zip と Google ドキュメントへの書き出し。競合の帯が出ている（自動保存を止めている）間は、共有・履歴も開かない（先に帯で決める）。検索の結果からは、この画面で削除したページと一覧に読み込んであった子孫だけを外す（読み込んでいない子孫は、次に探すまで結果に残る）。
 
 ## 手順（#37）
 
@@ -81,9 +107,13 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **API**: `POST /api/pages/{id}/steps/runs`（`{ recipe, fromStep? }`、任意の `Idempotency-Key`。202。進行中は 409 `run_in_progress`、上流が済んでいない `fromStep` は 400 `invalid_from_step`、方式が無いと 503 `steps_unavailable`）、`GET /api/pages/{id}/steps`（最新の run。返す前に前提変更を再計算）、`POST /api/pages/{id}/steps/runs/{runId}/cancel`（冪等）。作法は `/api/pages` と同じ（401・403・404 は同一・413・noindex）。
 - **状態の正**は `packages/editor-store/src/step-runs.ts`（表は migration `0006_step_runs.sql`）。遷移はすべて世代と状態を条件にした UPDATE で、claim のたびに世代が進み、確定・失敗・生存確認は世代が一致するときだけ通る（取消・lease 切れの後に遅れて返った結果で上書きしない）。確定（サブページの本文と状態・次の段階）は 1 transaction。
 - **サブページの id** は親・recipe・段階から決定的に作る（作り直しても同じページ）。`fromStep` から作り直すと、前の段階の済んだサブページを再利用する。
-- **失敗**: 一時的な失敗は 3 回まで（間隔を空けて積み直す）、超えるか入力の誤りなら失敗。後続は取り消し、上流は残す。lease が切れた段階は `sweepExpiredLeases` が積み直す（定期の呼び出しは後段）。
+- **失敗**: 一時的な失敗は 3 回まで（間隔を空けて積み直す）、超えるか入力の誤りなら失敗。後続は取り消し、上流は残す。lease が切れた段階は `sweepExpiredLeases` が積み直す（下の掃除の route から）。
 - **前提変更**: 前の段階（段階 0 は録音ページ）の本文と指示文の基準が、実行したときの基準と違えば、その段階から後を `stale` にし、戻れば `done` に戻す。
-- **実行**（`src/steps/`）: `runAttempt` が claim → 入力を読む → 生存確認（lease の 1/3 おき）→ 実行器 → 確定 → 次を積む。`inline` は同じプロセスで最後まで進める（要求は待たない）。**Cloud Tasks・内向きの worker の route と OIDC・本物の AI・画面は後段**。
+- **実行**（`src/steps/`）: `runAttempt` が claim → 入力を読む → 生存確認（lease の 1/3 おき）→ 実行器 → 確定 → 次を積む。`inline` は同じプロセスで最後まで進める（要求は待たない）。実行器は `src/server/steps-deps.ts` の 1 か所で選ぶ（今は偽物）。**本物の AI・画面は後段**。
+- **`cloud-tasks`**（本番。配備は [editor-deploy.md](../../docs/ops/editor-deploy.md) §10）: `src/steps/cloud-tasks.ts` が Cloud Tasks の REST に task を積む（名前は `taskName`。同じ名前の 2 度目は `ALREADY_EXISTS` で積み済み。再試行の間隔は `scheduleTime`、1 つの task は最大 30 分。アクセストークンは Cloud Run のメタデータサーバーから）。task は同じサービスの worker の route を呼ぶ:
+  - `POST /api/internal/steps/run`（本文 `{ runId, stepIndex }`・1 KiB まで）: `runAttempt` を呼び、`completed`・`retry`・`failed`・`stale`・`skipped` のどれも 200 `{ status }`。例外は 500（Cloud Tasks が再試行する）。
+  - `POST /api/internal/steps/sweep`（Cloud Scheduler が 5 分おき。本文は読まない）: lease の切れた段階を queued に戻し（`sweepExpiredLeases`）、進行中の run の queued の段階（`listQueuedAttempts`）を全て同じ task の名前で積み直す。200 `{ requeued }`（新しく積んだ数）。
+  - **OIDC で守る**: サービスは誰でも呼べるので、route が Google の ID トークンを検証する（`src/server/google-oidc.ts`。依存なし。RS256 だけ・Google の JWKS・`iss`・`aud` = `EDITOR_STEPS_WORKER_URL`・期限（ずれ 60 秒）・`email` = `EDITOR_STEPS_INVOKER_SA` かつ確認済み）。方式が `cloud-tasks` でなければ 404、トークンが無い・通らなければ本文を読まずに 401、`Origin` が付いていれば 403。応答とログは短い code だけ。
 
 ## 録音と文字起こし（#36 段 1）
 
@@ -97,6 +127,10 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **上限**: VTT は UTF-8 で 4 MiB（取り込みの要求の本文は 5 MiB まで。超えたら 413）、段落は 20,000 個・1 段落 5,000 文字・本文の合計 8 MiB（docs-core の文字起こしの同期上限と同じ）、1 回の `edits` は 200 件（`PATCH` の本文は 4 MiB まで）。
 - **表**: migration `0007_page_recordings.sql`（録音ページに 1 行。ページを消す（hard delete）と消える。ゴミ箱の間は残る）。コードは `packages/editor-store/src/recordings.ts`、段落と話者の操作（純粋な関数）は `src/recording/`。
 - **まだ**: 音声の取り込み・エンジン（段 2）、マイク録音・再生・タイムスタンプの画面（段 3）。
+- **画面（段 3a。音声に依存しない部分）**:
+  - **できること**: 「録音から」（`/p/new?from=recording`）で文字起こし済みの `.vtt` を選ぶ（ドロップも可。4 MiB 超は送る前に断る）と、`importVtt` で録音ページを作って `/p/{id}` へ移る。失敗は画面に日本語で出し、選んだファイルは残す。録音ページ（`kind=rec`）は、`PageEditor` の上に文字起こし（`RecordingTranscript`）が入る。段落をその場で直して確定（フォーカスが外れたとき・Enter。変換中は確定しない）すると保存し、話者を押すと名前を変えられ、別の話者にまとめられる（確認は 1 回）。時刻の表示は端末ごとの好み（localStorage）。
+  - **保存**: 書き込みは 1 本ずつ順に送り、`baseRevision` は直前の応答の revision。別の画面が先に直していたら（409）自分の文章は消さず、最新に合わせて「別の場所で先に直されました。最新に合わせました」と出す。直した段落は止めておき、「もう一度保存」か書き直して確定すると送る（勝手には送り直さない）。クライアントは `src/lib/recording-client.ts`、サーバーの reason の日本語は `recordingErrorMessage`。
+  - **まだできない**: 音声ファイル（.m4a .mp3 .wav）とマイクは「まだ使えません」と知らせるだけ。再生・波形は出さない（音声は段 2 のあと）。「この録音から」（`ShellMakeFrom`）とサブページは手順（#37）の画面で出す。背景情報と「このあと」は入力できるが、まだ使われない（登場人物・固有名詞も未接続）。サイドバーの行は、取り込んだ直後は「録音」の 2 行目が出ない（読み込み直すと出る。`EditorFrame` の `pageCreated` が種類を受けない）。段落の数が多い録音の仮想化はしていない。
 
 ## 録音の音声（#36 段 2a）
 
@@ -124,6 +158,34 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - 配備で `EDITOR_STORAGE=gcs` を渡すまで、本番の音声の API は 503 `storage_unavailable`。
 - 画面の CSP の `connect-src` に `https://storage.googleapis.com` を足すのは、画面に組み込む段 3（今の CSP は `'self'` だけなので、ブラウザから GCS への PUT は通らない）。
 
+## ショートカット（#43）
+
+設計 §11 のキー。Mac は ⌘、それ以外は Ctrl（Mac の Ctrl+K・Ctrl+N は入力欄の操作なので使わない）。入力欄・本文の中でも効く。IME の変換中・ほかの処理が扱った keydown・想定外の修飾キー付き（⌥ など）は無視する。判定は `src/lib/shortcuts.ts` の 1 か所。
+
+| キー | すること | 効く条件 |
+| --- | --- | --- |
+| ⌘N | 新しいページ（一覧の「＋」→「空のページ」と同じ） | 公開のシートを開いていないとき。新しいページの画面と、移っている最中は二つ目を作らない |
+| ⌘K | 一覧を出し、検索の入力欄へ | 公開のシートを開いていないとき |
+| ⌘S | 待たずに保存（ブラウザの「ページを保存」は出さない） | ページの画面。⌘S だけはどの端末でも ⌘・Ctrl の両方で、変換中も取る |
+| ⌘/ | ブロックの一覧（「＋」と同じ項目）。行が空ならその行を、文字があればその下に足す行を変える。↑↓・Enter・Esc | 本文にフォーカスがあるとき |
+| ⌘⇧P | 公開のシート（ヘッダーの「公開」と同じ） | ページ（`/p/{id}`）の画面だけ。一覧・設定・新しいページ・録音から、狭い画面で一覧を出しているときは無視 |
+
+- **ブラウザが先に取るキー**: ページは keydown を `preventDefault` できるときだけ勝てる。⌘N（Ctrl+N）はブラウザのタブでは新しいウィンドウが開き、ページに届かない（そのときは一覧の「＋」から）。Firefox の Ctrl+Shift+P（プライベートウィンドウ）も届かない見込み。どちらも実ブラウザ・インストールした PWA の窓では確かめていない。
+- **公開のシートの開き方**: ヘッダーの「公開」、⌘⇧P、ページから `useEditorFrame().openPublish()`。シートの中身（発信先・条件・URL・更新・やめる）は `src/components/PagePublish.tsx`（#39）。⌘⇧P は `src/lib/shortcuts.ts` の判定で、シートが開いているあいだは ⌘N・⌘K を効かせない。
+
+## 公開 API v1（#40）
+
+発信先（NIHO Experience・NIHO・本人のサイト）が公開版を読む API。契約は [editor-publish-api-v1.md](../../docs/security/editor-publish-api-v1.md) と `@niho/editor-publish-contract`。データは Postgres（`DATABASE_URL` が無ければ `/v1/*` もプレビューの発行も 503 `temporarily_unavailable`）。
+
+- **経路**: `src/app/v1/[...path]/route.ts`（GET・HEAD。他のメソッドも handler に渡して 400 ＋ `Allow: GET, HEAD`）。`/v1/{handle}/published.json`・`/v1/{handle}/published/{id}.json`・`/v1/preview/{token}.json`。`src/proxy.ts` は `/v1/` を通さない（CSP の nonce も戻り先の header も要らない。ログインへも移さない）。
+- **handler**（`src/public-api/handler.ts`）: 判定の順・404 の同一性・410 の `movedTo`・ETag と `If-None-Match`（認証が先）・header・requestId つきのエラー・query の検証・プレビューの規則を契約どおりにし、返す直前に契約の検証器（`requireProjection`）で自己検証する（通らなければ 503）。資格・token は SHA-256 にしてから引き、ログ・例外には入れない。cursor は不透明（位置と一覧の範囲に結んだ印つき。書き換え・別の handle や include の cursor は 400。印は鍵を使わないので偽造は防がないが、cursor は権限を持たない）。
+- **データの port**: `src/public-api/source.ts` の `PublicApiSource`（鍵 → handle、一覧の keyset、handle × id の公開版、プレビュー token の拘束、現在の下書き）。Postgres の実装は `src/public-api/pg-source.ts`（SQL は packages/editor-store の `publications.ts`）。失効・解除・公開をやめた・移動は、記録されていれば時刻によらず効く（時計がずれても失効した鍵で読めない側に倒す）。期限は要求の時刻と比べる。面の資格は `EDITOR_FACE_CREDENTIALS`。
+- **プレビューの中身**: 現在の下書き（ページ・資産・公開・公開版を 1 つの読み取りの transaction で読む）から `buildSnapshot` で組み、version と時刻はページの保存の版（`revision`）と時刻（`updated_at`）。その handle に公開している（やめたものも含む）ページは、その公開の設定と、いまの公開版の URL を使う。公開していない handle では、URL を発信先の宣言（本人のサイトは接続の設定、面は `EDITOR_DESTINATION_DECLARATIONS`。stub は同梱の dev 用）から作る（無ければ 404）。著者は token に結んだもの（発行したときの本人。公開・更新が本人の名前で組むのと同じ）で、token に著者が無ければいまの公開版の著者（どちらも無ければ 404）。写真の URL は公開と同じ `EDITOR_ASSET_ORIGIN`（未設定なら写真のある下書きのプレビューは 503）。配線は公開のシート（#39）の部品（`src/publish/config.ts`・`ports.ts`）を `src/server/deps.ts` の `publicApiDeps` でつなぐ。
+- **rate limit**: 資格の SHA-256 ごとの 1 分の固定窓、instance ごと（instance が増えると全体の上限も増える）。超えたら 429 ＋ `Retry-After`。
+- **プレビューの発行**: `POST /api/pages/{id}/preview-token`（本文 `{ handle }`。本人だけ・同じ origin だけ）。201 `{ token, expiresAt, url }`。ページは本人の・ゴミ箱でないもの、handle は本人が役割で出せる面か本人の解除していない接続（どちらも満たさなければ同じ 404）。15 分、保存はハッシュと著者だけ（`PreviewTokenStore`。表は `preview_tokens`）。NIHO の役割と著者は公開のシート（#39）と同じ（`roleReaderOf`・`sessionAuthors`）: stub は `EDITOR_STUB_ROLES`（既定で両方の面に出せる）、niho は役割の契約（#42）まで面へは出せない（本人のサイトの接続へは出せる）。著者は session の名前で、無い・token に結べない形（256 文字を超える、url が https でない、など）なら著者なしで発行する（migration 0009。発行の前の token も著者なし）。
+- **テスト**: `src/public-api/handler.test.ts` が production の handler（＋メモリの `PublicApiSource`）と契約の参照モデル（テスト専用）を、cases.json の全シナリオと合成の world（400 個 × 60 要求、各一覧の cursor の全走査）で突き合わせ、status・header・本文がバイト単位で同じことを確かめる（cursor の文字列だけは違ってよい）。`src/public-api/pg-source.pg.test.ts` は同じ公開・接続の操作をメモリの store と Postgres の store で行い、両方の応答が同じことを確かめる。`test:e2e` は本番の build と実 DB で、鍵・面の資格・410・304・HEAD・プレビューの発行と読み取り（token の著者・stub の役割での面・`EDITOR_ASSET_ORIGIN` の写真の URL）・header を確かめる。
+- **Vary**: Next は App Router の全ての応答の Vary に自分の header（`rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch`）を足すので、実際の値はそれに `Authorization` を続けたもの（契約の文言は `Vary: Authorization`。オーナーの判断待ち）。
+
 ## 本文の画像（#33）
 
 本文に画像を入れる（貼り付け・ドロップ・ファイル選択）。実体は private bucket に置き、**読み取りはサーバーが中継する**（署名付き URL をブラウザへ渡さないので、CSP の `img-src` は `'self' data: blob:` のまま）。アップロードは音声（#36 段 2a）と同じ二段で、保存先の口（`src/storage/`）も同じものを使う。
@@ -141,7 +203,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - **申告値**: `sha256`・`contentType`・`sizeBytes` はクライアントの申告（ブラウザで sha256 を計算して送る）。サーバーは中身を読まず、sha256 を検証しない。大きさだけ complete で保存先と照らす。中継のときだけ中身を通す。
 - **冪等**: 同じ `Idempotency-Key`・同じページ・同じ内容（ページ・種類・大きさ・sha256 を正規化した SHA-256 で比べる）は 200 で同じ資産。アップロード中なら ticket を作り直し、済んでいれば `upload: null`。complete は何度呼んでもよい。
 - **エディタ**（`src/editor/`）: `image-node.ts`（TipTap のノード。block・atom・draggable、貼り付け・ドロップのファイルを受ける plugin、「/」「＋」の「画像」からのファイル選択）と `ImageNodeView.tsx`（React の NodeView。`src` は中継の path。**画像を選ぶと alt・クレジット・掲載許諾の欄をここに出し**、直すと本文の自動保存と資産の行の両方へ入る）。入れられないとき（ページがまだ無い・種類・大きさ・枚数・失敗）は本文を変えずに、本文の下に理由を出す。
-- **表**: migration `0009_image_assets.sql`（assets に `upload_status`（uploading／ready）・`upload_key`・`request_hash`）。資産は assets（`kind=image`、`bucket_path` = `image/{asset id}`、`alt`・`credit`・`consent` は 0001 から）。コードは `packages/editor-store/src/images.ts`。
+- **表**: migration `0011_image_assets.sql`（assets に `upload_status`（uploading／ready）・`upload_key`・`request_hash`）。資産は assets（`kind=image`、`bucket_path` = `image/{asset id}`、`alt`・`credit`・`consent` は 0001 から）。コードは `packages/editor-store/src/images.ts`。
 - **共有リンク**: `/s/{token}` の本文の画像は `sharedImageAsset`（その token のページの、ready の画像だけ）で絞って中継する。描くのは `src/share/render-blocks.tsx`（`assetSrc` を渡さなければ画像を描かない＝読めない `img` を置かない。クレジットは `figcaption`）。**ページの複製（#34）は本文（資産の id）を写すが資産の行は写さない**ので、複製したページの共有リンクでは画像が出ない（資産は 1 つのページに属する。必要になったら写す側で足す）。
 - **消さない**: アプリは画像の object を消さない。ゴミ箱の purge は資産の行だけを消し、object は残る（`purgeTrash` が場所を返す。画像には音声のような期限のライフサイクル規則を置かない）。
 
@@ -160,4 +222,4 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 
 ## まだやらないこと
 
-見た目（#48）、版・履歴・オフライン・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、一覧の 2 行目の公開先（#39）、公開と公開 API（#39〜#41）、録音の開始（#36）、検索の絞り込み（#35）、発信先・役割とつながり・設定の中身（#41・#42 とその後）、AI の画面・本物のプロバイダ・固有名詞の設定（#38 の後段）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。
+見た目（#48）、版・履歴・オフライン・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、プレビューを開く画面（token の発行は API だけ。#40 の後）、鍵の画面（#41）、公開の知らせ（録音は公開版に含まれない、など）の表示と、本人のサイトが 2 つ以上のときの選び方（#39 の後）、録音の開始（#36）、検索の絞り込み（#35）、発信先・役割とつながり・設定の中身（#41・#42 とその後）、AI の画面・固有名詞の設定（#38 の後段）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。

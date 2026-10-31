@@ -37,6 +37,8 @@ import {
   type RedirectRecord,
   type RoleReader,
   type ServerFacts,
+  type StorageMode,
+  type StorageModeReader,
   type VersionRecord,
 } from "../src/index.js";
 
@@ -363,6 +365,21 @@ export class MemoryRoles implements RoleReader {
   async read(actorId: string): Promise<readonly string[]> {
     this.reads += 1;
     return [...(this.roles.get(actorId) ?? [])];
+  }
+}
+
+/** Storage mode by actor; `CLOUD` unless set. Counts reads so tests can prove it is read on every operation. */
+export class MemoryStorageMode implements StorageModeReader {
+  private readonly modes = new Map<string, StorageMode>();
+  reads = 0;
+
+  set(actorId: string, mode: StorageMode): void {
+    this.modes.set(actorId, mode);
+  }
+
+  async read(actorId: string): Promise<StorageMode> {
+    this.reads += 1;
+    return this.modes.get(actorId) ?? "CLOUD";
   }
 }
 

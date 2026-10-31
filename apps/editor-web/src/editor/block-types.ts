@@ -199,3 +199,22 @@ export function fillBlankLine(editor: Editor, id: BlockChoiceId, target: { range
       return chain.command(({ commands }) => (typeof commands.choosePageImage === "function" ? commands.choosePageImage() : false)).run();
   }
 }
+
+/**
+ * ⌘/（ブロックの一覧）で、いまの行を変えずに足す位置: カーソルのある本文の直下のブロック（リスト・引用なら全体）の後ろ。
+ * いまの行が本文の直下の空の段落なら、その行を変える（「＋」と同じ）ので null。
+ */
+export function blankLineAfterCursor(state: EditorState): number | null {
+  const { selection, doc } = state;
+  const { $anchor } = selection;
+  if (selection.empty && $anchor.depth === 1 && isEmptyParagraphAt(doc, $anchor.before())) return null;
+  return $anchor.depth >= 1 ? $anchor.after(1) : selection.to;
+}
+
+/** 本文の直下の at（ブロックの境目）に空の段落を足す（このあと fillBlankLine で変える。同じ Undo のまとまりになる）。境目でなければ何もしない。 */
+export function insertBlankLine(editor: Editor, at: number): boolean {
+  const { doc, schema, tr } = editor.state;
+  if (at < 0 || at > doc.content.size || doc.resolve(at).depth !== 0) return false;
+  editor.view.dispatch(tr.insert(at, schema.nodes.paragraph!.create()));
+  return true;
+}

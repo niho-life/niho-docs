@@ -18,6 +18,7 @@ import {
   MemoryFacts,
   MemoryPublishStore,
   MemoryRoles,
+  MemoryStorageMode,
   memoryAssetUrls,
 } from "../../test-support/memory-store.js";
 
@@ -114,6 +115,7 @@ export type DestName = keyof typeof TARGETS;
 export interface World {
   readonly store: MemoryPublishStore;
   readonly roles: MemoryRoles;
+  readonly storage: MemoryStorageMode;
   readonly connections: MemoryConnections;
   readonly declarations: MemoryDeclarations;
   readonly authors: MemoryAuthors;
@@ -130,6 +132,7 @@ export function createWorld(): World {
   store.putPage(readyPage());
   for (const record of [COVER, FIGURE, AUDIO]) store.putAsset(PAGE_ID, record);
   const roles = new MemoryRoles();
+  const storage = new MemoryStorageMode();
   roles.set(ACTOR, ["writer", "kamakura"]);
   roles.set(OTHER_ACTOR, ["writer", "kamakura"]);
   const connections = new MemoryConnections();
@@ -145,10 +148,11 @@ export function createWorld(): World {
   facts.set(ACTOR, { relatedLive: true });
   facts.set(OTHER_ACTOR, { relatedLive: true });
   const clock = new ManualClock("2026-10-01T09:00:00.000Z", 60);
-  const service = new PublishService({ store, roles, connections, declarations, authors, facts, assetUrls: memoryAssetUrls(), clock });
+  const service = new PublishService({ store, roles, storage, connections, declarations, authors, facts, assetUrls: memoryAssetUrls(), clock });
   return {
     store,
     roles,
+    storage,
     connections,
     declarations,
     authors,

@@ -34,7 +34,7 @@ Issue #45 の前半（対応表とデータの移行手順）です。Mac アプ
 | 設定：文字起こし | `AppSettings.transcription` | 設定 › 文字起こし | 変換 | 「この Mac」のエンジンは Mac のみ。言語・時刻表示は端末設定（同期しない） |
 | 設定：残りの工程・この Mac で続きを受ける | `execution.json`、`PcRunnerSettings` | — | Mac のみ | Web の対応物なし |
 | 設定：保存先・使用量 | `CloudSettings`、`DocsStorageModeScreen` | 設定 › 保存 | 受け皿なし（使用量） | 使用量は実行記録（`runs.jsonl`）から出していた。editor に実行記録の表が無い |
-| 新規作成（⌘N／⇧⌘N） | `Rail.NewMenu`、[home-creation.md](home-creation.md) | 新しいページ▾ | そのまま | 日記は新規 |
+| 新規作成（⌘N／⇧⌘N） | `Rail.NewMenu`、[home-creation.md](home-creation.md) | 新しいページ▾ | そのまま | — |
 | 競合・削除 | `ConflictDialog`、削除したフォルダ | 「別の画面で保存されました」の帯、ゴミ箱 30 日 | そのまま | 移行の対象外にするか |
 
 ## 2. データの対応

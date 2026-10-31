@@ -69,7 +69,8 @@ function bodyEditor(): Editor {
   return (container!.querySelector(".ProseMirror") as HTMLElement & { editor: Editor }).editor;
 }
 
-const status = () => container!.querySelector('[role="status"]');
+/** 本文の上の保存状態の表示（見える文字だけ。読み上げはヘッダーの状態の丸が持つ）。 */
+const status = () => container!.querySelector("[data-save-state]");
 const alertBand = () => container!.querySelector('[data-conflict-band] [role="alert"]');
 const button = (label: string) => [...container!.querySelectorAll("button")].find((element) => element.textContent === label)!;
 
@@ -80,7 +81,7 @@ async function settleIdb() {
   });
 }
 
-async function renderEditor(page: Partial<EditablePage> & { revision: number }, options: { drafts?: DraftStorage | null } = {}) {
+async function renderEditor(page: Partial<EditablePage> & { revision: number }, options: { drafts?: DraftStorage | null; events?: PageEditorEvents } = {}) {
   // 自動保存・下書きの時計だけを差し替える（開いたときに下書きを載せると、その時点で自動保存の時計が動く）
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   container = document.createElement("div");
@@ -88,7 +89,7 @@ async function renderEditor(page: Partial<EditablePage> & { revision: number }, 
   root = createRoot(container);
   const full: EditablePage = { id: PAGE_ID, title: "合成の題名", blocks: [], updatedAt: UPDATED_AT, ...page };
   await act(async () => {
-    root!.render(<PageEditor page={full} drafts={options.drafts === undefined ? null : options.drafts} />);
+    root!.render(<PageEditor page={full} drafts={options.drafts === undefined ? null : options.drafts} {...options.events} />);
   });
   // 端末の下書きを読み終えて書けるようになるまで待つ
   for (let index = 0; index < 100; index++) {
@@ -157,9 +158,12 @@ describe("niho-docs-ui on React 19", () => {
     expect(body?.getAttribute("contenteditable")).toBe("true");
     expect(body?.textContent).toContain("合成の本文");
     expect(container.querySelector<HTMLTextAreaElement>("textarea.page-title")?.value).toBe("合成の題名");
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("保存済み");
+    expect(status()?.textContent).toBe("保存済み");
+    // 読み上げはヘッダーの状態の丸（aria-live）に任せる。ここを live region にすると同じ言葉を二重に読み上げる
+    expect(status()?.getAttribute("role")).toBeNull();
+    expect(status()?.getAttribute("aria-live")).toBeNull();
     // jsdom には IndexedDB が無い: 端末への保持なしとして続ける
-    expect(container.querySelector('[role="status"]')?.getAttribute("data-drafts")).toBe("none");
+    expect(status()?.getAttribute("data-drafts")).toBe("none");
   });
 
   it("caps the title at the server limit so an over-long title never enters autosave", async () => {
@@ -238,6 +242,24 @@ describe("PageEditor autosave", () => {
     expect(ctrl.defaultPrevented).toBe(true);
     expect(bodies.at(-1)).toEqual({ title: "今すぐ2", baseRevision: 2 });
     expect(status()?.textContent).toBe("保存済み");
+  });
+
+  it("hands the frame a save-now that sends what is pending and resolves after it reached the server (#39), and takes it back on unmount", async () => {
+    const { bodies } = acceptingFetch();
+    const unregister = vi.fn();
+    let saveNow: (() => Promise<boolean>) | null = null;
+    await renderEditor({ revision: 1 }, { events: { registerSaveNow: (fn) => ((saveNow = fn), unregister) } });
+    expect(saveNow).not.toBeNull();
+    await act(async () => typeTitle("公開の直前"));
+    let saved: boolean | null = null;
+    await act(async () => {
+      saved = await saveNow!();
+    });
+    expect(saved).toBe(true);
+    expect(bodies).toEqual([{ title: "公開の直前", baseRevision: 1 }]);
+    await act(async () => root!.unmount());
+    root = null;
+    expect(unregister).toHaveBeenCalledTimes(1);
   });
 
   it("shows offline when the network fails, keeps retrying, and saves when the browser comes back online", async () => {
@@ -694,7 +716,7 @@ describe("a new page (id null)", () => {
       expect(container.querySelector(".ProseMirror")).toBe(body);
       expect(container.querySelector("textarea.page-title")).toBe(title);
       expect(title.value).toBe("合成の題名 3");
-      expect(container.querySelector('[role="status"]')?.textContent).toBe("保存済み");
+      expect(status()?.textContent).toBe("保存済み");
     } finally {
       vi.unstubAllGlobals();
     }

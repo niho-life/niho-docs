@@ -13,6 +13,10 @@
     "./test-support": {
       "types": "./test-support/memory-store.ts",
       "default": "./test-support/memory-store.ts"
+    },
+    "./test-support/reference-world": {
+      "types": "./test-support/reference-world.ts",
+      "default": "./test-support/reference-world.ts"
     }
   },
   "scripts": {

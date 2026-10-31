@@ -714,6 +714,33 @@ export async function sweepExpiredLeases(db: StepRunsDb, options: { limit?: numb
   return requeue;
 }
 
+/**
+ * queued の attempt（run が進行中のものだけ）。定期の掃除が、同じ task の名前（世代を含む）で積み直す対象
+ * （積み込みの失敗・失われた task を拾う。まだ積まれていれば、名前の重複で無視される）。古い run から、1 回に上限つき。読むだけ。
+ * 続きは `after`（前の回の最後の `runId`・`stepIndex`）の次から。古い 100 件が queued のまま残っても、後ろの attempt に届く。
+ * `after` の run が無くなっていれば（物理削除）何も返さない（次の掃除は先頭から読み直す）。
+ */
+export async function listQueuedAttempts(
+  db: Queryable,
+  options: { limit?: number; after?: Pick<AttemptRef, "runId" | "stepIndex"> } = {},
+): Promise<AttemptRef[]> {
+  const limit = Math.max(1, Math.min(options.limit ?? 100, 1000));
+  const after = options.after;
+  if (after !== undefined && (!isPageId(after.runId) || !Number.isInteger(after.stepIndex) || after.stepIndex < 0)) return [];
+  const queued = await db.query<{ run_id: string; step_index: number; generation: number }>(
+    `SELECT a.run_id, a.step_index, a.generation
+       FROM step_attempts a
+       JOIN step_runs r ON r.id = a.run_id
+      WHERE a.state = 'queued' AND r.state IN ('queued', 'running')
+        AND ($2::uuid IS NULL
+             OR (r.created_at, a.run_id, a.step_index) > ((SELECT created_at FROM step_runs WHERE id = $2::uuid), $2::uuid, $3::integer))
+      ORDER BY r.created_at, a.run_id, a.step_index
+      LIMIT $1`,
+    [limit, after?.runId ?? null, after?.stepIndex ?? 0],
+  );
+  return queued.rows.map((row) => ({ runId: row.run_id, stepIndex: row.step_index, generation: row.generation }));
+}
+
 type StalePageRow = { id: string; blocks: Block[]; step_status: StepStatus | null; version: string };
 
 /**

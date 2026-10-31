@@ -67,6 +67,7 @@ export {
   type RecordingSource,
   type UpdateRecordingResult,
 } from "./recordings.ts";
+export * from "./publications.ts";
 export {
   IMAGE_ALT_MAX_CHARS,
   IMAGE_CREDIT_MAX_CHARS,

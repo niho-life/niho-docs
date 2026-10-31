@@ -1,16 +1,24 @@
 /**
- * ブラウザから「…」の操作（リンクで共有・複製・書き出し）の API を呼ぶ（同じ origin。cookie・token は扱わない）。
- * 画面への組み込みは #32（docs-ui の PageSharingPanel に DocsPageShareState をそのまま渡せる）。
+ * ブラウザから「…」の操作（リンクで共有・書き出し・履歴・複製・削除）の API を呼ぶ（同じ origin。cookie・token は扱わない）。
+ * どれもヘッダーの「…」（src/lib/use-page-menu.ts・use-page-share.ts・use-page-history.ts）から使う。
+ * 共有の url は bearer（知っている人は読める）なので、例外の文言・ログには入れない（例外は status と短い code だけ）。
  */
 import type { DocsPageShareState } from "@niho/docs-core";
+import type { PageKind } from "@niho/editor-store";
 
 export type { DocsPageShareState };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** editor-store の PAGE_KINDS の写し（画面に pg を持ち込まないよう、値は import しない）。 */
+const PAGE_KINDS = ["note", "rec", "article", "step"] as const satisfies readonly PageKind[];
 
 export class PageActionError extends Error {
   override readonly name = "PageActionError";
-  constructor(readonly status: number) {
+  /** `code` はエラーの本文の短い code（`published` など。読めなければ null）。 */
+  constructor(
+    readonly status: number,
+    readonly code: string | null = null,
+  ) {
     super(`page action failed with ${status}`);
   }
 }
@@ -62,15 +70,101 @@ export function stopPageShare(id: string): Promise<DocsPageShareState> {
   return shareRequest(id, "DELETE");
 }
 
-/** ページを複製し、新しいページの id を返す。 */
-export async function duplicatePageRequest(id: string): Promise<string> {
-  const data = (await send(pagePath(id, "/duplicate"), "POST")) as { page?: { id?: unknown } };
+/** 複製してできたページ（一覧の上に足すのに要る分）。 */
+export type DuplicatedPage = { id: string; title: string; kind: PageKind };
+
+function isPageKind(value: unknown): value is PageKind {
+  return typeof value === "string" && (PAGE_KINDS as readonly string[]).includes(value);
+}
+
+/** ページを複製し、新しいページの id・題名（「〜のコピー」）・種類を返す。種類が読めなければ note として扱う。 */
+export async function duplicatePageRequest(id: string): Promise<DuplicatedPage> {
+  const data = (await send(pagePath(id, "/duplicate"), "POST")) as { page?: { id?: unknown; title?: unknown; kind?: unknown } };
   const newId = data.page?.id;
-  if (typeof newId !== "string" || !UUID_PATTERN.test(newId)) throw new PageActionError(500);
-  return newId;
+  const title = data.page?.title;
+  if (typeof newId !== "string" || !UUID_PATTERN.test(newId) || typeof title !== "string") throw new PageActionError(500);
+  const kind = data.page?.kind;
+  return { id: newId, title, kind: isPageKind(kind) ? kind : "note" };
 }
 
 /** Markdown の書き出しの URL（`<a href download>` か location に渡す。応答は attachment）。 */
 export function pageExportUrl(id: string): string {
   return pagePath(id, "/export.md");
+}
+
+/** 削除の応答を待つ上限（届かないまま待ち続けて、確認のダイアログが閉じられなくならないように）。 */
+export const DELETE_TIMEOUT_MS = 30_000;
+/** 「この版に戻す」の応答を待つ上限（同上。戻している間はシートを閉じないため）。 */
+export const RESTORE_TIMEOUT_MS = 30_000;
+
+function timeoutSignal(ms: number): AbortSignal | undefined {
+  return typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(ms) : undefined;
+}
+
+async function refusal(response: Response): Promise<PageActionError> {
+  const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+  return new PageActionError(response.status, typeof body?.error === "string" ? body.error : null);
+}
+
+/**
+ * ページをゴミ箱へ入れる（`DELETE /api/pages/{id}`。204。子孫のページもサーバーが一緒に入れる）。
+ * 失敗は PageActionError（公開中は 409 と code `published`）。届かない・時間切れは fetch の例外のまま。
+ */
+export async function deletePageRequest(id: string): Promise<void> {
+  const signal = timeoutSignal(DELETE_TIMEOUT_MS);
+  const response = await fetch(pagePath(id, ""), { method: "DELETE", credentials: "same-origin", cache: "no-store", ...(signal ? { signal } : {}) });
+  if (response.ok) return;
+  throw await refusal(response);
+}
+
+/** 版の一覧の 1 行（本文は含めない）。reason は editor-store の VERSION_REASONS（知らない値もそのまま持つ）。 */
+export type PageVersionRow = { version: number; reason: string; createdAt: string; blockCount: number };
+
+const isPositiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
+function versionRowOf(value: unknown): PageVersionRow | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { version, reason, createdAt, blockCount } = value as Record<string, unknown>;
+  if (!isPositiveInteger(version) || typeof reason !== "string" || typeof createdAt !== "string") return null;
+  if (typeof blockCount !== "number" || !Number.isSafeInteger(blockCount) || blockCount < 0) return null;
+  return { version, reason, createdAt, blockCount };
+}
+
+/** 版の一覧（`GET /api/pages/{id}/versions`。新しい順・最大 100）。形の違う応答は 500 の PageActionError。 */
+export async function listPageVersions(id: string): Promise<PageVersionRow[]> {
+  const data = (await send(pagePath(id, "/versions"), "GET")) as { versions?: unknown };
+  if (!Array.isArray(data.versions)) throw new PageActionError(500);
+  const rows = data.versions.map(versionRowOf);
+  if (rows.some((row) => row === null)) throw new PageActionError(500);
+  return rows as PageVersionRow[];
+}
+
+/** 版に戻したあとのページ（エディタを開き直すのに要る分）。 */
+export type RestoredPage = { id: string; title: string; blocks: unknown[]; revision: number; updatedAt: string };
+
+/**
+ * 「この版に戻す」（`POST /api/pages/{id}/versions/{n}/restore`、本文 `{ baseRevision }`）。戻したあとのページを返す。
+ * サーバーは戻す前の本文を版（restore）に残してから、その版の本文を書き、revision を進める（題名は変えない）。
+ * 失敗は PageActionError: 409 `conflict`（別の画面が先に保存した。何も書いていない）、422 `unrestorable`（今の形では保存できない古い版）、
+ * 404（ページか版が無い）など。届かない・時間切れは fetch の例外のまま（そのときサーバーで戻ったかは分からない）。
+ */
+export async function restorePageVersion(id: string, version: number, baseRevision: number): Promise<RestoredPage> {
+  const signal = timeoutSignal(RESTORE_TIMEOUT_MS);
+  const response = await fetch(pagePath(id, `/versions/${encodeURIComponent(String(version))}/restore`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ baseRevision }),
+    credentials: "same-origin",
+    cache: "no-store",
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) throw await refusal(response);
+  const data = (await response.json().catch(() => null)) as { page?: Record<string, unknown> } | null;
+  const page = data?.page;
+  if (typeof page !== "object" || page === null) throw new PageActionError(500);
+  const { title, blocks, revision, updatedAt } = page;
+  if (page.id !== id || typeof title !== "string" || !Array.isArray(blocks) || !isPositiveInteger(revision) || typeof updatedAt !== "string") {
+    throw new PageActionError(500);
+  }
+  return { id, title, blocks, revision, updatedAt };
 }

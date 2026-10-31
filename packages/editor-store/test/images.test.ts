@@ -28,10 +28,10 @@ function startInput(extra: Partial<StartImageUploadInput> = {}): StartImageUploa
   return { assetId: ASSET, pageId: PAGE, contentType: "image/png", bytes: 1024, sha256: SHA, uploadKey: null, requestHash: "1".repeat(64), ...extra };
 }
 
-describe("0009_image_assets.sql", () => {
+describe("0011_image_assets.sql", () => {
   it("only adds the upload columns and constraints to assets, keeping every existing row", async () => {
-    const file = (await readMigrations()).find((item) => item.name === "0009_image_assets.sql");
-    assert.ok(file, "0009 is in the ordered list");
+    const file = (await readMigrations()).find((item) => item.name === "0011_image_assets.sql");
+    assert.ok(file, "0011 is in the ordered list");
     const sql = withoutComments(file.sql);
     for (const column of ["ADD COLUMN upload_status text NOT NULL DEFAULT 'ready'", "ADD COLUMN upload_key uuid", "ADD COLUMN request_hash text"]) {
       assert.ok(sql.includes(column), column);
@@ -40,16 +40,16 @@ describe("0009_image_assets.sql", () => {
     assert.match(sql, /CHECK \(request_hash IS NULL OR request_hash ~ '\^\[0-9a-f\]\{64\}\$'\)/);
     // 冪等キーは owner ごとに 1 つ（NULL は重複してよい）
     assert.match(sql, /UNIQUE \(owner, upload_key\)/);
-    assert.doesNotMatch(sql, /\bDROP\b|\bDELETE\s+FROM\b|\bUPDATE\s+\w+\s+SET\b|\bINSERT\s+INTO\b/i, "0009 must keep every existing row");
+    assert.doesNotMatch(sql, /\bDROP\b|\bDELETE\s+FROM\b|\bUPDATE\s+\w+\s+SET\b|\bINSERT\s+INTO\b/i, "0011 must keep every existing row");
     // 既存の音声の資産は 'ready' のまま（DEFAULT で入る）
     assert.ok(sql.includes("DEFAULT 'ready'"));
   });
 
   it("comes after 0008 so the numbers do not collide with the other open branches", async () => {
     const names = (await readMigrations()).map((file) => file.name);
-    assert.ok(names.includes("0009_image_assets.sql"));
+    assert.ok(names.includes("0011_image_assets.sql"));
     assert.deepEqual([...names].sort(), names);
-    assert.equal(names.filter((name) => name.startsWith("0009")).length, 1);
+    assert.equal(names.filter((name) => name.startsWith("0011")).length, 1);
   });
 });
 

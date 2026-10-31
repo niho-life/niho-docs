@@ -205,7 +205,6 @@ describe("the AI box: opening, candidates and focus", () => {
   it("shows the candidates of the page's kind and language, and only the free input for a kind without any", async () => {
     fakeServer();
     const cases = [
-      { kind: "journal", lang: "ja" },
       { kind: "note", lang: "ja" },
       { kind: "article", lang: "ja" },
       { kind: "article", lang: "en" },
@@ -220,7 +219,6 @@ describe("the AI box: opening, candidates and focus", () => {
       await act(async () => root?.unmount());
       container?.remove();
     }
-    expect(presetsFor("journal", "ja").map((item) => item.label)).toEqual(["整える", "要約", "記事にできそうな部分"]);
     expect(presetsFor("step", "ja")).toEqual([]);
   });
 
