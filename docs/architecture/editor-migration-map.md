@@ -86,7 +86,7 @@ Issue #45 の前半（対応表とデータの移行手順）です。Mac アプ
 ## 6. Mac アプリ（#45 の後半）：作り直さず、殻にする
 
 - Mac 専用の画面は作らない。**Tauri が editor.niho.life を読み、端末の力だけを bridge で足す**（設計 §13）。工程設計・AI と作る・版と履歴・公開・発信先・検索はサーバー側にあるものを使う。
-- Mac に残すのは native 層：マイク録音（`niho-speech record`）、端末内の文字起こし（`packages/apple-speech`、`niho-speech` の sidecar）、CLI の AI（`apps/docs/crates`、`sidecar`）、ファイル選択、鍵。結果はサーバーの同じ API に書く。
+- Mac に残すのは native 層：マイク録音（`niho-speech record`）、端末内の文字起こし（`packages/apple-speech`、`niho-speech` の sidecar）、**CLI の AI（`apps/docs/crates/local-ai`。サブスクのアカウントで起動する旧 NIHO docs の AI チャットの経路は、残すのではなく維持する機能。設計 §6.1）**、ファイル選択、鍵。結果はサーバーの同じ API に書く。一時置き場は文字起こしと AI で 1 つの仕組み（設計 §13）。
 - 退役：`DocsApp` 一式、#109 の `EditorScreen`・`vault-pages`・`vault-recordings`、`desktop-vault`（三方向併合）、`DocsStorageMode`、`remote-runner`（スマホから受ける実行。要るなら別 Issue）。
 - 殻の安全性（capability の `remote.urls` を editor.niho.life に限る、command の allowlist、CSP）は設計 §13 に書いたとおり。
 - 依存：録音の API（#36）がそろった時点で録音・端末内の文字起こしから着手できる。CLI の AI は T5 の API の後。

@@ -111,6 +111,26 @@ Block は段落、見出し（2・3）、箇条書き・番号付き、引用、
 - 使用量は設定に出す（上限に近いときだけ箱に一言）。
 - AI は本文を勝手に書き換えない。提案は採用されるまで保存されない。
 
+### 6.1 実行経路は 2 つ（オーナー決定 2026-11-01：旧 NIHO docs の AI チャットを踏襲する）
+
+| 面 | AI が動く場所 | 費用 |
+| --- | --- | --- |
+| ブラウザ・PWA | サーバー側の Anthropic API | 使った分を `ai_usage` に数え、月の上限（USD）に入れる |
+| デスクトップ（Mac アプリ） | **利用者の Mac で CLI を起動**（Claude Code・Codex CLI・Antigravity CLI。本人のサブスクのアカウント） | 従量の費用なし。**上限に数えない**（`ai_usage` には provider＝CLI・cost 0 で記録だけ残す） |
+
+どちらの経路でも、**会話と結果は同じサーバーのページに載る**（会話の表と提案の API は T5）。「接続中か」と「AI がどこで動くか」は別の軸で、Mac の CLI は接続中に動かして結果をサーバーへ書く。Mac でもサーバー側の API を選べる（設定）。
+
+**CLI の往復（「文書ファイルは直接編集する」の形）。** 旧アプリでは CLI が手元の Markdown を直接書き換えていた。正本がサーバーになるので、**CLI が手元の作業コピーを直し、結果を同じ API でサーバーのページに書き戻す**：
+
+1. 開始：Mac の bridge がサーバーから本文を読み、Markdown にして一時置き場（§13）の `page/body.md` に置く（限定 AST ⇄ Markdown は `niho-docs-ui/page/markdown.ts`）。参照（親ページの本文＝背景情報、固有名詞、選んだ範囲）は `context/*.md` に置く。そのときの `revision` を控える。
+2. 実行：CLI を既存の `niho-local-ai` の `ToolPolicy::ProjectFolder { dir: 一時置き場, writable: ["page"] }` で起動する（cwd＝一時置き場。claude は Read・Edit・Write・Glob・Grep だけ、codex は `--sandbox workspace-write` の apply_patch だけ、agy はファイルの道具だけのエージェント。ほかの道具が見えたら fail closed）。CLI は `page/body.md` を**直接編集する**（旧アプリと同じ体験）。指示は標準入力で渡す。
+3. 書き戻し：終わったら `page/body.md` を読み、限定 AST に変換して**提案**としてサーバーに送る（`baseRevision` 付き）。変換できない要素（表・コード）は黙って欠けさせず、その段落を提案から外して知らせる。会話のターン（指示と返答）は会話 API に送る。
+4. 画面：Web と同じ差分の提案として出す。採用でサーバーが版を作る。**CLI が直接書き換えるのは一時置き場の中だけで、サーバーの本文は採用されるまで変わらない**（上の「AI は本文を勝手に書き換えない」をそのまま満たす）。旧アプリのように採用なしで反映したければ、「すべて採用」を既定にする設定で足りる（本文は常に版として残る）。
+5. 競合：送ったときに `baseRevision` が今の revision と違えば、サーバーは提案を**古い版に対するもの**として保存し、画面は「本文が進んでいます」と出して、もう一度実行するか部分的に採用するかを選ばせる。黙って上書きしない。
+6. 後始末：送り終えたら一時置き場を消す。書けなかったら残して「もう一度」を出す。
+
+**T5 との接点**（AI のレーンに頼むこと）：提案 API が `baseRevision` と出どころ（provider＝`claude-cli`／`codex-cli`／`agy-cli`／`anthropic-api`、connection、cost）を受けること。会話 API が面（Web／Mac）と provider を記録すること。`ai_usage` が cost 0 の行を持てて、上限の計算から外せること。
+
 ## 7. 録音と手順
 
 ### 7.1 録音
@@ -202,12 +222,19 @@ Block は段落、見出し（2・3）、箇条書き・番号付き、引用、
 - **Mac アプリ（`apps/docs`）は editor.niho.life を読む殻 ＋ 端末の力。** Tauri の webview が editor.niho.life をそのまま読む（UI を同梱しない。Web のデプロイで Mac も同時に更新され、dmg を出すのは native が変わるときだけ。オフラインは PWA のキャッシュと §12 の一時保持に任せる）。Mac だけの力は bridge（docs-ui の `DocsHost` の optional な native 操作）で UI に見せる：
   - マイクの録音（`niho-speech record`）
   - 端末内の文字起こし（同梱の `niho-speech` sidecar。音声と本文を**一時置き場**（app data）に置いて文字起こしし、**結果はサーバーの録音 API に書く**。§2.1）
-  - CLI の AI（Claude Code・Codex・Antigravity CLI。Mac で動かし、**提案はサーバーの同じ API に書く**。「接続中か」と「AI がどこで動くか」は別の軸）
+  - CLI の AI（Claude Code・Codex・Antigravity CLI。本人のサブスクのアカウントで Mac で動かし、**提案はサーバーの同じ API に書く**。§6.1。「接続中か」と「AI がどこで動くか」は別の軸。これは「残す」ではなく**維持する機能**）
   - 音声ファイルの選択、鍵（Keychain）
   UI は capability を見て「この Mac で」の選択肢を出すだけで、画面は Web と同じ。
+- **一時置き場は 1 つの仕組み**（端末内の文字起こしも CLI の AI も同じものを使う。2 つ作らない）：
+  - 置き場は app data の `staging/<操作の id>/`（0700。`niho-local-ai` の `PrivateDir`・`scratch_dir` と同じ作法）。`~/Documents/NIHO docs` は使わない。
+  - 中身：文字起こしは `audio/<file>`（この Mac で録った音声はそのまま、サーバーにある音声は取ってくる）と `context/background.md`。CLI の AI は `page/body.md`（書ける唯一の場所）・`context/*.md`・`instructions.md`（0600）。
+  - 消し方：結果をサーバーに書けたら即消す。書けなかったら残して「もう一度」を出す。起動時に残骸を掃く（旧 `leftover_recordings` と同じ考え）。
+  - 権限：CLI が書けるのは `page/` の下だけ（`ToolPolicy::ProjectFolder` の `writable`）。音声・context は読むだけ。
 - **殻の安全性**（remote origin に IPC を開くので手を抜かない）：
   - Tauri v2 の capability で、IPC を許す origin を `https://editor.niho.life` だけに限る（`remote.urls`）。開発時の `localhost` は開発用の capability に分け、配布物には入れない。
   - 許す command を上の端末の力だけに絞る（録音・端末内の文字起こし・CLI の AI・ファイル選択・鍵）。旧い画面が使っていた保管庫の読み書き（`load_pages`・`write_page` など）は殻からは**呼べない**ようにする（退役とともに削る）。
+  - **CLI の起動は特に厳しく。** remote から呼べるのは `ai_turn` のような**固定の形の command だけ**：`{ pageId, conversationId, provider: "claude" | "codex" | "agy", instruction, scope? }`。パス・引数・環境・CLI の場所は**ページから受け取らない**。native の側で固定する：CLI のバイナリは今までどおり設定と環境変数（`NIHO_DOCS_*_CLI_PATH`・`cliPaths`）から決め、引数は `niho-local-ai` の固定の形、cwd は一時置き場、環境は crate の sanitize のまま。**指示の文は標準入力で渡す**（今までどおり）。
+  - **シェルを通さない。** production の経路に `/bin/sh` は無い（`crates/local-ai/src/process.rs` の `/bin/sh` はテストの中だけ）。この不変条件を守り、「remote から来た文字列が `Command::new` の引数や `sh -c` に入らない」ことをテストで固定する。CLI の側の道具も Bash 等は許さない（`ToolPolicy::ProjectFolder` の fail closed のまま）。
   - CSP は Web 側（editor.niho.life の `Content-Security-Policy`）が正本。webview の側でも `connect-src` を editor.niho.life と `api.editor.niho.life` に限り、`script-src` に `unsafe-eval` を入れない。
   - 公開リポジトリなので、設定に書くのは実際のドメインだけ（内部の host・鍵・token は書かない。[publication-gates.md](../security/publication-gates.md)）。
 - **旧 NIHO docs の画面は退役**：`DocsApp` 一式（レール・フォルダ画面・工程設計・AI と作る・設定）と、#109 で旗の裏に入れた `EditorScreen`・`vault-pages`・`vault-recordings`。残すのは native 層（`src-tauri` の録音・sidecar・AI の crate・鍵）と純粋ロジック（`docs-core` の工程・テンプレート・プロファイル・文字起こし。サーバーの手順の実装がこれを使う）。`desktop-vault`（三方向併合）と `DocsStorageMode` は退役。
