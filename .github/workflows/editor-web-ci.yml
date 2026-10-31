@@ -122,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -x scripts/editor-deploy/lib.sh scripts/editor-deploy/gcp-bootstrap.sh scripts/editor-deploy/deploy.sh scripts/editor-deploy/set-ai-key.sh scripts/editor-deploy/steps-infra.sh scripts/editor-deploy/lib-test.sh scripts/editor-deploy/steps-infra.test.sh
+        run: shellcheck -x scripts/editor-deploy/lib.sh scripts/editor-deploy/gcp-bootstrap.sh scripts/editor-deploy/deploy.sh scripts/editor-deploy/set-ai-key.sh scripts/editor-deploy/set-transcribe-key.sh scripts/editor-deploy/steps-infra.sh scripts/editor-deploy/lib-test.sh scripts/editor-deploy/steps-infra.test.sh
       - name: The example env file sets every variable the scripts require
         run: |
           set -euo pipefail
