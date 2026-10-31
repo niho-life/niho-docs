@@ -271,6 +271,9 @@ export async function putRecipes(db: Database, owner: OwnerId, recipes: readonly
   const client = await db.connect();
   try {
     await client.query("BEGIN");
+    // 同じ人の入れ替えを 1 本ずつにする。ロック無しだと、重なった 2 本が互いの追加を見ないまま DELETE を済ませ、
+    // どちらの一覧とも違う「2 本の和」が残る（後から来た保存が前の保存を置き換える、にならない）
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`recipes:${owner}`]);
     await client.query("DELETE FROM recipes WHERE owner = $1 AND NOT (id = ANY($2::text[]))", [owner, recipes.map((recipe) => recipe.id)]);
     const result = await client.query<RecipeRow>(
       `${INSERT}

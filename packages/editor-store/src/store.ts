@@ -395,14 +395,15 @@ export class EditorStore {
           if (depth === null || depth === undefined) return null;
           parentDepth = Number(depth);
         }
-        // 動かすページの下の高さと、入れ先がその中にあるか（下へ辿る）
+        // 動かすページの下の高さと、入れ先がその中にあるか（下へ辿る）。ゴミ箱の中の子も数える:
+        // 戻す（restoreFromTrash）と親を保ったまま木に帰るので、数えないと動かしたあとに戻して上限を超える
         const down = await client.query<{ height: number | null; inside: boolean | null }>(
           `WITH RECURSIVE down AS (
              SELECT id, 0 AS height FROM pages WHERE owner = $1 AND deleted_at IS NULL AND id = $2
              UNION ALL
              SELECT c.id, down.height + 1
                FROM pages c JOIN down ON c.parent = down.id
-              WHERE c.owner = $1 AND c.deleted_at IS NULL
+              WHERE c.owner = $1
            )
            SELECT max(height) AS height, bool_or(id = $3::uuid) AS inside FROM down`,
           [owner, id, parent],

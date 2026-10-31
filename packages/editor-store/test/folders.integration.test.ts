@@ -104,6 +104,25 @@ describe("folders are pages with children (pages.parent)", { skip: databaseUrl =
     assert.equal(await store.movePage(OWNER, folder, outer), "moved");
   });
 
+  it("counts a 子孫 in the trash toward the depth limit, so restoring it later cannot exceed the limit", async () => {
+    const other = await page("別のフォルダ");
+    const folder = await page("フォルダ");
+    const note = await page("ページ");
+    const sub = await page("録音のサブページ");
+    assert.equal(await store.movePage(OWNER, note, folder), "moved");
+    assert.equal(await store.movePage(OWNER, sub, note), "moved");
+    assert.equal(await store.deletePage(OWNER, sub), "deleted");
+
+    // 見えている高さは 1 段だけだが、戻せば 2 段になる。別のフォルダの下へ入れると 3 段になるので断る
+    assert.equal(await store.movePage(OWNER, folder, other), "too_deep");
+    assert.equal((await store.getPage(OWNER, folder))?.parent, null);
+
+    // 戻しても木は上限の中のまま
+    assert.equal(await store.restoreFromTrash(OWNER, sub), true);
+    assert.equal((await store.getPage(OWNER, sub))?.parent, note);
+    assert.equal((await store.getPage(OWNER, folder))?.parent, null);
+  });
+
   it("refuses a move into itself or into its own 子孫", async () => {
     const folder = await page("フォルダ");
     const note = await page("ページ");

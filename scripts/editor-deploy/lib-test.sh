@@ -126,5 +126,89 @@ check "an empty key is refused" "$(shape '')" 0
 check "a control character is refused" "$(shape "$(printf 'a\001b')")" 0
 check "non-ASCII is refused" "$(shape 'かぎ')" 0
 
+# The login (#47, §13): niho by default, google with a client id and an allowlist. Synthetic addresses only.
+grep -v '^AI_' "$dir/deploy.env.example" > "$tmp/niho.env"
+DEPLOY_ENV="$tmp/niho.env" load_deploy_env
+check "default EDITOR_AUTH_MODE" "$EDITOR_AUTH_MODE" "niho"
+check "google OAuth client secret name" "$SECRET_GOOGLE_OAUTH" "niho-editor-google-oauth-secret"
+check "niho: the env keeps the comma form" "$(service_env_vars 0 0)" "$base_env"
+check "niho: no google variables even with a client id in deploy.env" "$(service_env_vars 0 0)" "$base_env"
+check "secrets without the google secret" "$(service_secrets 0 0 0)" "DATABASE_URL=niho-editor-database-url:latest"
+check "secrets with the google secret" "$(service_secrets 0 0 1)" \
+  "DATABASE_URL=niho-editor-database-url:latest,GOOGLE_OAUTH_CLIENT_SECRET=niho-editor-google-oauth-secret:latest"
+check "secrets with every key" "$(service_secrets 1 1 1)" \
+  "DATABASE_URL=niho-editor-database-url:latest,ANTHROPIC_API_KEY=niho-editor-anthropic-key:latest,DEEPGRAM_API_KEY=niho-editor-deepgram-key:latest,GOOGLE_OAUTH_CLIENT_SECRET=niho-editor-google-oauth-secret:latest"
+ready_google() { if google_oauth_secret_ready; then printf 1; else printf 0; fi; }
+secret_exists=1
+newest_state=""
+check "no google secret version: nobody can log in" "$(ready_google)" 0
+newest_state="enabled"
+check "the newest google secret version enabled" "$(ready_google)" 1
+newest_state="disabled"
+check "the newest google secret version disabled" "$(ready_google)" 0
+
+# With google the whole --set-env-vars uses gcloud's escaped-list form, because the allowlist itself holds commas.
+google_client="synthetic-client.apps.googleusercontent.com"
+google_list="owner@example.test,owner.second@example.invalid"
+grep -v '^AI_\|^GOOGLE_\|^EDITOR_AUTH_MODE' "$dir/deploy.env.example" > "$tmp/google.env"
+printf 'EDITOR_AUTH_MODE=google\nGOOGLE_OAUTH_CLIENT_ID=%s\nGOOGLE_ALLOWED_EMAILS=%s\nAI_MODEL=claude-sonnet-5-5\nAI_MONTHLY_LIMIT_USD=10\n' \
+  "$google_client" "$google_list" >> "$tmp/google.env"
+DEPLOY_ENV="$tmp/google.env" load_deploy_env
+google_env="^|^EDITOR_AUTH_MODE=google|EDITOR_ORIGIN=https://editor.example.com|EDITOR_STORAGE=gcs|EDITOR_ASSETS_BUCKET=my-gcp-project-editor-assets|EDITOR_GOOGLE_CLIENT_ID=$google_client|EDITOR_GOOGLE_ALLOWED_EMAILS=$google_list"
+check "google: the client id and the allowlist go in, with the allowlist's commas kept" "$(service_env_vars 0 0)" "$google_env"
+check "google: AI and the transcription engine use the same delimiter" "$(service_env_vars 1 1)" \
+  "$google_env|EDITOR_AI_MODE=anthropic|EDITOR_AI_MODEL=claude-sonnet-5-5|EDITOR_AI_MONTHLY_LIMIT_USD=10|EDITOR_TRANSCRIBE_ENGINE=deepgram"
+
+# The queues' variables follow the delimiter too (the project number comes from the stub).
+gcp() {
+  case "$1 $2" in
+    "secrets describe") [[ $secret_exists -eq 1 ]] ;;
+    "secrets versions") printf '%s' "$newest_state" ;;
+    "projects describe") printf '000000000000' ;;
+    *) printf 'unexpected gcloud call: %s\n' "$*" >&2; return 99 ;;
+  esac
+}
+worker_url="https://niho-editor-000000000000.asia-northeast1.run.app"
+printf 'STEPS_MODE=cloud-tasks\nTRANSCRIBE_MODE=cloud-tasks\n' >> "$tmp/google.env"
+DEPLOY_ENV="$tmp/google.env" load_deploy_env
+check "google: the steps queue uses the same delimiter" "$(steps_env_vars)" \
+  "|EDITOR_STEPS_MODE=cloud-tasks|EDITOR_STEPS_QUEUE=projects/my-gcp-project/locations/asia-northeast1/queues/niho-editor-steps|EDITOR_STEPS_WORKER_URL=$worker_url|EDITOR_STEPS_INVOKER_SA=niho-editor-tasks@my-gcp-project.iam.gserviceaccount.com"
+cp "$tmp/niho.env" "$tmp/niho-queues.env"
+printf 'STEPS_MODE=cloud-tasks\nTRANSCRIBE_MODE=cloud-tasks\n' >> "$tmp/niho-queues.env"
+DEPLOY_ENV="$tmp/niho-queues.env" load_deploy_env
+check "niho: the transcription queue keeps the comma form" "$(transcribe_env_vars)" \
+  ",EDITOR_TRANSCRIBE_MODE=cloud-tasks,EDITOR_TRANSCRIBE_QUEUE=projects/my-gcp-project/locations/asia-northeast1/queues/niho-editor-transcribe,EDITOR_TRANSCRIBE_WORKER_URL=$worker_url,EDITOR_TRANSCRIBE_INVOKER_SA=niho-editor-tasks@my-gcp-project.iam.gserviceaccount.com"
+
+# What load_deploy_env refuses for the login. Every value is written quoted, so a value with a space or a '|' is tested
+# as a value and not run by the shell that sources the file, and both google variables start empty on every case.
+refused_lines() {
+  grep -v '^AI_\|^GOOGLE_\|^EDITOR_AUTH_MODE' "$dir/deploy.env.example" > "$tmp/login.env"
+  printf "GOOGLE_OAUTH_CLIENT_ID=''\nGOOGLE_ALLOWED_EMAILS=''\n" >> "$tmp/login.env"
+  local pair
+  for pair in "$@"; do printf "%s='%s'\n" "${pair%%=*}" "${pair#*=}" >> "$tmp/login.env"; done
+  if (DEPLOY_ENV="$tmp/login.env" load_deploy_env) 2> /dev/null; then printf 0; else printf 1; fi
+}
+google_pair="GOOGLE_OAUTH_CLIENT_ID=$google_client"
+check "stub is refused in deploy.env" "$(refused_lines 'EDITOR_AUTH_MODE=stub')" 1
+check "an unknown mode is refused" "$(refused_lines 'EDITOR_AUTH_MODE=none')" 1
+check "niho needs neither a client id nor an allowlist" "$(refused_lines 'EDITOR_AUTH_MODE=niho')" 0
+check "google without a client id is refused" "$(refused_lines 'EDITOR_AUTH_MODE=google' "GOOGLE_ALLOWED_EMAILS=$google_list")" 1
+check "google with an empty allowlist is refused" "$(refused_lines 'EDITOR_AUTH_MODE=google' "$google_pair")" 1
+check "google with one address is accepted" "$(refused_lines 'EDITOR_AUTH_MODE=google' "$google_pair" 'GOOGLE_ALLOWED_EMAILS=owner@example.test')" 0
+check "google with two addresses is accepted" "$(refused_lines 'EDITOR_AUTH_MODE=google' "$google_pair" "GOOGLE_ALLOWED_EMAILS=$google_list")" 0
+# The redirect URI the app sends is https://<APP_DOMAIN>/auth/callback, and Google only accepts the registered one.
+check "google without APP_DOMAIN is refused" \
+  "$(refused_lines 'EDITOR_AUTH_MODE=google' "$google_pair" "GOOGLE_ALLOWED_EMAILS=$google_list" 'APP_DOMAIN=')" 1
+check "niho without APP_DOMAIN is accepted (the run.app URL)" "$(refused_lines 'EDITOR_AUTH_MODE=niho' 'APP_DOMAIN=')" 0
+for bad in 'owner@example.test, owner.second@example.invalid' 'owner@example.test|EDITOR_AUTH_MODE=stub' \
+  'owner@example.test=x' 'example.test' '@example.test' 'owner@' 'owner@example' 'owner name@example.test' ' '; do
+  check "an allowlist that is not addresses is refused: $bad" \
+    "$(refused_lines 'EDITOR_AUTH_MODE=google' "$google_pair" "GOOGLE_ALLOWED_EMAILS=$bad")" 1
+done
+for bad in 'client,EDITOR_AUTH_MODE=stub' 'client id' 'client|x' 'client=x'; do
+  check "a client id that could add another variable is refused: $bad" \
+    "$(refused_lines 'EDITOR_AUTH_MODE=google' "GOOGLE_OAUTH_CLIENT_ID=$bad" "GOOGLE_ALLOWED_EMAILS=$google_list")" 1
+done
+
 [[ $failed -eq 0 ]] || { printf 'lib-test: failed\n' >&2; exit 1; }
 printf 'lib-test: all passed\n'
