@@ -99,7 +99,7 @@ function stepsFor(page: GalleryPage): { root: GalleryPage; steps: ShellStep[] } 
  * web: editor-web が今つないでいる形の情報パネル（#34 第 3 段。肩書なし・書き出しは Markdown だけ・ページを削除。
  * 手順と AI の節は出さない）。note: 言語を保存できなかったときの一言を出す。
  */
-export type ScreenForced = { sidebar?: boolean; rail?: boolean; pick?: ShellDest; conn?: boolean; page?: string; web?: boolean; note?: boolean; terms?: boolean; recipe?: string } & TranscriptForced;
+export type ScreenForced = { sidebar?: boolean; rail?: boolean; pick?: ShellDest; conn?: boolean; page?: string; web?: boolean; note?: boolean; terms?: boolean; recipe?: string; add?: boolean; url?: boolean; confirm?: string; issuedKey?: boolean } & TranscriptForced;
 
 const noop = () => undefined;
 

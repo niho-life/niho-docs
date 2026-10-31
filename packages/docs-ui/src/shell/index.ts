@@ -70,6 +70,20 @@ export {
   ShellToggle,
 } from "./settings-parts";
 export { DestinationsPage, SitePage, type DestinationRow, type DestinationsPageProps, type SitePageProps } from "./destinations";
+export {
+  EDITOR_DESTINATIONS_TEXT,
+  EditorDestinationsPage,
+  EditorSitePage,
+  type EditorAddSiteDraft,
+  type EditorDestinationFace,
+  type EditorDestinationMode,
+  type EditorDestinationSite,
+  type EditorDestinationsPageProps,
+  type EditorIssuedKey,
+  type EditorSiteKeyView,
+  type EditorSitePageProps,
+  type EditorSitePublished,
+} from "./editor-destinations";
 export { AccountPage, type AccountLink, type AccountPageProps, type AccountRole } from "./account";
 export {
   EDITOR_SETTINGS_NAV,

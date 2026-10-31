@@ -5,7 +5,7 @@ import "./gallery.css";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Check } from "./check";
-import { AccountDemo, DestDemo, LoginDemo, PreviewDemo, SettingsDemo, SiteDemo, WebSettingsDemo } from "./pages";
+import { AccountDemo, DestDemo, LoginDemo, PreviewDemo, SettingsDemo, SiteDemo, WebDestDemo, WebSettingsDemo, WebSiteDemo } from "./pages";
 import type { ShellDest } from "../src/shell";
 import { Screen, type ScreenForced } from "./screen";
 import { SCREENS, findScreen, parseHash } from "./screens";
@@ -51,6 +51,8 @@ function Body({ id, forced }: { id: string; forced: ScreenForced }) {
   if (name === "account") return <AccountDemo forced={forced} />;
   if (name === "settings") return <SettingsDemo forced={forced} />;
   if (name === "settings-web") return <WebSettingsDemo forced={forced} />;
+  if (name === "dest-web") return <WebDestDemo forced={forced} />;
+  if (name === "site-web") return <WebSiteDemo forced={forced} />;
   if (name === "sheet" && arg === "addDest") return <DestDemo forced={forced} addDest />;
   return <Screen id={id} forced={forced} />;
 }
@@ -78,6 +80,11 @@ function App() {
     // 設定（editor-web）の、開いている編集
     terms: params.get("terms") === "1",
     recipe: params.get("recipe") ?? undefined,
+    // 発信先（editor-web）の、開いている下書き・確認・新しい鍵
+    add: params.get("add") === "1",
+    url: params.get("url") === "1",
+    confirm: params.get("confirm") ?? undefined,
+    issuedKey: params.get("key") === "1",
   };
   // 画面を替えたら状態を作り直す（モックの render と同じ）
   return (

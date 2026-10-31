@@ -50,6 +50,8 @@ export type PublishWiringOptions = {
   readonly clock?: Clock;
   /** 「更新あり」の比較（ConnectionService の公開中の一覧）。省略すると store の transaction で読む。Postgres は pgDraftFingerprints。 */
   readonly drafts?: DraftFingerprints;
+  /** 書き出し（#41）の写真の読み出し。省略すると写真を読めない（写真のあるページは書き出せない）。 */
+  readonly assetBytes?: AssetBytes;
 };
 
 export const systemClock: Clock = { now: () => new Date().toISOString() };
@@ -57,7 +59,7 @@ export const systemClock: Clock = { now: () => new Date().toISOString() };
 /** 関連する体験が掲載中かは不明（NIHO の体験の API は #42 の後）。 */
 export const UNKNOWN_FACTS: FactsSource = { read: async () => ({ relatedLive: null }) };
 
-/** 書き出し（#41）の写真の読み出しは、資産の置き場をつなぐまで無い（シートは使わない）。 */
+/** 写真を読まない（公開のシートは書き出しを使わない。書き出しの route は src/publish/export-assets.ts を渡す）。 */
 export const NO_ASSET_BYTES: AssetBytes = { read: async () => null };
 
 const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
@@ -168,7 +170,7 @@ export function wirePublishPorts(store: ConnectionStore, session: Session, optio
       assetUrls: assetUrlsOf(config.assetOrigin),
       clock,
     },
-    connections: { store, clock, drafts: options.drafts ?? storeDraftFingerprints(store), assetBytes: NO_ASSET_BYTES },
+    connections: { store, clock, drafts: options.drafts ?? storeDraftFingerprints(store), assetBytes: options.assetBytes ?? NO_ASSET_BYTES },
     photosReady: config.assetOrigin !== null,
   };
 }

@@ -52,7 +52,7 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 
 - **認証（#47）**: `NODE_ENV=production` で `EDITOR_AUTH_MODE` が `niho` でなければ（未設定を含む）起動しない。本番の入口 `scripts/server-entry.mjs` が server を読み込む前（port を開く前）に `src/auth/config.ts` で検査し、`src/instrumentation.ts`（`next start` 用）と要求ごとの方式の選択でも同じ検査をする。`next build` の途中では検査しない。`niho` は `src/auth/niho.ts` の 1 ファイルに閉じ、niho-app #19459 の契約が出るまで fail-closed（いつも未認証）。stub は cookie も token も作らない。
 - **ログイン（#32）**: `/auth/login`（枠の外の画面）、`/auth/login/start?next=`（GET）、`/auth/callback`（GET）、`/auth/logout`（POST。同じ origin でなければ 403）。route の応答は `Cache-Control: no-store`。未ログインで画面を開くと `/auth/login?next=…` へ移る（今の path は `src/proxy.ts` が header で渡すだけで、認証は読まない）。戻り先は `src/auth/return-to.ts` の `safeReturnTo` で editor の画面の path（`/`・`/p/new`・`/p/{uuid}`・`/destinations`・`/account`・`/settings` など）だけにし、それ以外（外の URL・`/auth/*`・`/api/*`）は `/`。stub はいつもログイン済みで、`/auth/login` は戻り先へ移る。
-- **画面（#32）**: 枠は `app/(editor)/layout.tsx`（niho-docs-ui の shell）。`/` はデスクトップでは最後に開いたページ（cookie `editor_last_page` の id。無い・消えたなら `/p/new`）へ移る。`/p/new` は題名か本文を入力した時点で POST して作り、`history.replaceState` で `/p/{id}` に替える（エディタは作り直さない）。`/p/new?from=recording` は開始の画面だけ。`/settings` は設定（#108。下の節）、`/destinations`・`/account` は題名だけ。900px 以下（shell.css と同じ）では `/` が一覧の画面で、ページと設定は全画面、ヘッダーの左のボタンで一覧を出す。
+- **画面（#32）**: 枠は `app/(editor)/layout.tsx`（niho-docs-ui の shell）。`/` はデスクトップでは最後に開いたページ（cookie `editor_last_page` の id。無い・消えたなら `/p/new`）へ移る。`/p/new` は題名か本文を入力した時点で POST して作り、`history.replaceState` で `/p/{id}` に替える（エディタは作り直さない）。`/p/new?from=recording` は開始の画面だけ。`/settings` は設定（#108）、`/destinations`・`/destinations/{id}` は発信先の設定（#41。どちらも下の節）、`/account` は題名だけ。900px 以下（shell.css と同じ）では `/` が一覧の画面で、ページと設定は全画面、ヘッダーの左のボタンで一覧を出す。
 - **一覧（#32）**: 更新順（同じ時刻は id の降順）で 100 件ずつ。layout が最初の 100 件を描き、末尾が近づいたら `GET /api/pages?limit=&cursor=` で続きを読む。cursor は `<updated_at（UTC・マイクロ秒まで）>_<id>`。読み込んだ親の下に子ページを作った順で並べる。検索はサイドバーの検索入力から（下の「検索（#35）」）。
 - **CSP と HSTS（#44）**: ページの CSP は `src/proxy.ts` が要求ごとに作る nonce で付ける（`src/security/csp.ts`）。script は nonce ＋ `strict-dynamic` で、インラインの script・`unsafe-eval`・外部 origin を許さない。style だけ `'self' 'unsafe-inline'`（TipTap が実行時に nonce なしの `<style>` を注入し、共有の docs-ui が SSR で `style=""` を出すため。絞るには docs-ui 側の変更が要る）。nonce は静的な HTML に入れられないので、root layout で `connection()` を呼び全 route を要求のときに描く。`/api` は何も読み込まない固定の CSP（`default-src 'none'`）。`Strict-Transport-Security` は全応答。**画像（#33）は署名付き URL を使わずサーバーが中継する**（`/api/assets/{id}`・`/s/{token}/a/{id}`）ので、`img-src` は `'self' data: blob:` のまま変えない。音声を GCS から直に読む段階（#36 段 3）で、その origin だけを `media-src` に足す。開発（`next dev`）だけ `unsafe-eval` と HMR の WebSocket を許す。
 - **PWA（#49）**: `src/app/manifest.ts`（`/manifest.webmanifest`。`display: standalone`、`start_url: /`）、アイコンは `public/icons`（NIHO docs の `icon.svg` から `node scripts/build-icons.mjs` で作る。any 192/512、maskable 512、apple-touch 180。再生成は Chrome が要る）。`public/sw.js` は**殻だけ**: `/_next/static/` と offline 画面だけを手元に置き、圏外でページを開くと `/offline.html`（「つながっていません」）を出す。ページの HTML・`/api`・認証の絡む応答はキャッシュしない。オフライン編集は含まない（#50）。登録は本番だけ（`RegisterServiceWorker`）。インストール後も全ページ noindex。standalone の出力には `public/` が入らないので、`postbuild`（`scripts/copy-standalone-assets.mjs`）と Dockerfile で置く。
@@ -244,6 +244,27 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 - 共有ページ（`/s/{token}`）も同じ `aside[data-callout]` で描く（`src/share/render-blocks.tsx`）。
 - Markdown の書き出しでは引用と同じ `:::note`（`src/export/markdown.ts`。#69 で入っていたので、ここでは変えていない）。
 
+## 発信先の設定（#41）
+
+`/destinations` と `/destinations/{id}`。画面は共有の docs-ui（`packages/docs-ui/src/shell/editor-destinations.tsx` の
+`EditorDestinationsPage`・`EditorSitePage`。モック v6 の V.dest・V.site）で、`src/components/DestinationsView.tsx`・`SiteView.tsx` が
+状態と通信だけを持つ。実処理は `@niho/editor-publish` の `ConnectionService`（docs/architecture/editor-publish-core.md「#41 発信先の設定」）。
+
+- **一覧**: NIHO の面（`exp`・`niho`）は役割で自動に出て、役割が無い・宣言が読めないときは理由を一言。本人のサイトは接続ごとに 1 行
+  （公開中の数つき）。「発信先を追加」で `mode`（公開 API で受け取る／WordPress／Ghost）・handle・サイトの URL・記事の前に付く path を入れる。
+- **サイトの設定**: 公開 API の URL（コピー）、鍵（伏せ字と再発行）、送り方、書き出し（Markdown ＋写真の zip）、URL の形の編集、
+  この発信先に公開した一覧（公開をやめたものも）、接続の解除。
+- **鍵**: 平文は**作ったとき・再発行したときの応答にだけ**入り、画面はその 1 回だけ出す（「閉じる」で消える）。保存するのは
+  SHA-256 と末尾 4 文字で、ほかの場所に出るのは `ek_••••••••` ＋末尾 4 文字。URL・localStorage・ログ・エラーの本文には出さない。
+  再発行は旧鍵の失効と同じトランザクションで、**次の request から**公開 API が旧鍵を 401 にする。
+- **接続の解除**: 鍵の失効・接続の解除・その接続に公開中のページを「公開をやめた」にすることを同じトランザクションで行う（ページは残る）。
+  解除した接続は設定できず、画面は一覧へ戻る。書き出しだけは解除のあとでも呼べる。
+- **WordPress・Ghost**: v1 では入口だけ（`mode` を保存できるが送信は動かない。`pushEnabled` は常に false）。画面にも一言出す。
+- **API**: `GET/POST /api/destinations`、`GET/PATCH /api/destinations/{id}`、`POST /api/destinations/{id}/key`、
+  `POST /api/destinations/{id}/disconnect`、`GET /api/destinations/{id}/export`（`src/server/connections-api.ts`）。
+  未認証 401、別の origin からの更新 403、別の人・存在しない・不正な id はどれも同じ 404、DB なし 503。
+  書き出しの写真は保存先から読む（`src/publish/export-assets.ts`。1 回で 200 MiB まで。超えたら 413 で、公開版と下書きは変わらない）。
+
 ## 設定（#108）
 
 `/settings`。画面は共有の docs-ui（`packages/docs-ui/src/shell/editor-settings.tsx` の `EditorSettingsPage`。モック v6 の V.settings）で、
@@ -266,4 +287,4 @@ EDITOR_AUTH_MODE=stub npm -C apps/editor-web run dev
 
 ## まだやらないこと
 
-見た目（#48）、版・履歴・オフライン・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、プレビューを開く画面（token の発行は API だけ。#40 の後）、鍵の画面（#41）、公開の知らせ（録音は公開版に含まれない、など）の表示と、本人のサイトが 2 つ以上のときの選び方（#39 の後）、録音の開始（#36）、検索の絞り込み（#35）、発信先・役割とつながりの中身（#41・#42）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。
+見た目（#48）、版・履歴・オフライン・ブロックと「/」メニューの仕上げ・IME の扱い（#33）、プレビューを開く画面（token の発行は API だけ。#40 の後）、公開の知らせ（録音は公開版に含まれない、など）の表示と、公開のシートで本人のサイトが 2 つ以上のときの選び方（#39 の後）、録音の開始（#36）、検索の絞り込み（#35）、役割とつながりの中身（#42）、WordPress・Ghost への送信（#41 は入口だけ）、niho モードの実装（niho-app #19459）、GCS バケット・Cloud Run・Cloud SQL の実環境と secret。

@@ -49,6 +49,13 @@ const VARIANTS: { id: string; widths: readonly number[] }[] = [
   { id: "settings-web?terms=1", widths: [1440, 390, 375, 320] },
   { id: "settings-web?recipe=tpl-1", widths: [1440, 390, 375, 320] },
   { id: "settings-web?recipe=r-talk", widths: [1440, 390, 375, 320] },
+  // 発信先（editor-web。#41。発信先を追加・新しい鍵・URL の編集・鍵の再発行の確認・接続の解除の確認）
+  { id: "dest-web?add=1", widths: [1440, 390, 375, 320] },
+  { id: "dest-web?key=1", widths: [1440, 390, 375, 320] },
+  { id: "site-web?url=1", widths: [1440, 390, 375, 320] },
+  { id: "site-web?confirm=key", widths: [1440, 390, 375, 320] },
+  { id: "site-web?confirm=disconnect", widths: [1440, 390, 375, 320] },
+  { id: "site-web?key=1", widths: [1440, 390, 375, 320] },
   // 公開プレビュー（発信先ごとの見え方）
   { id: "preview:enoden", widths: [1440, 390, 375, 320] },
   { id: "preview:gomi", widths: [1440, 390, 375, 320] },
