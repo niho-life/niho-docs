@@ -56,7 +56,10 @@ export {
   updateRecording,
   type Connectable,
   type CreateRecordingInput,
+  RECORDING_AUDIO_STATUSES,
   type Recording,
+  type RecordingAudio,
+  type RecordingAudioStatus,
   type RecordingData,
   type RecordingMutation,
   type RecordingPage,
@@ -65,3 +68,15 @@ export {
   type UpdateRecordingResult,
 } from "./recordings.ts";
 export * from "./publications.ts";
+export {
+  AUDIO_OBJECT_PREFIX,
+  audioInfo,
+  audioObjectPath,
+  completeAudioUpload,
+  startAudioRecording,
+  type AudioInfo,
+  type CompleteAudioUploadResult,
+  type StartAudioRecordingInput,
+  type StartAudioRecordingResult,
+  type StartedAudioRecording,
+} from "./recording-audio.ts";

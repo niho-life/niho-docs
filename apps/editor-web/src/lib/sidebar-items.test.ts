@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PageSummary } from "@niho/editor-store";
-import { arrangeSidebarItems, formatWhen, searchPages } from "./sidebar-items";
+import type { SearchHit } from "./search-client";
+import { arrangeSidebarItems, formatWhen, searchRows } from "./sidebar-items";
 
 /** 2026-10-31 12:00（東京）＝ 03:00 UTC。 */
 const NOW = Date.parse("2026-10-31T03:00:00.000Z");
@@ -85,15 +86,14 @@ describe("arrangeSidebarItems", () => {
     ]);
   });
 
-  it("filters by title (NFKC, case-insensitive) and lists matches flat", () => {
-    const pages = [page("rec", { title: "ＮＩＨＯ Kamakura 録音" }), page("child", { parent: "rec", title: "niho の手順" }), page("other", { title: "日記" })];
-    const items = arrangeSidebarItems(pages, { now: NOW, query: " niho " });
-    expect(items.map((item) => [item.id, item.child ?? false])).toEqual([
-      ["rec", false],
-      ["child", false],
+  it("shows search hits flat, in the server's order, with the matched sentence as the second line", () => {
+    const hits: SearchHit[] = [
+      { id: "b", kind: "note", title: "鎌倉の朝", snippet: "…江ノ電の音で目が覚めた…", updatedAt: "2026-10-31T02:30:00.000Z" },
+      { id: "a", kind: "rec", title: "", snippet: "  ", updatedAt: "2026-10-30T02:00:00.000Z" },
+    ];
+    expect(searchRows(hits, NOW)).toEqual([
+      { id: "b", title: "鎌倉の朝", when: "30分前", sub: { text: "…江ノ電の音で目が覚めた…" } },
+      { id: "a", title: "", when: "昨日" },
     ]);
-    expect(arrangeSidebarItems(pages, { now: NOW, query: "   " })).toHaveLength(3);
-    expect(searchPages(pages, "ｶﾏｸﾗ")).toEqual([]);
-    expect(searchPages(pages, "KAMAKURA").map((item) => item.id)).toEqual(["rec"]);
   });
 });

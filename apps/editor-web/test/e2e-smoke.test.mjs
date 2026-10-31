@@ -777,6 +777,109 @@ describe("editor-web e2e (stub, next dev)", () => {
     const untouched = await pool.query("SELECT revision, speaker_names FROM page_recordings WHERE page_id = $1", [otherId]);
     assert.deepEqual(untouched.rows[0], { revision: 1, speaker_names: { 1: "他人の話し手" } });
   });
+
+  it("uploads an audio file through the fake storage: limits, start, PUT, complete, and the same 404 for others (#36 段 2a)", async () => {
+    // EDITOR_STORAGE は未設定（next dev なので fake）。合成の名前・小さなバイト列・ダミーのハッシュだけを使う
+    const limits = await fetch(`${base}/api/recordings/audio/limits`);
+    assert.equal(limits.status, 200);
+    const limitsBody = await limits.json();
+    assert.equal(limitsBody.maxBytes, 2 * 1024 * 1024 * 1024);
+    assert.equal(limitsBody.maxDurationSec, 6 * 60 * 60);
+    assert.equal(limitsBody.retentionDays, 30);
+    assert.ok(limitsBody.extensions.includes("m4a") && !limitsBody.extensions.includes("vtt"));
+
+    const sha256 = "f".repeat(64);
+    const key = randomUUID();
+    const started = await write("POST", "/api/recordings/audio/start", { name: "合成の音声 e2e.m4a", contentType: "audio/mp4", sizeBytes: 4, sha256 }, { "idempotency-key": key });
+    assert.equal(started.status, 201);
+    assert.equal(started.headers.get("cache-control"), "private, no-store");
+    const { page, recording, upload } = await started.json();
+    createdIds.push(page.id);
+    assert.equal(page.kind, "rec");
+    assert.equal(page.title, "合成の音声 e2e");
+    assert.equal(recording.source, "audio");
+    assert.deepEqual(recording.segments, []);
+    assert.equal(recording.audio.status, "uploading");
+    assert.equal(recording.audio.bytes, 4);
+    assert.equal(Date.parse(recording.audio.expiresAt) - Date.parse(recording.createdAt), 30 * 24 * 60 * 60 * 1000);
+    assert.match(upload.url, /^\/api\/dev\/fake-storage\/[A-Za-z0-9_-]{43}$/);
+    assert.equal(upload.method, "PUT");
+    assert.equal(upload.maxBytes, 4);
+
+    // ブラウザの PUT の代わり（偽の保存先の受け口）
+    const put = await fetch(new URL(upload.url, base), { method: "PUT", headers: upload.headers, body: new Uint8Array([1, 2, 3, 4]) });
+    assert.equal(put.status, 200);
+
+    const done = await write("POST", `/api/pages/${page.id}/recording/audio/complete`);
+    assert.equal(done.status, 200);
+    const doneBody = await done.json();
+    assert.equal(doneBody.recording.audio.status, "uploaded");
+    assert.deepEqual(doneBody.speakers, []);
+    const again = await write("POST", `/api/pages/${page.id}/recording/audio/complete`);
+    assert.equal(again.status, 200, "completing twice is fine");
+    assert.deepEqual((await again.json()).recording.audio, doneBody.recording.audio);
+    const replay = await write("POST", "/api/recordings/audio/start", { name: "合成の音声 e2e.m4a", contentType: "audio/mp4", sizeBytes: 4, sha256 }, { "idempotency-key": key });
+    assert.equal(replay.status, 200);
+    const replayBody = await replay.json();
+    assert.equal(replayBody.page.id, page.id);
+    assert.equal(replayBody.upload, null);
+
+    // 大きさの違う別のページ: 4 バイトと申告して 3 バイトを置く
+    const other = await write("POST", "/api/recordings/audio/start", { name: "合成の別の音声.mp3", contentType: "audio/mpeg", sizeBytes: 4, sha256 });
+    assert.equal(other.status, 201);
+    const otherBody = await other.json();
+    createdIds.push(otherBody.page.id);
+    assert.equal((await fetch(new URL(otherBody.upload.url, base), { method: "PUT", headers: otherBody.upload.headers, body: new Uint8Array([1, 2, 3]) })).status, 200);
+    const mismatch = await write("POST", `/api/pages/${otherBody.page.id}/recording/audio/complete`);
+    assert.equal(mismatch.status, 409);
+    assert.equal(await mismatch.text(), '{"error":"incomplete","reason":"size_mismatch"}');
+    // 上限を超えたら保存の前に断る
+    const pagesBefore = (await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1", [STUB_OWNER])).rows[0].n;
+    const tooLarge = await write("POST", "/api/recordings/audio/start", { name: "合成.m4a", contentType: "audio/mp4", sizeBytes: 2 * 1024 * 1024 * 1024 + 1, sha256 });
+    assert.equal(await tooLarge.text(), '{"error":"bad_request","reason":"too_large"}');
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM pages WHERE owner = $1", [STUB_OWNER])).rows[0].n, pagesBefore);
+
+    // 別の owner の音声のページは、存在しない id と同じ 404
+    const theirs = await pool.query("INSERT INTO pages (owner, kind, title) VALUES ($1, 'rec', 'synthetic other audio') RETURNING id", [OTHER_OWNER]);
+    const theirId = theirs.rows[0].id;
+    createdIds.push(theirId);
+    const assetId = randomUUID();
+    await pool.query(
+      `INSERT INTO assets (id, owner, page_id, kind, bucket_path, bytes, sha256, content_type) VALUES ($1, $2, $3, 'audio', $4, 4, $5, 'audio/mp4')`,
+      [assetId, OTHER_OWNER, theirId, `audio/${assetId}`, sha256],
+    );
+    await pool.query(
+      `INSERT INTO page_recordings (page_id, owner, source, language, segments, audio_asset, audio_status) VALUES ($1, $2, 'audio', 'ja', '[]', $3, 'uploading')`,
+      [theirId, OTHER_OWNER, assetId],
+    );
+    const snapshot = async (response) => ({
+      status: response.status,
+      headers: [...response.headers.entries()].filter(([name]) => name !== "date").sort(),
+      body: await response.text(),
+    });
+    const theirResult = await snapshot(await write("POST", `/api/pages/${theirId}/recording/audio/complete`));
+    const unknownResult = await snapshot(await write("POST", `/api/pages/${randomUUID()}/recording/audio/complete`));
+    assert.equal(theirResult.status, 404);
+    assert.equal(theirResult.body, '{"error":"not_found"}');
+    assert.deepEqual(unknownResult, theirResult);
+    assert.equal((await pool.query("SELECT audio_status FROM page_recordings WHERE page_id = $1", [theirId])).rows[0].audio_status, "uploading");
+
+    // 読み直しても音声がある。表は録音ページ（kind = 'rec'）と、audio/ の下の資産
+    const read = await fetch(`${base}/api/pages/${page.id}/recording`);
+    assert.equal(read.status, 200);
+    assert.deepEqual((await read.json()).recording.audio, doneBody.recording.audio);
+    const stored = await pool.query(
+      `SELECT p.kind, r.audio_status, a.bucket_path, a.bytes::int AS bytes, a.kind AS asset_kind
+         FROM pages p JOIN page_recordings r ON r.page_id = p.id JOIN assets a ON a.owner = r.owner AND a.id = r.audio_asset
+        WHERE p.id = $1`,
+      [page.id],
+    );
+    assert.equal(stored.rows[0].kind, "rec");
+    assert.equal(stored.rows[0].audio_status, "uploaded");
+    assert.match(stored.rows[0].bucket_path, /^audio\/[0-9a-f-]{36}$/);
+    assert.equal(stored.rows[0].bytes, 4);
+    assert.equal(stored.rows[0].asset_kind, "audio");
+  });
 });
 
 describe("editor-web e2e (niho until #19459, next dev)", () => {
