@@ -73,6 +73,12 @@ scripts/editor-deploy/deploy.sh --no-build # いま動いている image のま�
 
 migration は expand → contract（列の削除は配備の 1 つ後）。適用済みのファイルは書き換えない（書き換えると migrate が止まる）。
 
+**新しい migration の名前は自分で決めない。** `npm -C packages/editor-store run new-migration -- <名前>` が
+`YYYYMMDDHHMMSS_<名前>.sql` を作る（雛形つき）。連番（`0001`〜）を人が選ぶと並行作業で同じ番号を取り合うため
+（実際に #90 と #93 が 0008、#100 と #93 が 0009 で衝突した）。適用は辞書順で、`"0" < "2"` なので
+既存の連番がすべて先に走る。**既にある連番のファイルは名前を変えない**（適用済みの名前が記録の主キーで、
+変えると未適用に見えるうえ checksum も合わなくなる）。
+
 ## 5. ログイン（`niho` モード）が入るまでの状態
 
 `niho` モードは niho-app #19459 の契約が出るまで fail-closed（いつも未認証）。それまで本番の `niho-editor` は起動して noindex を返すが、API は常に 401、画面はログインの前の状態のまま。つまり **誰もページを作れない**。これが想定した状態で、`stub` へ落とす経路は無い（`NODE_ENV=production` で `EDITOR_AUTH_MODE` が `niho` 以外だと port を開く前に終了する）。

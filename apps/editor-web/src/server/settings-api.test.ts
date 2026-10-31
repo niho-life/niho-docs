@@ -34,7 +34,7 @@ function authAs(userId: string | null): AuthProvider {
 
 /**
  * 本物と同じ決まりの、覚えておくだけの store（渡した項目を入れ替える・検証を通らない値は投げる）。
- * 手順は表（0021）と同じで、行が無い人の最初の読み出しで既定の 3 つを入れる（recipe-source.ts と同じ決まり）。
+ * 手順は表と同じで、行が無い人の最初の読み出しで既定の 3 つを入れる（recipe-source.ts と同じ決まり）。
  */
 function memoryStore() {
   const rows = new Map<string, EditorSettings>();

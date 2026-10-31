@@ -9,7 +9,7 @@ import { SETTINGS_ID_PATTERN, type RecipeInput, type RecipeSample, type Settings
  * **既定の手順を増やすのはこの `DEFAULT_RECIPE_IDS` に 1 つ足すだけ**（docs-core にテンプレートがあれば中身はそこから来る）。
  * もう表に行がある人にも、次の読み出しで足りない既定だけが入る（`src/server/recipe-source.ts`）。
  *
- * 実行のときに使う手順は、表 `recipes`（migration 0021）から読む（`src/server/recipe-source.ts`）。この定数はその表の
+ * 実行のときに使う手順は、表 `recipes`（migration 20261101001500_recipes）から読む（`src/server/recipe-source.ts`）。この定数はその表の
  * 既定の中身で、手順が 1 つも無い人の最初の読み出しで表へ写される。設定（#108）で段階の名前・指示・お手本を変えたもの・
  * 足したものも同じ表の行になる。手順を変えると、次に手順を始めたときから効く（進行中の run は claim したときの定義で続く）。
  */
@@ -104,7 +104,7 @@ export function recipeFromSettings(saved: SettingsRecipe, base: RecipeDef | unde
 
 /**
  * 設定に保存した手順を既定にかぶせた、その人の手順。並びは既定の 3 つ（手を入れたものはその場）→ 足したものの保存順。
- * 表（0021）へ移したあとは、表に行が無い人の 1 回目の引き継ぎだけで使う（`src/server/recipe-source.ts`）。
+ * 表へ移したあとは、表に行が無い人の 1 回目の引き継ぎだけで使う（`src/server/recipe-source.ts`）。
  */
 export function recipesOf(saved: readonly SettingsRecipe[] = []): RecipeDef[] {
   const byId = new Map(saved.map((recipe) => [recipe.id, recipe] as const));

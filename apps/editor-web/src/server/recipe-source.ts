@@ -3,11 +3,11 @@ import { addRecipes, getEditorSettings, listRecipes, putRecipes, seedRecipes, ty
 import { DEFAULT_RECIPES, recipesFromStored, recipesOf, toRecipeInputs, type RecipeDef } from "../steps/recipes";
 
 /**
- * その人の手順の出どころ（表 `recipes`。migration 0021）。
+ * その人の手順の出どころ（表 `recipes`。migration `20261101001500_recipes`）。
  *
  * - 手順の実体は表。固定だった既定の 3 つ（docs-core のテンプレートの写し。`DEFAULT_RECIPES`）は、その人の行が 1 つも
  *   無いときの 1 回だけ表へ写す。写すときに、0013 の `editor_settings.recipes`（既定に手を入れた分・足した分）も一緒に
- *   かぶせる（0021 の前から使っている人の引き継ぎ）。この列を読むのは、ここだけ。
+ *   かぶせる（この表より前から使っている人の引き継ぎ）。この列を読むのは、ここだけ。
  * - 引き継ぎが要らなくなる配備の 1 つ後に、列と `recipesOf` を落とす（expand → contract）。
  * - 消した手順を勝手に戻さないため、行が 1 つでもあれば写さない（設定の PATCH は既定の手順が揃っていることを求めるので、
  *   画面からは空にできない）。

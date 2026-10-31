@@ -331,6 +331,23 @@ export function Screen({ id, forced }: { id: string; forced: ScreenForced }) {
         kicker={dest && page.cat ? page.cat : undefined}
         meta={meta}
         lead={page.kind === "article" ? (page.lead ?? "") : undefined}
+        band={
+          steps ? (
+            <ShellSteps
+              band
+              title={`${steps.root.recipe ?? "手順"}の手順`}
+              steps={steps.steps}
+              currentId={page.id}
+              note={`「${steps.steps.find((step) => step.state === "run")?.label ?? steps.steps[0]!.label}」を作成中です。画面を閉じても進みます。`}
+              actions={[
+                { id: "redo", label: "この手順を作り直す", tone: "primary" },
+                { id: "restart", label: "はじめから作り直す", tone: "outline" },
+              ]}
+              onAction={noop}
+              onSelect={(stepId) => navigate(`page:${stepId}`)}
+            />
+          ) : undefined
+        }
         bodyPlaceholder={page.st === "run" ? "作成中…" : page.st === "wait" ? "前の手順が終わると作成します" : undefined}
         media={
           page.kind === "rec" ? (

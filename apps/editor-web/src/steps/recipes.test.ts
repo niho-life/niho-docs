@@ -90,7 +90,7 @@ describe("recipesOf", () => {
 });
 
 /**
- * T1（#37）の条件: 固定で持っていた 3 つの手順が、表（`recipes`。migration 0021）から読んだ既定として同じように動くこと。
+ * T1（#37）の条件: 固定で持っていた 3 つの手順が、表（`recipes`）から読んだ既定として同じように動くこと。
  * 表との行き来は `toRecipeInputs`（書く形）と `recipesFromStored`（読んだ行）で、どちらも純粋な関数。
  */
 describe("the recipes table holds the three fixed recipes without changing them", () => {

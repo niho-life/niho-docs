@@ -95,6 +95,11 @@ newest_version_enabled() {
   [[ "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')" == enabled ]]
 }
 ai_key_ready() { newest_version_enabled "$SECRET_ANTHROPIC_KEY"; }
+# An API key in the shape the transcription engine accepts: printable ASCII without spaces, 1..512 characters
+# (API_KEY in apps/editor-web/src/transcription/config.ts). `[!-~]` is that range (0x21-0x7e).
+# The length is checked apart from the regex on purpose: bash refuses a repetition count above 255, so writing
+# `{1,512}` makes the whole expression invalid ("maximum repetition exceeds 255") and then no key is ever accepted.
+is_transcribe_key() { [[ "$1" =~ ^[!-~]+$ ]] && (( ${#1} <= 512 )); }
 # Transcription (#36) is on under the same rule as AI: the owner adds the key with set-transcribe-key.sh. Without it the
 # engine stays off and the app answers 503 (the VTT import still works; only the engine needs the key).
 transcribe_key_ready() { newest_version_enabled "$SECRET_DEEPGRAM_KEY"; }

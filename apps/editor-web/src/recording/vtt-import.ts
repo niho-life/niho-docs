@@ -29,9 +29,9 @@ export const VTT_IMPORT_NAME_MAX_CHARS = 1024;
 
 export type VttImportFailure = "vtt_empty" | "vtt_too_large" | "vtt_invalid" | "name";
 
-export type VttImport = {
+/** VTT から読んだ文字起こし（言語は持たない。録音ページを作るとき・あとから足すときの両方で使う）。 */
+export type VttTranscript = {
   title: string;
-  language: PageLang;
   segments: RecordingSegment[];
   speakerNames: Record<string, string>;
   durationSec: number;
@@ -39,6 +39,9 @@ export type VttImport = {
   sourceSha256: string;
 };
 
+export type VttImport = VttTranscript & { language: PageLang };
+
+export type VttReadResult = { ok: true; value: VttTranscript } | { ok: false; reason: VttImportFailure };
 export type VttImportResult = { ok: true; value: VttImport } | { ok: false; reason: VttImportFailure };
 
 /** 名前・題名に残さない文字（制御文字・向きを変える書式文字）。 */
@@ -132,10 +135,11 @@ function sha256(text: string): string {
 }
 
 /**
- * VTT の原文を録音の段落にする。ファイル名（name）はパスを除いて題名と sourceName に使う。
+ * VTT の原文を録音の段落にする。ファイル名（name）はパスを除いて題名と sourceName に使う。時刻はその字幕の先頭を 0 とした秒
+ * （録音ページに足すときは、呼び出し側が前の音声の長さだけずらす。append-transcript.ts）。
  * 失敗の理由: vtt_empty（空・発言なし）・vtt_too_large（4 MiB を超える・段落が多すぎる・長すぎる段落）・vtt_invalid（形が違う）・name。
  */
-export function importVtt(input: { name: string; vtt: string; lang: PageLang }): VttImportResult {
+export function readVtt(input: { name: string; vtt: string }): VttReadResult {
   if (typeof input.name !== "string" || codePoints(input.name).length > VTT_IMPORT_NAME_MAX_CHARS || !isStorableText(input.name)) {
     return { ok: false, reason: "name" };
   }
@@ -194,7 +198,6 @@ export function importVtt(input: { name: string; vtt: string; lang: PageLang }):
     ok: true,
     value: {
       title: titleFromName(base),
-      language: input.lang,
       segments,
       speakerNames,
       durationSec,
@@ -202,4 +205,10 @@ export function importVtt(input: { name: string; vtt: string; lang: PageLang }):
       sourceSha256: sha256(input.vtt),
     },
   };
+}
+
+/** VTT を読んで、録音ページを作るための形にする（言語はページの言語）。 */
+export function importVtt(input: { name: string; vtt: string; lang: PageLang }): VttImportResult {
+  const read = readVtt(input);
+  return read.ok ? { ok: true, value: { ...read.value, language: input.lang } } : read;
 }

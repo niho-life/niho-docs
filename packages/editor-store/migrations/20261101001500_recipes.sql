@@ -8,7 +8,7 @@ BEGIN;
 -- （apps/editor-web/src/server/recipe-source.ts）。editor_settings.recipes の列は、その引き継ぎが要らなくなる配備の
 -- 1 つ後に落とす（expand → contract。列はこの migration では触らない）。
 --
--- 番号が 0021 なのは、並行する PR が 0014 以降を使うため（番号は一意であればよく、順序に依存しない）。
+-- 名前は日時（#127 の new-migration。連番の取り合いを避ける）。適用は辞書順なので、既存の連番のあとに走る。
 --
 -- 値の形と上限は packages/editor-store/src/recipes.ts が 1 か所で決め、ここでは配列であることと件数だけを守る。
 CREATE TABLE recipes (

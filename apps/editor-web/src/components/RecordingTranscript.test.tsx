@@ -3,8 +3,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { RecordingData } from "@niho/editor-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appendTranscript } from "@/recording/append-transcript";
 import { editSegments } from "@/recording/edit-segments";
 import { listSpeakers, mergeSpeakers, renameSpeaker } from "@/recording/speakers";
+import { readVtt } from "@/recording/vtt-import";
 import { RecordingTranscript } from "./RecordingTranscript";
 
 const PAGE_ID = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
@@ -12,12 +14,19 @@ const CONFLICT_TEXT = "別の場所で先に直されました。最新に合わ
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type Patch = { baseRevision: number; edits?: { index: number; text: string }[]; renameSpeaker?: { speaker: number; name: string | null }; mergeSpeakers?: { from: number; into: number } };
+type Patch = {
+  baseRevision: number;
+  edits?: { index: number; text: string }[];
+  renameSpeaker?: { speaker: number; name: string | null };
+  mergeSpeakers?: { from: number; into: number };
+  appendVtt?: { name: string; vtt: string };
+};
 
 /** 本物の純粋な関数（edit-segments・speakers）で動く、revision つきの録音の API の代わり。 */
 function createServer(initial?: Partial<RecordingData>) {
   const state = {
     revision: 1,
+    durationSec: 125,
     data: {
       segments: [
         { start: 0, end: 4, text: "最初の段落です。", speaker: 1 },
@@ -40,7 +49,7 @@ function createServer(initial?: Partial<RecordingData>) {
       source: "vtt",
       language: "ja",
       engine: null,
-      durationSec: 125,
+      durationSec: state.durationSec,
       sourceName: "dinner.vtt",
       sourceSha256: null,
       segments: state.data.segments,
@@ -62,13 +71,18 @@ function createServer(initial?: Partial<RecordingData>) {
     state.patches.push(patch);
     if (state.hold) await state.hold;
     if (patch.baseRevision !== state.revision) return json(409, { error: "conflict", ...snapshot() });
+    const appended = patch.appendVtt ? readVtt(patch.appendVtt) : null;
+    if (appended && !appended.ok) return json(400, { error: "bad_request", reason: appended.reason });
     const result = patch.edits
       ? editSegments(state.data, patch.edits)
       : patch.renameSpeaker
         ? renameSpeaker(state.data, patch.renameSpeaker.speaker, patch.renameSpeaker.name)
-        : mergeSpeakers(state.data, patch.mergeSpeakers!.from, patch.mergeSpeakers!.into);
+        : appended
+          ? appendTranscript({ ...state.data, durationSec: state.durationSec }, appended.value)
+          : mergeSpeakers(state.data, patch.mergeSpeakers!.from, patch.mergeSpeakers!.into);
     if ("rejected" in result) return json(400, { error: "bad_request", reason: result.rejected });
-    state.data = result;
+    state.data = { segments: result.segments, speakerNames: result.speakerNames };
+    if (result.durationSec !== undefined && result.durationSec !== null) state.durationSec = result.durationSec;
     state.revision += 1;
     return json(200, snapshot());
   });
@@ -527,5 +541,60 @@ describe("RecordingTranscript: timestamps", () => {
     expect(container!.querySelectorAll(".es-who time")).toHaveLength(4);
     act(() => buttonByText("タイムスタンプ").click());
     expect(container!.querySelectorAll(".es-who time")).toHaveLength(0);
+  });
+});
+
+describe("RecordingTranscript（あとの .vtt を足す）", () => {
+  const VTT = (text: string) => ["WEBVTT", "", "00:00:00.000 --> 00:00:03.000", `<v Takuya>${text}`, "", ""].join("\n");
+  const appendInput = () => container!.querySelector<HTMLInputElement>('[data-recording-append] input[type="file"]')!;
+  const appendError = () => container!.querySelector('[data-recording-append-error=""]')?.textContent ?? "";
+
+  async function pick(files: File[]) {
+    const input = appendInput();
+    Object.defineProperty(input, "files", { value: files, configurable: true });
+    await act(async () => {
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
+  it("複数の .vtt を選んだ順に足し、前の音声の長さだけ時刻をずらしてつなぐ", async () => {
+    const server = await mount();
+    await until(() => paragraphs().length === 4);
+    expect(appendInput().multiple).toBe(true);
+
+    await pick([new File([VTT("続きです")], "2.vtt", { type: "text/vtt" }), new File([VTT("もっと続きます")], "3.vtt", { type: "text/vtt" })]);
+    await until(() => paragraphs().length === 6);
+    expect(server.state.patches.map((patch) => [patch.baseRevision, patch.appendVtt?.name])).toEqual([
+      [1, "2.vtt"],
+      [2, "3.vtt"],
+    ]);
+    // 1 本目の録音は 125 秒。2 本目は 125 秒から、3 本目は 128 秒から
+    expect(server.state.data.segments.slice(4).map((segment) => [segment.start, segment.end, segment.text])).toEqual([
+      [125, 128, "続きです"],
+      [128, 131, "もっと続きます"],
+    ]);
+    // 同じ名前の話者（Takuya）は 1 本目と同じ番号のまま
+    expect(server.state.data.segments.slice(4).map((segment) => segment.speaker)).toEqual([1, 1]);
+    expect(server.state.durationSec).toBe(131);
+    expect(container!.textContent).toContain("2 件の文字起こしを足しました");
+    expect(appendError()).toBe("");
+  });
+
+  it("途中で失敗したら、そこで止めて何件足せたかを知らせる", async () => {
+    const server = await mount();
+    await until(() => paragraphs().length === 4);
+    await pick([new File([VTT("続きです")], "2.vtt", { type: "text/vtt" }), new File(["これは字幕ではありません"], "3.vtt", { type: "text/vtt" })]);
+    await until(() => appendError() !== "");
+    expect(appendError()).toContain("1 件足しました");
+    expect(appendError()).toContain("3.vttは足せませんでした");
+    expect(server.state.data.segments).toHaveLength(5);
+  });
+
+  it("音声ファイルは足せないと言う（足せるのは .vtt）", async () => {
+    await mount();
+    await until(() => paragraphs().length === 4);
+    await pick([new File([new Uint8Array([1])], "音声.m4a", { type: "audio/mp4" })]);
+    await until(() => appendError() !== "");
+    expect(appendError()).toBe("足せるのは文字起こし済みの .vtt ファイルです。");
   });
 });

@@ -38,7 +38,7 @@ const added: RecipeInput = {
   steps: [{ id: "s-1", name: "まとめ", instruction: "まとめる。", profile: "standard" }],
 };
 
-describe("recipes table (0021)", { skip: databaseUrl === undefined }, () => {
+describe("recipes table (20261101001500_recipes)", { skip: databaseUrl === undefined }, () => {
   const schema = `editor_store_recipes_${randomUUID().replaceAll("-", "")}`;
   let pool: PgPool;
 
