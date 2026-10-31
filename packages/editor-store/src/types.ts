@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 
 /** ページの種類（見た目と初期値を決めるだけで、あとから変えられる）。設計 §3。 */
-export const PAGE_KINDS = ["note", "journal", "rec", "article", "step"] as const;
+export const PAGE_KINDS = ["note", "rec", "article", "step"] as const;
 export type PageKind = (typeof PAGE_KINDS)[number];
 
 export const PAGE_LANGS = ["ja", "en"] as const;

@@ -149,7 +149,6 @@
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-kick{margin-top:22px;font-size:12px;font-weight:600;letter-spacing:.1em;color:var(--ed-accent-ink)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt{font-family:var(--ed-font-serif);font-weight:400;font-size:42px;line-height:1.1;letter-spacing:-.02em;margin-top:8px;outline:none;overflow-wrap:anywhere}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt.es-ja{font-family:var(--ed-font-sans);font-weight:600;font-size:32px;letter-spacing:0}
-:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt.es-tt--journal{font-size:28px}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt:empty::before,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-ld:empty::before,:where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-bd:empty::before{content:attr(data-ph);color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin-top:10px;font-size:12.5px;color:var(--ed-ink-mute)}
 :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-meta>span{display:inline-flex;align-items:center;gap:6px}
@@ -544,7 +543,6 @@
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-canvas{padding:0 18px 80px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt{font-size:30px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt.es-ja{font-size:24px}
-  :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-tt.es-tt--journal{font-size:24px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-seg{grid-template-columns:minmax(0,1fr)}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-who{flex-direction:row;align-items:center;gap:8px}
   :where([data-docs-app-root]):where([data-docs-shared-ui]) .es-root .es-st-tip{position:fixed;top:calc(var(--es-header) + 6px);left:12px;right:12px;width:auto;max-width:none}
