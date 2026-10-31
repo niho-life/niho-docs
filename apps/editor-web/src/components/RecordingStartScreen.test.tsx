@@ -28,6 +28,7 @@ const created = {
     sourceSha256: null,
     segments: [{ start: 0, end: 4, text: "こんにちは", speaker: 1 }],
     speakerNames: { "1": "Takuya" },
+    audio: null,
     createdAt: "2026-10-30T00:00:00.000Z",
     updatedAt: "2026-10-30T00:00:00.000Z",
   },

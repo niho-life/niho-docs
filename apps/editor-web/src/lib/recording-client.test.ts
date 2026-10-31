@@ -27,6 +27,7 @@ function recording(revision: number, overrides: Record<string, unknown> = {}) {
       { start: 4.2, end: 9, text: "次の段落", speaker: 2 },
     ],
     speakerNames: { "1": "Takuya" },
+    audio: null,
     createdAt: "2026-10-30T00:00:00.000Z",
     updatedAt: "2026-10-30T00:00:00.000Z",
     ...overrides,

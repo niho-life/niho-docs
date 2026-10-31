@@ -28,6 +28,7 @@ function recording(overrides: Partial<Recording> = {}): Recording {
       { start: null, end: null, text: "三つ目", speaker: null },
     ],
     speakerNames: { "1": "Takuya" },
+    audio: null,
     createdAt: "2026-10-30T00:00:00.000Z",
     updatedAt: "2026-10-30T00:00:00.000Z",
     ...overrides,
