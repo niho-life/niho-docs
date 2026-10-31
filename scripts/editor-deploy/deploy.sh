@@ -38,14 +38,14 @@ fi
 CONNECTION="$(cloudsql_connection_name)"
 SERVICE_URL="$(service_url "$SERVICE")"
 
-# AI (#38): on only when the key secret has an enabled version (set-ai-key.sh). Otherwise nothing is added for AI and
+# AI (#38): on only when the newest version of the key secret is enabled (set-ai-key.sh). Otherwise nothing is added for AI and
 # the app answers 503 ai_unavailable. Read every deploy, so disabling the versions and redeploying turns AI off.
 ai=0
 if ai_key_ready; then
   ai=1
   log "AI: on ($AI_MODEL, monthly limit $AI_MONTHLY_LIMIT_USD USD per person)"
 else
-  log "AI: off ($SECRET_ANTHROPIC_KEY has no enabled version)"
+  log "AI: off (the newest version of $SECRET_ANTHROPIC_KEY is missing or not enabled)"
 fi
 
 if [[ $build -eq 1 ]]; then

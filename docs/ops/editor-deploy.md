@@ -29,7 +29,7 @@
 | `EDITOR_ORIGIN` | `https://<APP_DOMAIN>` | 更新系の要求の `Origin` 検査。独自ドメインが無いうちは `run.app` の URL |
 | `EDITOR_ASSETS_BUCKET` | 資産バケット名 | アプリはまだ読まない（画像と音声は #33 以降） |
 | `DATABASE_URL` | Secret | アプリ用ロール |
-| `ANTHROPIC_API_KEY` | Secret | AI の鍵。`niho-editor-anthropic-key` に有効な版があるときだけ渡す（§10） |
+| `ANTHROPIC_API_KEY` | Secret | AI の鍵。`niho-editor-anthropic-key` の最新の版が有効なときだけ渡す（§10） |
 | `EDITOR_AI_MODE` | `anthropic` | 同上。版が無ければ渡さない（AI は 503 のまま） |
 | `EDITOR_AI_MODEL` | `AI_MODEL`（既定 `claude-sonnet-5-5`） | 同上 |
 | `EDITOR_AI_MONTHLY_LIMIT_USD` | `AI_MONTHLY_LIMIT_USD`（既定 `10`） | 同上。1 人・1 か月の上限（見込みの USD） |
@@ -103,7 +103,7 @@ migration は expand → contract（列の削除は配備の 1 つ後）。適�
 
 ## 10. AI（#38）
 
-AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messages`。ホストはコードで固定）を呼ぶ。鍵は Secret Manager の `niho-editor-anthropic-key` に置き、画面の実行 ID（`niho-editor-runner`）だけが読める。**Secret に有効な版が無いあいだ、AI は閉じたまま**（提案・採用は 503 `ai_unavailable`。使用量の表示は動く）。`deploy.sh` は配備のたびに版の有無を見て、ある時だけ鍵と AI の環境変数を足す（ログに `AI: on` / `AI: off`）。
+AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messages`。ホストはコードで固定）を呼ぶ。鍵は Secret Manager の `niho-editor-anthropic-key` に置き、画面の実行 ID（`niho-editor-runner`）だけが読める。**Secret に版が無い、または最新の版が無効なあいだ、AI は閉じたまま**（提案・採用は 503 `ai_unavailable`。使用量の表示は動く）。`deploy.sh` は配備のたびに最新の版（作成が最も新しい版。サービスは `:latest` で読むので、古い有効な版は数えない）の状態を見て、有効なときだけ鍵と AI の環境変数を足す（ログに `AI: on` / `AI: off`）。
 
 **鍵は公開リポジトリ・Issue・PR・チャット・ログ・シェルの履歴に出さない。** 入れる経路は `set-ai-key.sh` だけ（標準入力から読み、画面・ファイル・コマンドラインに出さない。引数では受け付けない）。アプリも鍵・プロンプト・本文をエラーやログに出さない（ログは失敗の種類と HTTP ステータスだけ）。
 
@@ -127,7 +127,7 @@ AI の提案は Anthropic の Messages API（`https://api.anthropic.com/v1/messa
 ### 無効にする
 
 1. 有効な版をすべて無効にする: `gcloud secrets versions list niho-editor-anthropic-key --filter='state:ENABLED'` で版を見て、それぞれ `gcloud secrets versions disable <版> --secret niho-editor-anthropic-key`。
-2. `scripts/editor-deploy/deploy.sh --no-build` — 有効な版が無いので、AI の Secret と環境変数を付けずに配備する（`--set-secrets`・`--set-env-vars` は毎回の全量なので、前の revision の分は残らない）。ログに `AI: off`。
+2. `scripts/editor-deploy/deploy.sh --no-build` — 最新の版が無効なので、AI の Secret と環境変数を付けずに配備する（`--set-secrets`・`--set-env-vars` は毎回の全量なので、前の revision の分は残らない）。ログに `AI: off`。
 3. 1 と 2 の間も、動いているインスタンスは起動の時に読んだ鍵を持っている。すぐ止めたいときは先に Console で鍵を無効にする（以後の提案は 502 `ai_failed`）。
 
 ### 鍵を回す

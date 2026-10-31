@@ -67,7 +67,16 @@ describe("resolveAiBackend", () => {
     for (const EDITOR_AI_MODEL of ["Claude-Sonnet", "-claude", "claude sonnet", "claude/../v1", "claude\nx", "claude:latest", "a".repeat(65), "クロード"]) {
       expect(resolveAiBackend({ EDITOR_AI_MODE: "anthropic", ANTHROPIC_API_KEY: KEY, EDITOR_AI_MODEL }), EDITOR_AI_MODEL).toBeNull();
     }
-    expect(resolveAiBackend({ EDITOR_AI_MODE: "anthropic", ANTHROPIC_API_KEY: KEY, EDITOR_AI_MODEL: `a${"b".repeat(63)}` })?.provider).toBe("claude");
+  });
+
+  it("stays closed for a model without a price (the monthly limit could not count it)", () => {
+    for (const EDITOR_AI_MODEL of ["claude-haiku-5-5", "claude-unknown-9", `a${"b".repeat(63)}`, "claude-sonnet-6", "claude-opus-4-1"]) {
+      expect(resolveAiBackend({ EDITOR_AI_MODE: "anthropic", ANTHROPIC_API_KEY: KEY, EDITOR_AI_MODEL }), EDITOR_AI_MODEL).toBeNull();
+    }
+    // a priced model, with the dated name the provider returns, opens
+    for (const EDITOR_AI_MODEL of ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-4-5", "claude-sonnet-5-5-20261001"]) {
+      expect(resolveAiBackend({ EDITOR_AI_MODE: "anthropic", ANTHROPIC_API_KEY: KEY, EDITOR_AI_MODEL })?.provider, EDITOR_AI_MODEL).toBe("claude");
+    }
   });
 });
 

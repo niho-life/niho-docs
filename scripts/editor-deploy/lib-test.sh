@@ -23,13 +23,13 @@ export DEPLOY_ENV="$tmp/deploy.env"
 source "$dir/lib.sh"
 load_deploy_env
 
-# Stub: `secrets describe` succeeds when the secret exists, `secrets versions list` prints the enabled versions.
+# Stub: `secrets describe` succeeds when the secret exists, `secrets versions list` prints the state of the newest version.
 secret_exists=1
-enabled_versions=""
+newest_state=""
 gcp() {
   case "$1 $2" in
     "secrets describe") [[ $secret_exists -eq 1 ]] ;;
-    "secrets versions") printf '%s' "$enabled_versions" ;;
+    "secrets versions") printf '%s' "$newest_state" ;;
     *) printf 'unexpected gcloud call: %s\n' "$*" >&2; return 99 ;;
   esac
 }
@@ -40,8 +40,12 @@ check "AI key secret name" "$SECRET_ANTHROPIC_KEY" "niho-editor-anthropic-key"
 
 ready() { if ai_key_ready; then printf 1; else printf 0; fi; }
 check "no AI key version: AI off" "$(ready)" 0
-enabled_versions="projects/p/secrets/niho-editor-anthropic-key/versions/1"
-check "an enabled AI key version: AI on" "$(ready)" 1
+newest_state="enabled"
+check "the newest AI key version enabled: AI on" "$(ready)" 1
+newest_state="disabled"
+check "the newest AI key version disabled (an older one may be enabled): AI off" "$(ready)" 0
+newest_state="ENABLED"
+check "the state is read in either case: AI on" "$(ready)" 1
 secret_exists=0
 check "no AI key secret (bootstrap not re-run): AI off" "$(ready)" 0
 

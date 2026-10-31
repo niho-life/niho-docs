@@ -1,4 +1,4 @@
-import type { ProviderId } from "@niho/docs-core";
+import { tokenPrice, type ProviderId } from "@niho/docs-core";
 import { createAnthropicModel, type AnthropicEnv } from "./anthropic";
 import { createFakeModel } from "./fake-model";
 import type { AiModel } from "./model";
@@ -8,7 +8,7 @@ import type { AiModel } from "./model";
  *
  * - 未設定・`off`: AI の route（提案・採用）は 503 `ai_unavailable`。使用量の取得は動く。
  * - `anthropic`: 本物のモデル（anthropic.ts。モデルは `EDITOR_AI_MODEL`、既定 `claude-sonnet-5-5`）。`ANTHROPIC_API_KEY` が空・未設定、
- *   モデル名の形が違うときは 503（閉じたまま）。
+ *   モデル名の形が違う・単価表（docs-core の pricing）に無いときは 503（閉じたまま。金額を数えられないと月の上限が効かないため）。
  * - `fake`: 偽物のモデル（開発と CI だけ）。`NODE_ENV=production` では受け付けない（偽物の提案を本番の利用者に見せない）。
  * - それ以外: 未知（503）。
  */
@@ -37,6 +37,8 @@ export function resolveAiBackend(env: AiEnv): AiBackend | null {
     if ((env.ANTHROPIC_API_KEY?.trim() ?? "") === "") return null;
     const model = env.EDITOR_AI_MODEL?.trim() || DEFAULT_ANTHROPIC_MODEL;
     if (!MODEL_NAME.test(model)) return null;
+    // 単価の無いモデルは使った金額を数えられず、月の上限が効かない。閉じたままにする
+    if (tokenPrice("claude", model) === null) return null;
     // env はそのまま渡す（鍵・時間切れ・出力の上限は呼ぶたびに読む）
     return { model: createAnthropicModel({ model, env }), provider: "claude" };
   }

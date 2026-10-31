@@ -56,11 +56,15 @@ app_origin() {
 secret_has_version() {
   [[ -n "$(gcp secrets versions list "$1" --filter='state:ENABLED' --format='value(name)' --limit 1)" ]]
 }
-# AI (#38) is on only when the key secret exists and has an enabled version (the owner adds one with set-ai-key.sh).
-# Otherwise deploy.sh adds nothing for AI and the app answers 503 ai_unavailable.
+# AI (#38) is on only when the key secret exists and its newest version is enabled (the owner adds one with set-ai-key.sh).
+# The service reads `:latest`, which is the most recently created version whatever its state, so an older enabled version
+# does not count: a disabled newest one would make the revision fail to start. Otherwise deploy.sh adds nothing for AI and
+# the app answers 503 ai_unavailable.
 ai_key_ready() {
   gcp secrets describe "$SECRET_ANTHROPIC_KEY" > /dev/null 2>&1 || return 1
-  secret_has_version "$SECRET_ANTHROPIC_KEY"
+  local state
+  state="$(gcp secrets versions list "$SECRET_ANTHROPIC_KEY" --sort-by=~createTime --limit 1 --format='value(state)')"
+  [[ "$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]')" == enabled ]]
 }
 
 # The functions below take the AI switch as $1 (1 = ai_key_ready said yes, 0 = no) and never call gcloud for it,
