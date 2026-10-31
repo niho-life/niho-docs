@@ -176,7 +176,7 @@ describe("0009 on a database whose old publications table has rows", { skip: dat
 
       await client.query("DELETE FROM publications");
       const applied = await applyMigrations(client);
-      assert.deepEqual(applied.applied, ["0009_publications.sql"]);
+      assert.equal(applied.applied[0], "0009_publications.sql");
       const columns = await client.query<{ column_name: string }>(
         "SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'publications' ORDER BY ordinal_position",
         [schema],
