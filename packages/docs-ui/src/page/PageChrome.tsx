@@ -1,7 +1,5 @@
 "use client";
 
-import "niho-ui/styles/editor-tokens.css";
-import "niho-docs-ui/styles/shell.css";
 import {
   useEffect,
   useId,
@@ -19,7 +17,7 @@ import {
 import type { FloatingMenuPluginProps } from "@tiptap/extension-floating-menu";
 import { useEditorState, type Editor } from "@tiptap/react";
 import { FloatingMenu } from "@tiptap/react/menus";
-import { Icon, ShellBubbleMenu, ShellMenu, useMenuDismiss, type ShellMenuItem } from "niho-docs-ui/shell";
+import { Icon, ShellBubbleMenu, ShellMenu, useMenuDismiss, type ShellMenuItem } from "../shell";
 import {
   BLOCK_CHOICES,
   LINE_TYPE_CHOICES,
@@ -33,12 +31,30 @@ import {
   type BlockChoice,
   type BlockChoiceId,
   type LineTypeId,
-} from "@/editor/block-types";
-import { checkLinkInput } from "@/editor/link-href";
-import { slashMenuStore, type SlashMenuSnapshot } from "@/editor/slash-menu";
-import { useShortcuts } from "@/lib/shortcuts";
+} from "./block-types";
+import { checkLinkInput } from "./link-href";
+import { slashMenuStore, type SlashMenuSnapshot } from "./slash-menu";
+import { isMacPlatform, shortcutOf } from "./shortcuts";
 
-/** docs-ui の ShellBubbleMenu の plugin key（packages/docs-ui/src/shell/bubble.tsx）。 */
+/**
+ * ⌘/（Mac 以外は Ctrl+/）でブロックの一覧を開く。window の keydown 1 つだけを登録し、unmount で外す。
+ * 開けないとき（本文に焦点が無いなど）は false を返し、preventDefault しない（apps/editor-web の useShortcuts と同じ決まり）。
+ */
+function useBlockMenuShortcut(open: () => boolean | void): void {
+  const latest = useRef(open);
+  latest.current = open;
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
+      if (shortcutOf(event, isMacPlatform()) !== "blockMenu") return;
+      if (latest.current() === false) return;
+      event.preventDefault();
+    };
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
+}
+
+/** ShellBubbleMenu の plugin key（../shell/bubble.tsx）。 */
 const FORMAT_BAR_KEY = "shellFormatBar";
 const ADD_BUTTON_KEY = "pageAddButton";
 /** 開いているメニューのボタンをもう一度押したら閉じたままにする（外のクリックで閉じた直後のクリック）。 */
@@ -410,17 +426,15 @@ function Chrome({ editor, onAi }: { editor: Editor; onAi?: () => void }) {
 
   // ⌘/（設計 §11）: 本文にフォーカスがあるとき、「＋」と同じブロックの一覧を開く。いまの行が空ならその行を、
   // 文字があればその下に足す行を、選んだブロックにする。Esc で閉じると本文の元の位置へ戻る（何も足さない）
-  useShortcuts({
-    blockMenu: () => {
-      if (!editor.isEditable || !editor.view.hasFocus()) return false;
-      const below = blankLineAfterCursor(editor.state);
-      escaped.current = false;
-      setPanel(
-        below === null
-          ? { kind: "add", at: editor.state.selection.$anchor.before(), anchor: selectionAnchor(editor) }
-          : { kind: "add", at: below, anchor: selectionAnchor(editor), insert: true },
-      );
-    },
+  useBlockMenuShortcut(() => {
+    if (!editor.isEditable || !editor.view.hasFocus()) return false;
+    const below = blankLineAfterCursor(editor.state);
+    escaped.current = false;
+    setPanel(
+      below === null
+        ? { kind: "add", at: editor.state.selection.$anchor.before(), anchor: selectionAnchor(editor) }
+        : { kind: "add", at: below, anchor: selectionAnchor(editor), insert: true },
+    );
   });
 
   const linkRange = panel?.kind === "link" ? panel.range : null;
@@ -504,7 +518,8 @@ function Chrome({ editor, onAi }: { editor: Editor; onAi?: () => void }) {
 }
 
 /**
- * 本文のエディタに付ける操作の部品（モック v6 の shell の部品で描く。見た目は niho-docs-ui/styles/shell.css）。
+ * 本文のエディタに付ける操作の部品（モック v6 の shell の部品で描く。見た目は niho-docs-ui/styles/shell.css・
+ * niho-ui/styles/editor-tokens.css で、読むのは呼ぶ側（Mac・Web の画面））。
  * - 選んだ文字の上の書式の帯（ShellBubbleMenu）: 太字・斜体・見出し・箇条書きは帯が editor のコマンドへ、
  *   行の種類（ShellMenu）・リンク（帯の下の小さな入力）はここが持つ。AI は呼ぶ側の onAi（AI の箱を開く。src/components/AiBox.tsx）。
  * - 空の行の「/」（src/editor/slash-menu.ts）と、空の段落の左の「＋」のブロックの一覧。

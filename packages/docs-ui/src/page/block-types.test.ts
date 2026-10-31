@@ -2,9 +2,9 @@
 import { Editor, type JSONContent } from "@tiptap/core";
 import { TextSelection } from "@tiptap/pm/state";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { validateBlocks } from "@/ast/blocks";
+import { validateBlocks } from "./blocks";
 import { BLOCK_CHOICES, LINE_TYPE_CHOICES, blankLineAround, fillBlankLine, filterBlockChoices, lineTypeOf, setLineType } from "./block-types";
-import type { PageImages } from "@/lib/image-upload-client";
+import type { PageImages } from "./images";
 import { checkLinkInput } from "./link-href";
 import { buildPageExtensions, type PageExtensionsOptions } from "./page-extensions";
 

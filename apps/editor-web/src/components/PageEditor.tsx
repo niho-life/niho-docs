@@ -3,6 +3,7 @@
 import "niho-ui/styles/tokens.css";
 import "niho-docs-ui/styles/tokens.css";
 import "niho-docs-ui/styles/editor.css";
+import "niho-ui/styles/editor-tokens.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import type { PageKind, PageLang } from "@niho/editor-store";
@@ -10,7 +11,7 @@ import { PageTitle } from "niho-docs-ui/components/BlockEditor";
 import { AiEntry, AiLayer, type AiOpenRequest } from "@/components/AiBox";
 import { ConflictBand } from "@/components/ConflictBand";
 import { useEditorFrame } from "@/components/EditorFrame";
-import { PageChrome } from "@/components/PageChrome";
+import { PageChrome } from "niho-docs-ui/page/PageChrome";
 import { selectionRange } from "@/editor/ai-scope";
 import { docFromBlocks, replaceBlocks } from "@/editor/doc";
 import { buildPageExtensions } from "@/editor/page-extensions";
@@ -165,7 +166,7 @@ export function PageEditor(props: PageEditorProps) {
  *   その枠に下書きがあれば載せて、それでページを作る。作ったら、以後の下書きはそのページの id に書く。
  *
  * 「/」「＋」のブロック一覧と、選んだ文字の上の書式の帯は、docs-ui の BlockEditor（Markdown 文書の schema が前提）ではなく、
- * モック v6 の shell の部品をこの schema に合わせて繋いだもの（src/components/PageChrome.tsx・src/editor/slash-menu.ts）。
+ * モック v6 の shell の部品をこの schema に合わせて繋いだもの（packages/docs-ui の page/PageChrome.tsx・page/slash-menu.ts）。
  * どちらも本文を変える操作は TipTap の transaction なので、新しいページ（id が null）でも、手で打った変更と同じく
  * 下書きと保存（最初の保存で作る）に乗る。
  *

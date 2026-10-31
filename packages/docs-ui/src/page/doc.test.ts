@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateBlocks } from "@/ast/blocks";
+import { validateBlocks } from "./blocks";
 import { docFromBlocks, imageAttrsOf, imageNode } from "./doc";
 
 const ASSET = "6f1d0d7c-6f6c-4c39-9a52-6a1f3b1c0d11";
